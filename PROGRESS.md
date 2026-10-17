@@ -250,6 +250,15 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-17 22:10 **打包版诊断能力增强 + 清理调试产物**。
+  `packaging/entrypoint.py`：崩溃时同时把完整堆栈打到 stderr、写文件按「默认日志 →
+  exe 同目录 → C:\」三级候选依次尝试，弹窗内容带堆栈；
+  新增 `DUALSWITCH_FAULTDUMP=<文件>` 环境变量，N 秒未退出即 dump 所有线程堆栈
+  （本次排查「(onnodir 打包版无窗口/无托盘图标」就是靠它定位到事件循环正常、窗口已建）。
+  `dualswitch ui` 新增 `--console`（把日志同时打到控制台，打包版排障用）。
+  清理：删除 `dist-dbg*/`、`build-dbg*/`、`build/`、根目录临时配置/日志共约 1300 个调试文件。
+  说明：`dist/`（打包成品 138MB）保留；本机环境会拦截部分可执行文件写入用户目录，
+  源码方式（`start-ui.bat`）不受影响，继续以其为日常入口。
 - 2026-10-17 20:30 **Windows 打包改用 onedir（onefile 在该机型不可用）**。
   onefile 启动时要往 `%TEMP%` 解压 `_MEIxxxxxx`，本机实测**双击约有 3 成概率报
   「Could not create temporary directory!」**（连续点 start 5 次失败 2 次；从脚本启动反而不复现，

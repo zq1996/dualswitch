@@ -394,7 +394,7 @@ def cmd_ui(args) -> int:
         return 2
 
     cfg, cfg_file = _load_config(args, create=True)
-    log_file = _setup_logging(cfg, console=False)
+    log_file = _setup_logging(cfg, console=bool(getattr(args, "console", False)))
     log.info("=" * 62)
     log.info("dualswitch %s 图形界面启动", __version__)
 
@@ -454,6 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ui_p = sub.add_parser("ui", help="图形界面（主窗口 + 托盘 + 全局热键）", parents=[common])
     ui_p.add_argument("--dry-run", action="store_true", help="只记录，不真正发送 Set")
+    ui_p.add_argument("--console", action="store_true", help="把日志同时输出到控制台")
     ui_p.add_argument("--log-level", default=None, help="DEBUG/INFO/WARNING/ERROR")
     ui_p.set_defaults(func=cmd_ui)
 

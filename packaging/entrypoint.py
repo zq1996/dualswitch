@@ -8,23 +8,35 @@ from __future__ import annotations
 
 import sys
 import traceback
+from pathlib import Path
 
 
 def _crash_report(exc: BaseException) -> None:
     """windowed 模式没有控制台，异常要落盘 + 弹窗，否则用户只看到"双击没反应"。"""
+    text = "".join(traceback.format_exception(exc))
+    # 先尽量打到 stderr（有控制台时能直接看到完整堆栈）
     try:
-        from pathlib import Path
+        print("\n=== 启动失败 ===\n" + text, file=sys.stderr)
+    except Exception:  # pragma: no cover
+        pass
 
-        from dualswitch.config import log_path
+    written: str | None = None
+    for candidate in _log_paths():
+        try:
+            from pathlib import Path
 
-        path = Path(log_path())
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write("\n=== 启动失败 ===\n")
-            fh.write("".join(traceback.format_exception(exc)))
-        detail = f"{type(exc).__name__}: {exc}\n\n日志：{path}"
-    except Exception:  # pragma: no cover - 兜底里的兜底
-        detail = f"{type(exc).__name__}: {exc}"
+            path = Path(candidate)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write("\n=== 启动失败 ===\n" + text)
+            written = str(path)
+            break
+        except Exception:  # pragma: no cover - 换下一个候选位置
+            continue
+
+    detail = f"{type(exc).__name__}: {exc}\n\n{text[-1500:]}"
+    if written:
+        detail += f"\n\n已写入：{written}"
 
     if sys.platform == "win32":
         try:
@@ -35,7 +47,35 @@ def _crash_report(exc: BaseException) -> None:
             pass
 
 
+def _log_paths() -> list[str]:
+    """崩溃日志候选位置：默认日志 → exe 所在目录 → 临时目录。"""
+    candidates: list[str] = []
+    try:
+        from dualswitch.config import log_path
+
+        candidates.append(str(log_path()))
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        candidates.append(str(Path(sys.executable).with_name("dualswitch-crash.log")))
+    except Exception:  # pragma: no cover
+        pass
+    candidates.append(r"C:\dualswitch-crash.log")
+    return candidates
+
+
 def main() -> int:
+    import os
+
+    # 诊断用：设 DUALSWITCH_FAULTDUMP=<文件> 后，若 N 秒内没退出就 dump 所有线程堆栈
+    dump = os.environ.get("DUALSWITCH_FAULTDUMP")
+    if dump:
+        import faulthandler
+
+        after = float(os.environ.get("DUALSWITCH_FAULT_AFTER", "12"))
+        with open(dump, "w", encoding="utf-8", buffering=1) as fh:
+            faulthandler.dump_traceback_later(after, file=fh, exit=True)
+
     from dualswitch.cli import main as cli_main
 
     argv = sys.argv[1:] or ["ui"]
