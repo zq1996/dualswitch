@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
 from dualswitch.config import Config, load, platform_defaults, save  # noqa: E402
 from dualswitch.ddc.base import DDCError  # noqa: E402
@@ -47,7 +47,8 @@ C = chrome()
 check("平台模块", C.NAME == "macos", C.NAME)
 check("系统标题栏", C.NATIVE_CHROME is True)
 check("内容区设置行", C.INLINE_SETTINGS_ROW is True)
-check("单击图标切换", C.CLICK_HINT == "单击图标切换")
+check("设置是窗口内的一页", C.SETTINGS_IN_WINDOW is True)
+check("单击图标打开菜单", C.CLICK_HINT == "单击图标打开菜单")
 check("字体 SF", C.PALETTE.font_families[0].startswith("SF Pro"))
 check("主色系统蓝", C.PALETTE.accent == "#0A7AFF", C.PALETTE.accent)
 check("键帽符号", theme.pretty_hotkey("Right Option+Space") == "⌥ Space",
@@ -87,6 +88,24 @@ check("严格开关文案", settings.chrome.HOTKEY_COPY["strict_title"] == "只�
 check("录制按钮显示 ⌥ Space", settings.recorder.text() == "⌥ Space", settings.recorder.text())
 check("后端下拉无 dxva2", "dxva2" not in settings.chrome.BACKEND_OPTIONS)
 check("四个页签", settings.stack.count() == 4, str(settings.stack.count()))
+
+print("\n== 设置是窗口内的一页（不另开窗口） ==")
+embedded = SettingsWindow(
+    cfg, OUT / "config.json", "Right Option+Space", "v1.0.0", parent=win, embedded=True
+)
+win.attach_settings(embedded)
+embedded.backRequested.connect(win.show_main_page)
+win.show_settings_page()
+check("翻到设置页", win.pages.currentWidget() is embedded)
+check("窗口标题跟着变", "设置" in win.windowTitle(), win.windowTitle())
+check("高度切到设置页", win.height() == theme.SETTINGS_H, f"{win.height()}px")
+check(
+    "有返回按钮",
+    any("返回" in b.text() for b in embedded.findChildren(QPushButton)),
+)
+embedded.backRequested.emit()
+check("返回后是主页面", win.pages.currentWidget() is win.main_page)
+check("高度回到主页面", win.height() == theme.WIN_H, f"{win.height()}px")
 
 print("\n== 设置保存（真实文件） ==")
 cfg_file = OUT / "config.json"

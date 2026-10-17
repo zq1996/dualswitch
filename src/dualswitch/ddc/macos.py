@@ -53,6 +53,26 @@ _EXTRA_BIN_DIRS = (
 )
 
 
+def find_m1ddc(name: str = "m1ddc") -> str | None:
+    """在 PATH 与常见安装目录里找 m1ddc，找不到返回 None。
+
+    PATH 优先（终端里跑就是这种情况）；找不到再扫 brew / MacPorts 目录 ——
+    双击 .app 启动时 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin。
+    """
+    candidate = Path(name).expanduser()
+    if candidate.is_file():
+        return str(candidate)
+    found = shutil.which(name)
+    if found:
+        return found
+    base = Path(name).name
+    for folder in _EXTRA_BIN_DIRS:
+        candidate = Path(folder).expanduser() / base
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
 class M1ddcBackend(BaseBackend):
     name = "m1ddc"
 
@@ -72,19 +92,9 @@ class M1ddcBackend(BaseBackend):
 
     # ------------------------------------------------------------------ 内部
     def _resolve_binary(self) -> str:
-        candidate = Path(self.m1ddc_path).expanduser()
-        if candidate.is_file():
-            return str(candidate)
-        found = shutil.which(self.m1ddc_path)
+        found = find_m1ddc(self.m1ddc_path)
         if found:
             return found
-        # PATH 里没有（双击 .app 启动的典型情况）：到常见安装目录里找同名文件
-        name = Path(self.m1ddc_path).name
-        for folder in _EXTRA_BIN_DIRS:
-            folder_path = Path(folder).expanduser()
-            candidate = folder_path / name
-            if candidate.is_file() and os.access(candidate, os.X_OK):
-                return str(candidate)
         searched = "、".join(_EXTRA_BIN_DIRS)
         raise DDCError(
             f"找不到 m1ddc 可执行文件（{self.m1ddc_path}）。"

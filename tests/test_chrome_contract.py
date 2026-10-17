@@ -36,6 +36,7 @@ FIELDS = {
     "QSS_EXTRA": str,
     "BODY_TOP": int,
     "INLINE_SETTINGS_ROW": bool,
+    "SETTINGS_IN_WINDOW": bool,
     "SETTINGS_ROW_HINT": str,
     "CLICK_HINT": str,
     "REOPEN_ON_ACTIVATE": bool,

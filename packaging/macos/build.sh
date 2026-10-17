@@ -89,7 +89,7 @@ if /usr/bin/codesign --verify --deep "$APP" >/dev/null 2>&1; then
     if [[ "$IDENTITY" == "-" ]]; then
         echo "[ok] ad-hoc 签名已应用"
     else
-        echo "[ok] 已用固定身份签名：$IDENTITY（重打包不用重新授权）"
+        echo "[ok] 已用固定身份签名：${IDENTITY}（重打包不用重新授权）"
     fi
 else
     echo "[warn] 签名校验失败（不影响本机运行）"

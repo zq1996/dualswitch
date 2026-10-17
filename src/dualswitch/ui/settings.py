@@ -236,15 +236,28 @@ class SettingsWindow(QWidget):
     openConfigDirRequested = Signal()
     probeRequested = Signal()       # 「检测」显示器
     recordingChanged = Signal(bool)  # 热键录制开始/结束 → 调用方暂停/恢复全局热键
+    backRequested = Signal()        # 窗口内嵌模式下的「返回」
 
-    def __init__(self, cfg: Config, config_file: Path, hotkey_label: str, version: str, parent=None):
+    def __init__(
+        self,
+        cfg: Config,
+        config_file: Path,
+        hotkey_label: str,
+        version: str,
+        parent=None,
+        embedded: bool = False,
+    ):
         super().__init__(parent)
         self.cfg = cfg
         self.config_file = Path(config_file)
+        self.embedded = embedded
 
         self.chrome = chrome()
         self.setWindowTitle("屏幕切换 · 设置")
-        if self.chrome.NATIVE_CHROME:
+        if embedded:
+            # 作为主窗口里的一页：尺寸和标题栏都归外层窗口，自己不再定死大小
+            self.setAttribute(Qt.WA_MacShowFocusRect, False)
+        elif self.chrome.NATIVE_CHROME:
             self.setAttribute(Qt.WA_MacShowFocusRect, False)
             self.setFixedSize(theme.WIN_W, theme.SETTINGS_H)
         else:
@@ -265,11 +278,16 @@ class SettingsWindow(QWidget):
         root_lay.setContentsMargins(m, m, m, m)
         root_lay.setSpacing(0)
 
-        self.titlebar = self.chrome.titlebar("屏幕切换 · 设置", show_settings=False)
-        if self.titlebar is not None:
-            self.titlebar.closeClicked.connect(self.hide)
-            self.titlebar.minimizeClicked.connect(self.showMinimized)
-            root_lay.addWidget(self.titlebar)
+        self.titlebar = None
+        if embedded:
+            # 没有系统标题栏可点，给一条「‹ 返回」的头，位置和主页面标题区对齐
+            root_lay.addWidget(self._back_bar())
+        else:
+            self.titlebar = self.chrome.titlebar("屏幕切换 · 设置", show_settings=False)
+            if self.titlebar is not None:
+                self.titlebar.closeClicked.connect(self.hide)
+                self.titlebar.minimizeClicked.connect(self.showMinimized)
+                root_lay.addWidget(self.titlebar)
 
         body = QWidget()
         body_lay = QVBoxLayout(body)
@@ -340,6 +358,27 @@ class SettingsWindow(QWidget):
         self.statusbar.text.setText(f"配置：{self.config_file}")
         self.statusbar.ver.setText(version)
         root_lay.addWidget(self.statusbar)
+
+    def _back_bar(self) -> QWidget:
+        """内嵌模式的头：左边「‹ 返回」，右边标题。"""
+        bar = QWidget()
+        bar.setObjectName("backBar")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(10, 8, 10, 2)
+        lay.setSpacing(8)
+
+        btn = QPushButton("\u2039 返回")
+        btn.setObjectName("ghost")
+        btn.setFixedHeight(26)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.clicked.connect(self.backRequested)
+
+        title = QLabel("设置")
+        title.setStyleSheet("font-size:13px;font-weight:600;color:%s;background:transparent;" % theme.INK)
+
+        lay.addWidget(btn, 0, Qt.AlignVCenter)
+        lay.addWidget(title, 1, Qt.AlignVCenter)
+        return bar
 
     # ------------------------------------------------------------------ 页面
     def _select(self, index: int) -> None:
@@ -579,11 +618,15 @@ class SettingsWindow(QWidget):
 
         self.error.setVisible(False)
         self.saved.emit(validated)
-        self.hide()
+        if not self.embedded:      # 内嵌模式由 runner 翻回主页面，这里不能 hide 掉自己
+            self.hide()
 
     def closeEvent(self, event: QCloseEvent):  # noqa: N802
         event.ignore()
-        self.hide()
+        if self.embedded:      # 窗口内嵌时「关闭」等同于返回主页面
+            self.backRequested.emit()
+        else:
+            self.hide()
 
     def hideEvent(self, event):  # noqa: N802
         # 窗口收起来时若还在录制，全局热键会一直处于暂停状态

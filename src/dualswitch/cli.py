@@ -320,9 +320,10 @@ def cmd_doctor(args) -> int:
         add("DDC 后端", "fail", str(exc))
 
     if sys.platform == "darwin":
-        import shutil
+        from .ddc.macos import find_m1ddc
 
-        found = shutil.which(cfg.m1ddc_path) if cfg.ddc_backend in ("auto", "m1ddc") else None
+        # 不能只用 shutil.which：双击 .app 启动时 PATH 里没有 /opt/homebrew/bin
+        found = find_m1ddc(cfg.m1ddc_path) if cfg.ddc_backend in ("auto", "m1ddc") else None
         add("m1ddc", "ok" if found else "warn", found or "未找到，可 brew install m1ddc 或改用 command 后端")
 
     from . import tray as tray_mod

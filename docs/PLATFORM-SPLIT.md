@@ -70,8 +70,9 @@ src/dualswitch/ui/
 | `QSS_EXTRA` | str | `""` | `""` | 其它平台专属 QSS（目前都没用上） |
 | `BODY_TOP` | int | 16 | 14 | 内容区上边距（mac 少了自绘标题栏） |
 | `INLINE_SETTINGS_ROW` | bool | `False` | `True` | 主窗口内容区是否放「设置…」行 |
+| `SETTINGS_IN_WINDOW` | bool | `False` | `True` | 设置是否为主窗口内的一页（mac 用「‹ 返回」回主页面，不另开窗口） |
 | `SETTINGS_ROW_HINT` | str | `""` | `"⌘ ,"` | 设置行右侧提示 |
-| `CLICK_HINT` | str | `"双击图标切换"` | `"单击图标切换"` | 常驻图标提示、菜单里的说明 |
+| `CLICK_HINT` | str | `"双击图标切换"` | `"单击图标打开菜单"` | 常驻图标提示、菜单里的说明 |
 | `REOPEN_ON_ACTIVATE` | bool | `False` | `True` | 点 Dock / Cmd+Tab 回来时自动展开窗口 |
 | `STRICT_BACKEND` | str | `"hook"` | `"auto"` | 勾选「只认右 Alt/Option」时写入的 `hotkey_backend` |
 | `BACKEND_OPTIONS` | list[str] | auto/dxva2/command/mock | auto/m1ddc/command/mock | 高级页下拉 |

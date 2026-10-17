@@ -16,6 +16,7 @@ PLATFORM_LABEL = "Windows"
 NATIVE_CHROME = False
 BODY_TOP = 16
 INLINE_SETTINGS_ROW = False
+SETTINGS_IN_WINDOW = False       # Windows 保持独立设置窗口（自绘标题栏，嵌进来会有两层标题）
 CLICK_HINT = "双击图标切换"
 REOPEN_ON_ACTIVATE = False
 STRICT_BACKEND = "hook"

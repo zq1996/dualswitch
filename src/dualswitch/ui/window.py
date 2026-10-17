@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -128,6 +129,12 @@ class MainWindow(QWidget):
             self.titlebar.settingsClicked.connect(self.openSettingsRequested)
             root_lay.addWidget(self.titlebar)
 
+        # 页面栈：主页面 +（mac 上）设置页。设置不另开窗口，点「返回」就回主页面。
+        # Windows 仍是独立设置窗口（自绘标题栏，嵌进来会变成两层标题栏）。
+        self.pages = QStackedWidget()
+        self.settings_page = None
+        self._on_settings = False
+
         body = QWidget()
         body.setObjectName("body")
         body_lay = QVBoxLayout(body)
@@ -182,13 +189,20 @@ class MainWindow(QWidget):
         body_lay.addWidget(self.list_wrap)
         body_lay.addStretch(1)
 
-        root_lay.addWidget(body, 1)
-
         self.statusbar = StatusBar()
         hk_state = "已启用" if hotkey_label != "未启用" else "未启用"
         self.statusbar.text.setText(f"热键{hk_state} · {hotkey_label}")
         self.statusbar.ver.setText(version)
-        root_lay.addWidget(self.statusbar)
+
+        self.main_page = QWidget()
+        main_lay = QVBoxLayout(self.main_page)
+        main_lay.setContentsMargins(0, 0, 0, 0)
+        main_lay.setSpacing(0)
+        main_lay.addWidget(body, 1)
+        main_lay.addWidget(self.statusbar)
+
+        self.pages.addWidget(self.main_page)
+        root_lay.addWidget(self.pages, 1)
 
         self.set_state(self._host)
         self.hero.set_hotkey(hotkey_label)
@@ -238,6 +252,29 @@ class MainWindow(QWidget):
     def _apply_height(self, height: int) -> None:
         self.setFixedHeight(height)
         self.resize(theme.WIN_W, height)
+
+    # ------------------------------------------------------------------ 页面
+    def attach_settings(self, widget) -> None:
+        """把设置页挂进本窗口（mac：同一个窗口里翻页，而不是再弹一个窗口）。"""
+        self.settings_page = widget
+        self.pages.addWidget(widget)
+
+    def show_settings_page(self) -> None:
+        if self.settings_page is None:      # 独立窗口模式（Windows）没有这一页
+            return
+        self._on_settings = True
+        self.pages.setCurrentWidget(self.settings_page)
+        self.setWindowTitle("屏幕切换 · 设置")
+        self._apply_height(theme.SETTINGS_H)
+
+    def show_main_page(self) -> None:
+        self._on_settings = False
+        self.pages.setCurrentWidget(self.main_page)
+        self.setWindowTitle("屏幕切换")
+        self._apply_height(theme.WIN_H + (0 if self.banner.isHidden() else BANNER_EXTRA))
+
+    def on_settings_page(self) -> bool:
+        return self._on_settings
 
     # ------------------------------------------------------------------ 事件
     def _on_card_clicked(self, host: str) -> None:

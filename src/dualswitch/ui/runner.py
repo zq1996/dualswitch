@@ -64,8 +64,19 @@ class UiRunner(QObject):
             cfg, hotkey_label, self._version(), monitor_name=self._monitor_name()
         )
         self.window.setWindowIcon(self.icon)
-        self.settings = SettingsWindow(cfg, self.cfg_file, hotkey_label, self._version())
+        # mac：设置是同一个窗口里的另一页，不另开窗口
+        self.settings = SettingsWindow(
+            cfg,
+            self.cfg_file,
+            hotkey_label,
+            self._version(),
+            parent=self.window if self.chrome.SETTINGS_IN_WINDOW else None,
+            embedded=bool(self.chrome.SETTINGS_IN_WINDOW),
+        )
         self.settings.setWindowIcon(self.icon)
+        if self.chrome.SETTINGS_IN_WINDOW:
+            self.window.attach_settings(self.settings)
+            self.settings.backRequested.connect(self.close_settings)
 
         self._busy = False
         self._hotkey_suspended = False
@@ -174,10 +185,29 @@ class UiRunner(QObject):
         self.chrome.activate(self.window)
 
     def show_settings(self) -> None:
+        # 内嵌模式：翻到主窗口的设置页；独立模式：把设置窗口拿到前台
+        if self.chrome.SETTINGS_IN_WINDOW:
+            self.window.show_settings_page()
+            self.window.showNormal()
+            self.window.raise_()
+            self.window.activateWindow()
+            self.chrome.activate(self.window)
+            return
         self.settings.showNormal()
         self.settings.raise_()
         self.settings.activateWindow()
         self.chrome.activate(self.settings)
+
+    def close_settings(self) -> None:
+        """退出设置：内嵌模式翻回主页面，独立模式收起窗口。"""
+        try:
+            self.settings.recorder.stop_recording()
+        except Exception:  # pragma: no cover - 没有录制器也不影响退出
+            pass
+        if self.chrome.SETTINGS_IN_WINDOW:
+            self.window.show_main_page()
+        else:
+            self.settings.hide()
 
     def _on_status_click(self) -> None:
         # macOS 菜单栏左键直接切换；Windows 侧 QtStatusItem 已过滤成只认双击
@@ -362,6 +392,9 @@ class UiRunner(QObject):
         self._refresh_hotkey_ui()
         self._refresh_menu()
         self._notify("设置已保存", "配置已生效，无需重启。")
+        # 内嵌模式：保存完自动回主页面（独立窗口模式保持原样，窗口留着）
+        if self.chrome.SETTINGS_IN_WINDOW:
+            self.close_settings()
 
     # ------------------------------------------------------------------ 热键文案
     def _hotkey_label(self) -> str:

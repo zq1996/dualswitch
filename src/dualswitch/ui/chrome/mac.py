@@ -30,7 +30,8 @@ PLATFORM_LABEL = "macOS"
 NATIVE_CHROME = True
 BODY_TOP = 14
 INLINE_SETTINGS_ROW = True
-CLICK_HINT = "单击图标切换"
+SETTINGS_IN_WINDOW = True        # 设置是主窗口内的一页（点返回回主页面），不另开窗口
+CLICK_HINT = "单击图标打开菜单"
 REOPEN_ON_ACTIVATE = True
 STRICT_BACKEND = "auto"          # mac 只有 CGEventTap 一种后端，左右由 spec 决定
 SETTINGS_ROW_HINT = "\u2318 ,"
@@ -194,16 +195,11 @@ class MacStatusItem:
 
     # ------------------------------------------------------------------ 回调
     def on_status_clicked(self) -> None:
-        from AppKit import NSApp, NSEventTypeRightMouseUp
+        """左右键都弹菜单 —— macOS 菜单栏图标的默认心智就是「点开是一张菜单」。
 
-        event = NSApp.currentEvent()
-        if event is not None and event.type() == NSEventTypeRightMouseUp:
-            self._popup_menu()
-            return
-        try:
-            self._on_left_click()
-        except Exception:  # pragma: no cover - 菜单栏点击不能抛回 AppKit
-            log.exception("菜单栏左键处理失败")
+        明面操作（切换/强制切换/设置/退出）全在菜单里，不再依赖右键或单击即切。
+        """
+        self._popup_menu()
 
     def on_menu_action(self, tag: int) -> None:
         handler = self._handlers.get(tag)

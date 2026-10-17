@@ -260,6 +260,22 @@ macOS 侧 `packaging/macos/build.sh` 已可用（含 `--specpath` 路径修复 +
 
 ---
 
+### T9（待排查，用户同意先放着）辅助功能授权后热键仍不生效
+
+状态：2026-10-17 23:15 授权成功过一次（日志「热键已重建：Option+Space」），
+但随后用户反馈**快捷键仍不工作**，界面点按切换正常。
+
+已知线索：
+- `AXIsProcessTrusted()` 已经翻过 OK，说明 TCC 这一关通了
+- 热键后端是 `cgEventTap`，`CGEventTapCreate` 成功（否则会抛 HotkeyError）
+- 所以怀疑点转到「事件是否真的进到回调」：tap 建在独立线程的 run loop 上
+  （`hotkey-quartz` 线程），Qt 主线程事件循环不会驱动它 —— 这点在 PyInstaller
+  打包环境下可能表现不同（源码方式此前是好的）
+- 下一次排查建议：在 `_callback` 里对任意 KeyDown 打一行 DEBUG 日志，
+  先确认 tap 有没有收到事件；再区分「收不到」还是「收到了但 `_flags_ok` 判错」
+
+---
+
 ### T5（可选）24h 稳定性
 需求 §5 要求「7×24 无内存泄漏，以实际观察为准」。未做，建议挂一晚后看任务管理器。
 
@@ -346,11 +362,23 @@ dualswitch/
 | `monitor_match` 默认 `"AOC"` | 物理描述是 `Generic PnP Monitor`，只能靠 device_id 匹配 | 换显示器改这里 |
 | 配置未知字段直接报错 | 防拼写错误静默失效 | 不要放宽 |
 | 平台外观差异只放 `ui/chrome/` | 两端并行改 UI 会撞同一批文件 | 新差异往 `chrome` 加字段，**共享文件禁写 `sys.platform`**；`tests/test_chrome_contract.py` 会拦 |
-| mac 端单击图标即切、Windows 端双击 | mac 菜单栏图标单击是系统惯例，双击反而迟钝 | 由 `chrome.CLICK_HINT` + 各自 `build_status_item` 决定 |
+| mac 端单击图标出菜单、Windows 端双击切换 | 菜单栏图标点一下出菜单是 mac 系统惯例；Windows 托盘单击容易误触 | 由 `chrome.CLICK_HINT` + 各自 `build_status_item` 决定 |
+| mac 的设置是窗口内一页 | 点「设置」再弹一个窗口像旧式对话框，用户明确要求翻页 + 返回 | `chrome.SETTINGS_IN_WINDOW`；Windows 仍是独立窗口（自绘标题栏不能嵌） |
 
 ---
 
 ## 8. 变更日志
+
+- 2026-10-17 23:20 **mac 端交互对齐系统习惯：菜单栏单击出菜单、设置改为窗口内一页**。
+  · 菜单栏：`MacStatusItem.on_status_clicked` 不再区分左右键，**单击/右键都弹菜单**，
+    切换动作走菜单里的「切换到 …」；`CLICK_HINT` 改为「单击图标打开菜单」
+    （原来单击即切，与其它菜单栏工具的心智不一致）。
+  · 设置：新增 `chrome.SETTINGS_IN_WINDOW`（mac `True` / win `False`）。
+    mac 上点「设置…」不再弹新窗口，而是同一个窗口翻到设置页（600→484 高），
+    左上角「‹ 返回」回主页面，保存后也自动回主页面。
+    `SettingsWindow` 增加 `embedded` 参数与 `backRequested` 信号；Windows 保持独立窗口
+    （自绘标题栏嵌进来会变成两层标题）。
+  · 核对脚本补 6 项（翻页/标题/高度/返回按钮/返回后状态）；`check_mac_ui.py` 全通过。
 
 - 2026-10-17 22:44 **「已授权却一直弹窗要授权」的根因：ad-hoc 签名让 TCC 记录按 cdhash 认人**。
   现象：辅助功能里 dualswitch 开关明明是打开的，程序仍报未授权，且系统授权框反复弹。
