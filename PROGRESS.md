@@ -352,6 +352,24 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-17 22:38 **修复打包版双击闪退：chrome 平台模块没被打进包**。
+  现象：`dist/dualswitch.app` 双击后窗口一闪就消失，日志末尾
+  `ModuleNotFoundError: No module named 'dualswitch.ui.chrome.mac'`。
+  根因：`chrome/__init__.py` 用 `importlib.import_module(f".{name}")` 选平台模块，
+  模块名是字符串拼出来的，PyInstaller 静态分析看不见，`chrome/mac.py` 从来没进 PYZ——
+  源码方式一切正常，只有冻结版才炸（所以 CI/测试也照不出来）。
+  修复：改成静态条件导入（`if sys.platform == "darwin": from . import mac`），
+  两个平台模块顶层只 import `base`，不会与 `theme` 成环；
+  `build.sh` 补 `--hidden-import dualswitch.ui.chrome.{mac,win}` 兜底。
+  加两道防线：① `tests/test_chrome_contract.py::test_chrome_selector_imports_statically`
+  用 AST 查动态导入（文档里提到 importlib 不算数）；
+  ② `packaging/entrypoint.py --selfcheck` 让产物自己 import 一遍界面栈，
+  `build.sh` 构建末尾调用，缺模块直接让构建失败（别用 `strings` 查模块名，
+  PYZ 是压缩的，正常产物也查不到）。
+  实测：`--selfcheck` 9 个模块全过；`open dist/dualswitch.app` 进程存活。
+  ⚠️ 重打包换了 ad-hoc 签名，TCC 会当成新应用：需到「隐私与安全性 → 辅助功能」
+  重新勾选一次「屏幕切换」。
+
 - 2026-10-17 22:10 **打包版诊断能力增强 + 清理调试产物**。
   `packaging/entrypoint.py`：崩溃时同时把完整堆栈打到 stderr、写文件按「默认日志 →
   exe 同目录 → C:\」三级候选依次尝试，弹窗内容带堆栈；

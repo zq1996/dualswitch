@@ -44,6 +44,8 @@ ICON_ARGS=()
     --hidden-import "ApplicationServices" \
     --hidden-import "AppKit" \
     --hidden-import "Foundation" \
+    --hidden-import "dualswitch.ui.chrome.mac" \
+    --hidden-import "dualswitch.ui.chrome.win" \
     --add-data "$ROOT/src/dualswitch/ui/assets:dualswitch/ui/assets" \
     "${ICON_ARGS[@]}" \
     --distpath "$ROOT/dist" \
@@ -70,6 +72,15 @@ fi
 # 都可能被系统当成新应用，导致用户要反复勾选。
 /usr/bin/codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 /usr/bin/codesign --verify --deep "$APP" >/dev/null 2>&1 && echo "[ok] ad-hoc 签名已应用" || echo "[warn] 签名校验失败（不影响本机运行）"
+
+# 打包自检：用字符串拼模块名的动态导入（importlib.import_module）会被分析器漏掉，
+# 源码跑得好好的、双击 .app 却立刻闪退，日志里只有一句 ModuleNotFoundError。
+# 这里让产物自己 import 一遍界面栈（--selfcheck），缺模块就构建失败。
+# 注意别用 strings 查模块名：PYZ 是压缩的，正常产物也查不到。
+if ! "$APP/Contents/MacOS/dualswitch" --selfcheck; then
+    echo "[error] 打包产物缺少界面模块，多半是 chrome/__init__.py 又用了动态导入" >&2
+    exit 1
+fi
 
 echo ""
 echo "产物：$ROOT/$APP"

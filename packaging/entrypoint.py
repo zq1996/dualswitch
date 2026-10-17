@@ -64,8 +64,47 @@ def _log_paths() -> list[str]:
     return candidates
 
 
+def _selfcheck() -> int:
+    """打包自检：确认界面栈真的进了包（构建脚本调用，`--selfcheck`）。
+
+    动态导入（`importlib` + 字符串拼模块名）会被 PyInstaller 静默漏掉：
+    源码方式跑得好好的，双击打出来的 .app / .exe 却立刻闪退，日志里只有一句
+    `ModuleNotFoundError`。这里把界面相关的模块逐个 import 一遍，缺了就报错退出。
+    """
+    modules = [
+        "dualswitch.ui.chrome.base",
+        "dualswitch.ui.chrome.mac",
+        "dualswitch.ui.chrome.win",
+        "dualswitch.ui.theme",
+        "dualswitch.ui.widgets",
+        "dualswitch.ui.statusitem",
+        "dualswitch.ui.window",
+        "dualswitch.ui.settings",
+        "dualswitch.ui.runner",
+    ]
+    failures: list[str] = []
+    for name in modules:
+        try:
+            __import__(name)
+        except Exception as exc:  # noqa: BLE001 - 自检要把所有问题一次报全
+            failures.append(f"{name}: {type(exc).__name__}: {exc}")
+
+    if failures:
+        print("自检失败：\n  " + "\n  ".join(failures), file=sys.stderr)
+        return 1
+
+    from dualswitch.ui import chrome
+
+    print(f"自检通过：{len(modules)} 个界面模块可导入，当前平台外观 = {chrome.current().NAME}")
+    return 0
+
+
 def main() -> int:
     import os
+
+    # 构建脚本的自检入口：只验证导入，不起界面
+    if "--selfcheck" in sys.argv[1:]:
+        return _selfcheck()
 
     # 诊断用：设 DUALSWITCH_FAULTDUMP=<文件> 后，若 N 秒内没退出就 dump 所有线程堆栈
     dump = os.environ.get("DUALSWITCH_FAULTDUMP")

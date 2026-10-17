@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import os
 import sys
@@ -116,6 +117,33 @@ def test_current_follows_platform():
 
     expected = "macos" if sys.platform == "darwin" else "windows"
     assert current().NAME == expected
+
+
+def test_chrome_selector_imports_statically():
+    """选择器一旦退回 importlib 动态导入，PyInstaller 就收集不到 mac/win 模块。
+
+    后果很隐蔽：源码方式跑得好好的，打出来的 .app 一启动就
+    `ModuleNotFoundError: No module named 'dualswitch.ui.chrome.mac'`（22:07 那次闪退）。
+    只看真实代码（AST），文档里提到 importlib 不算数。
+    """
+    selector = Path(ui_pkg.__file__).parent / "chrome" / "__init__.py"
+    tree = ast.parse(selector.read_text(encoding="utf-8"))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(alias.name != "importlib" for alias in node.names), (
+                "chrome/__init__.py 不要 import importlib，动态导入会让打包漏模块"
+            )
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            assert node.func.attr != "import_module", (
+                "chrome/__init__.py 不要用 import_module，打包会漏模块"
+            )
+
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 1:
+            imported.update(alias.name for alias in node.names)
+    assert {"mac", "win"} <= imported, "两个平台模块都要写成静态 `from . import ...`"
 
 
 def test_shared_ui_has_no_platform_branch():
