@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>屏幕切换 · Windows 界面设计</title>
+<style>
+  :root{
+    --ink:#11151C;
+    --ink-2:#4B5566;
+    --ink-3:#818B9C;
+    --line:#E5E9F1;
+    --line-soft:#EEF1F6;
+    --accent:#2F6BFF;
+    --accent-deep:#1E4FD8;
+    --accent-soft:#EDF3FF;
+    --teal:#0AA79B;
+    --ok:#0F9D58;
+    --warn:#B4690E;
+    --danger:#D33B3B;
+    --win-w:440px;
+    --shadow-win:0 1px 2px rgba(16,24,40,.06), 0 18px 40px -16px rgba(16,24,40,.28);
+    --shadow-card:0 1px 2px rgba(16,24,40,.05);
+    --font:"Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    font-family:var(--font);
+    color:var(--ink);
+    background:
+      radial-gradient(1200px 600px at 12% -10%, #E7EEFF 0%, rgba(231,238,255,0) 60%),
+      radial-gradient(900px 500px at 100% 0%, #E6F7F4 0%, rgba(230,247,244,0) 55%),
+      #EEF1F6;
+    -webkit-font-smoothing:antialiased;
+    padding:40px 32px 80px;
+  }
+  .page{max-width:1180px;margin:0 auto}
+
+  /* ---------- 页头 ---------- */
+  .head{display:flex;align-items:center;gap:16px;margin-bottom:8px}
+  .head img{width:56px;height:56px;filter:drop-shadow(0 6px 14px rgba(47,107,255,.28))}
+  .head h1{font-size:26px;line-height:1.2;margin:0;letter-spacing:-.01em;font-weight:650}
+  .head p{margin:6px 0 0;font-size:13px;color:var(--ink-3)}
+  .head .meta{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .chip{font-size:12px;color:var(--ink-2);background:#fff;border:1px solid var(--line);
+        border-radius:999px;padding:6px 11px;box-shadow:var(--shadow-card);white-space:nowrap}
+  .chip b{color:var(--ink);font-weight:600}
+
+  .lead{margin:22px 0 34px;font-size:14px;line-height:1.75;color:var(--ink-2);max-width:760px}
+  .lead b{color:var(--ink);font-weight:600}
+
+  /* ---------- 分区 ---------- */
+  section{margin-bottom:52px}
+  .sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:18px}
+  .sec-num{font-size:11px;font-weight:700;letter-spacing:.14em;color:var(--accent);background:var(--accent-soft);
+           border-radius:6px;padding:4px 7px}
+  .sec-head h2{font-size:17px;margin:0;font-weight:650;letter-spacing:-.01em}
+  .sec-head span{font-size:12.5px;color:var(--ink-3)}
+
+  .grid{display:flex;gap:36px;flex-wrap:wrap;align-items:flex-start}
+  .spec{display:flex;flex-direction:column;gap:12px}
+  .cap{font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:8px}
+  .cap b{color:var(--ink-2);font-weight:600}
+  .cap i{width:5px;height:5px;border-radius:50%;background:var(--accent);display:inline-block}
+
+  /* ---------- 窗口外壳 ---------- */
+  .win{
+    width:var(--win-w);background:#fff;border-radius:14px;overflow:hidden;
+    border:1px solid rgba(16,24,40,.07);box-shadow:var(--shadow-win);
+  }
+  .titlebar{height:44px;display:flex;align-items:center;gap:9px;padding-left:15px;border-bottom:1px solid var(--line-soft)}
+  .titlebar img{width:18px;height:18px;border-radius:4px}
+  .tb-title{font-size:12.5px;color:var(--ink-2);font-weight:600}
+  .tb-cap{margin-left:auto;display:flex;align-self:flex-start}
+  .tb-cap button{width:44px;height:44px;border:0;background:transparent;display:grid;place-items:center;cursor:default;color:#5B6474}
+  .tb-cap button:hover{background:#F1F4F9}
+  .tb-cap button.close:hover{background:#E81123;color:#fff}
+  .win-body{padding:18px;display:flex;flex-direction:column;gap:14px}
+
+  /* ---------- 主状态卡 ---------- */
+  .hero{
+    position:relative;border-radius:13px;padding:16px;
+    background:linear-gradient(135deg,#EDF4FF 0%,#F7FAFF 52%,#EFFAF7 100%);
+    border:1px solid #DCE7FF;
+    overflow:hidden;
+  }
+  .hero::after{
+    content:"";position:absolute;right:-40px;top:-52px;width:180px;height:180px;border-radius:50%;
+    background:radial-gradient(circle,rgba(10,167,155,.14),rgba(10,167,155,0) 70%);
+  }
+  .hero-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .eyebrow{font-size:11px;letter-spacing:.08em;color:var(--ink-3);font-weight:600}
+  .pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;
+        padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #D8E4FF;color:var(--accent-deep)}
+  .pill .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(15,157,88,.14)}
+  .hero-main{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
+  .hero-title{font-size:31px;font-weight:650;letter-spacing:-.02em;line-height:1.1}
+  .hero-sub{font-size:12.5px;color:var(--ink-2);margin-top:6px}
+  .hero-sub b{font-variant-numeric:tabular-nums;color:var(--ink)}
+  .hero-glyph{width:46px;height:46px;border-radius:12px;background:#fff;border:1px solid #DCE7FF;
+              display:grid;place-items:center;box-shadow:0 2px 6px rgba(47,107,255,.10);flex:none}
+
+  .btn-primary{
+    margin-top:15px;width:100%;height:44px;border:0;border-radius:10px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:9px;
+    color:#fff;font-size:14.5px;font-weight:600;font-family:inherit;letter-spacing:.01em;
+    background:linear-gradient(180deg,#3F7BFF 0%,#2456E0 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.28), 0 8px 18px -8px rgba(47,107,255,.75);
+  }
+  .btn-primary:hover{background:linear-gradient(180deg,#4A83FF 0%,#2A5CE6 100%)}
+  .btn-primary kbd{
+    margin-left:auto;margin-right:12px;font-family:inherit;font-size:11px;font-weight:600;
+    background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.22);
+    border-radius:5px;padding:2px 6px;color:#fff;
+  }
+  .btn-primary kbd+kbd{margin-left:4px}
+  .hero-foot{margin-top:10px;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2)}
+  .hero-foot svg{flex:none}
+
+  /* ---------- 设备卡（亮灯 / 灭灯） ---------- */
+  .devices{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .dev{position:relative;border-radius:12px;padding:12px 12px 11px;border:1px solid var(--line);
+       background:#F8F9FC;cursor:pointer;transition:border-color .15s, box-shadow .15s, transform .15s, background .15s}
+  .dev:hover{transform:translateY(-1px)}
+  .dev .os{width:26px;height:26px;display:grid;place-items:center;transition:filter .15s, opacity .15s}
+  .dev .name{font-size:13px;font-weight:600;margin-top:10px}
+  .dev .port{font-size:11px;color:var(--ink-3);margin-top:3px;font-variant-numeric:tabular-nums}
+  .dev .dev-st{font-size:10.5px;font-weight:600;margin-top:8px;letter-spacing:.02em}
+
+  /* 亮灯：绿灯语义（同显示器电源灯）+ 极浅绿底 + 官方原色图标 */
+  .dev.lit{background:linear-gradient(155deg,#F1FBF4 0%,#FFFFFF 58%);border-color:#C3E7CF;
+           box-shadow:0 10px 22px -16px rgba(22,163,74,.8), inset 0 1px 0 #fff}
+  .dev.lit .dev-st{color:#0E9F5B}
+
+  /* 灭灯：灰底 + 图标去色 + 文字变弱 */
+  .dev.dim{background:#F7F8FB}
+  .dev.dim:hover{border-color:#D6DDE9;background:#F4F6FA}
+  .dev.dim .os{filter:grayscale(1);opacity:.38}
+  .dev.dim .name{color:#7C8698}
+  .dev.dim .dev-st{color:#A0A9B8;font-weight:500}
+
+  /* 指示灯 */
+  .led{position:absolute;right:11px;top:11px;width:9px;height:9px;border-radius:50%}
+  .led.on{background:radial-gradient(circle at 34% 30%,#CDF7DC,#34C759 55%,#0F8A3D);
+          box-shadow:0 0 0 3px rgba(22,163,74,.16), 0 0 11px 2px rgba(22,163,74,.55)}
+  .led.off{background:radial-gradient(circle at 34% 30%,#EBEFF5,#C6CDDA 60%,#AAB3C2);
+           box-shadow:inset 0 1px 2px rgba(16,24,40,.30), 0 0 0 3px rgba(16,24,40,.03)}
+
+  /* ---------- 列表 ---------- */
+  .list{border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  .row{display:flex;align-items:center;gap:10px;width:100%;height:42px;padding:0 12px;border:0;background:#fff;
+       font-family:inherit;font-size:12.5px;color:var(--ink);cursor:pointer;text-align:left}
+  .row+.row{border-top:1px solid var(--line-soft)}
+  .row:hover{background:#F7F9FD}
+  .row svg.lead{color:var(--ink-3);flex:none}
+  .row .val{margin-left:auto;font-size:11.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+  .row .chev{color:#B6BFCD;flex:none}
+
+  /* ---------- 状态栏 ---------- */
+  .statusbar{height:34px;display:flex;align-items:center;gap:7px;padding:0 16px;border-top:1px solid var(--line-soft);
+             background:#FBFCFE;font-size:11.5px;color:var(--ink-3)}
+  .statusbar .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(15,157,88,.12)}
+  .statusbar .ver{margin-left:auto;font-variant-numeric:tabular-nums}
+
+  /* ---------- 设置页 ---------- */
+  .tabs{display:flex;gap:2px;padding:4px;background:#F2F5FA;border-radius:9px;margin-bottom:2px}
+  .tabs button{flex:1;height:28px;border:0;border-radius:7px;background:transparent;font-family:inherit;
+               font-size:12px;color:var(--ink-2);cursor:pointer;font-weight:500}
+  .tabs button.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(16,24,40,.10)}
+  .group{display:flex;flex-direction:column;gap:1px;background:var(--line-soft);border-radius:11px;overflow:hidden;
+         border:1px solid var(--line)}
+  .group>.g-row{background:#fff;padding:12px;display:flex;align-items:center;gap:12px;min-height:48px}
+  .g-title{font-size:12.5px;font-weight:600}
+  .g-desc{font-size:11px;color:var(--ink-3);margin-top:3px;line-height:1.5}
+  .g-row .right{margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
+  .g-label{font-size:10.5px;font-weight:700;letter-spacing:.1em;color:var(--ink-3);margin:2px 0 0 2px}
+
+  .seg{display:inline-flex;background:#F2F5FA;border-radius:8px;padding:2px}
+  .seg span{font-size:11.5px;padding:4px 10px;border-radius:6px;color:var(--ink-2)}
+  .seg span.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(16,24,40,.12)}
+
+  .sw{width:36px;height:20px;border-radius:999px;background:var(--accent);position:relative;flex:none}
+  .sw::after{content:"";position:absolute;right:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;
+             box-shadow:0 1px 2px rgba(0,0,0,.2)}
+  .sw.off{background:#D8DEE9}
+  .sw.off::after{right:auto;left:2px}
+
+  .keycap{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-bottom-width:2px;
+          border-radius:7px;padding:5px 9px;font-size:12px;font-weight:600;color:var(--ink);background:#fff;
+          font-variant-numeric:tabular-nums}
+  .keycap em{font-style:normal;color:var(--ink-3);font-weight:500}
+  .num{width:52px;height:30px;border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;
+       font-size:12.5px;font-variant-numeric:tabular-nums;background:#fff;font-weight:600}
+  .src{display:flex;flex-direction:column;align-items:center;gap:4px}
+  .src-l{font-size:9.5px;color:var(--ink-3);letter-spacing:.02em}
+
+  .slider{width:112px;height:4px;border-radius:999px;background:#E3E8F1;position:relative}
+  .slider::before{content:"";position:absolute;left:0;top:0;bottom:0;width:62%;border-radius:999px;background:var(--accent)}
+  .slider::after{content:"";position:absolute;left:62%;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;
+                 background:#fff;border:1px solid #C9D2E0;box-shadow:0 1px 3px rgba(16,24,40,.2)}
+
+  .win-foot{display:flex;align-items:center;gap:8px;padding:12px 18px 16px}
+  .btn-ghost{height:32px;padding:0 14px;border-radius:8px;border:1px solid var(--line);background:#fff;
+             font-family:inherit;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+  .btn-ghost:hover{background:#F7F9FD}
+  .btn-solid{height:32px;padding:0 16px;border-radius:8px;border:0;background:var(--accent);color:#fff;
+             font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;margin-left:auto;
+             box-shadow:0 4px 10px -6px rgba(47,107,255,.8)}
+  .btn-solid:hover{background:var(--accent-deep)}
+
+  /* ---------- 状态变体 ---------- */
+  .state{border:1px solid var(--line);border-radius:12px;background:#fff;padding:14px;width:320px;box-shadow:var(--shadow-card)}
+  .state .eyebrow{margin-bottom:8px;display:block}
+  .state .title{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .state .desc{font-size:11.5px;color:var(--ink-3);margin-top:6px;line-height:1.6}
+  .state .btn-row{display:flex;gap:8px;margin-top:12px}
+  .banner{display:flex;gap:9px;align-items:flex-start;border-radius:9px;padding:10px 11px;font-size:11.5px;line-height:1.55}
+  .banner.warn{background:#FFF8EC;border:1px solid #F3E2C4;color:#7A4A05}
+  .banner.err{background:#FDF1F1;border:1px solid #F4D6D6;color:#8C2222}
+  .banner b{font-weight:600}
+  .spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(47,107,255,.2);border-top-color:var(--accent);
+        animation:spin .9s linear infinite;flex:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .mini-btn{height:28px;padding:0 11px;border-radius:7px;border:1px solid var(--line);background:#fff;
+            font-family:inherit;font-size:11.5px;color:var(--ink-2);cursor:pointer}
+  .mini-btn.solid{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+
+  /* ---------- 托盘 ---------- */
+  .tray{width:248px;background:rgba(255,255,255,.92);backdrop-filter:blur(20px);border:1px solid rgba(16,24,40,.08);
+        border-radius:10px;padding:5px;box-shadow:0 12px 40px -12px rgba(16,24,40,.35), 0 1px 2px rgba(16,24,40,.06)}
+  .tray .ti{display:flex;align-items:center;gap:9px;height:32px;padding:0 9px;border-radius:6px;font-size:12.5px;color:var(--ink)}
+  .tray .ti:hover{background:#F2F5FA}
+  .tray .ti svg{color:var(--ink-3);flex:none}
+  .tray .ti .sc{margin-left:auto;font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+  .tray .sep{height:1px;background:var(--line);margin:5px 6px}
+  .tray .ti.dis{color:#A7B0BE}
+  .tray .ti.dis svg{color:#C3CAD6}
+
+  .toast{width:300px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px;
+         box-shadow:0 16px 40px -16px rgba(16,24,40,.35);display:flex;gap:10px}
+  .toast img{width:30px;height:30px;flex:none}
+  .toast .t{font-size:12.5px;font-weight:600}
+  .toast .d{font-size:11.5px;color:var(--ink-3);margin-top:3px;line-height:1.5}
+
+  /* ---------- 图标区 ---------- */
+  .icon-board{display:flex;gap:36px;flex-wrap:wrap;align-items:flex-start}
+  .icon-hero{background:#fff;border:1px solid var(--line);border-radius:14px;padding:26px;box-shadow:var(--shadow-card);
+             display:flex;flex-direction:column;gap:18px;align-items:center}
+  .icon-hero img.big{width:168px;height:168px;filter:drop-shadow(0 16px 30px rgba(23,52,160,.28))}
+  .sizes{display:flex;align-items:flex-end;gap:18px}
+  .size{display:flex;flex-direction:column;align-items:center;gap:7px}
+  .size span{font-size:10.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+  .taskbar{display:flex;align-items:center;gap:8px;background:#1E222A;border-radius:10px;padding:8px 12px;width:100%;
+           justify-content:center}
+  .taskbar .slot{width:40px;height:40px;border-radius:7px;display:grid;place-items:center;position:relative}
+  .taskbar .slot.on{background:rgba(255,255,255,.10)}
+  .taskbar .slot.on::after{content:"";position:absolute;bottom:2px;left:50%;transform:translateX(-50%);
+                           width:14px;height:2.5px;border-radius:2px;background:#7EA6FF}
+  .taskbar .slot.ghost{background:rgba(255,255,255,.06)}
+  .icon-notes{flex:1;min-width:320px;display:flex;flex-direction:column;gap:14px}
+  .note{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow-card)}
+  .note h3{font-size:13px;margin:0 0 8px;font-weight:650}
+  .note p{margin:0;font-size:12.5px;line-height:1.75;color:var(--ink-2)}
+  .note p+p{margin-top:6px}
+  .note .kv{display:flex;gap:10px;font-size:12px;color:var(--ink-2);line-height:1.9}
+  .note .kv b{width:64px;color:var(--ink-3);font-weight:500;flex:none}
+  .swatches{display:flex;gap:10px;margin-top:10px}
+  .swatch{flex:1;border-radius:9px;height:52px;border:1px solid rgba(16,24,40,.06);position:relative;overflow:hidden}
+  .swatch span{position:absolute;left:8px;bottom:6px;font-size:10px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.3)}
+
+  /* ---------- 规范表 ---------- */
+  .spec-table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid var(--line);
+              border-radius:12px;overflow:hidden;font-size:12.5px}
+  .spec-table th,.spec-table td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  .spec-table th{font-size:11px;letter-spacing:.06em;color:var(--ink-3);font-weight:600;background:#FAFBFD}
+  .spec-table tr:last-child td{border-bottom:0}
+  .spec-table td:first-child{width:150px;color:var(--ink-2);font-weight:600}
+  .spec-table code{font-family:"Cascadia Mono","Consolas",monospace;font-size:11.5px;background:#F3F5F9;
+                   border-radius:4px;padding:1px 5px;color:#2B3A55}
+  .muted{color:var(--ink-3)}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="head">
+    <img src="../icon/png/icon-128.png" alt="屏幕切换 图标">
+    <div>
+      <h1>屏幕切换</h1>
+      <p>Windows 客户端界面设计 · 设计稿 v2</p>
+    </div>
+    <div class="meta">
+      <span class="chip">窗口 <b>440 × 600</b></span>
+      <span class="chip">Fluent · 浅色</span>
+      <span class="chip">托盘常驻</span>
+    </div>
+  </header>
+
+  <p class="lead">
+    这是一个<b>一次点击、然后立刻消失</b>的工具：用户 99% 的时间只在托盘上，窗口只在「确认状态 / 改热键」时才打开。
+    所以界面不做仪表盘，只回答三个问题——<b>现在画面在哪台机器</b>、<b>按一下会切到哪</b>、<b>上次切成功了吗</b>。
+    两台机器用 Windows / Mac 官方图标 + <b>亮灯 / 灭灯</b>两态表达「谁在用」，不用读文字也能判断。
+  </p>
+
+  <!-- ================= 1. 主窗口 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <h2>主窗口 · 就绪</h2>
+      <span>默认尺寸 440 × 600，最小 380 × 520</span>
+    </div>
+
+    <div class="grid">
+      <div class="spec">
+        <div class="cap"><i></i><b>MainWindow</b> · 打开即见状态，无需滚动</div>
+        <div class="win">
+          <div class="titlebar">
+            <img src="../icon/png/icon-24.png" alt="">
+            <span class="tb-title">屏幕切换</span>
+            <div class="tb-cap">
+              <button aria-label="最小化">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 6h8"/></svg>
+              </button>
+              <button class="close" aria-label="关闭">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="win-body">
+            <div class="hero">
+              <div class="hero-top">
+                <span class="eyebrow">当前画面</span>
+                <span class="pill"><i class="dot"></i>运行中</span>
+              </div>
+              <div class="hero-main">
+                <div>
+                  <div class="hero-title">Windows</div>
+                  <div class="hero-sub">AOC Q2790PC · HDMI · 输入源 <b>17</b></div>
+                </div>
+                <div class="hero-glyph">
+                  <svg width="26" height="26" viewBox="0 0 24 24" role="img" aria-label="Windows">
+                    <g fill="#0078D4">
+                      <rect x="2.6" y="2.6" width="8.8" height="8.8"/>
+                      <rect x="12.6" y="2.6" width="8.8" height="8.8"/>
+                      <rect x="2.6" y="12.6" width="8.8" height="8.8"/>
+                      <rect x="12.6" y="12.6" width="8.8" height="8.8"/>
+                    </g>
+                  </svg>
+                </div>
+              </div>
+
+              <button class="btn-primary">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 9h15l-3.5-3.5M20 15H5l3.5 3.5"/>
+                </svg>
+                切换到 Mac
+                <kbd>Alt</kbd><kbd>Space</kbd>
+              </button>
+
+              <div class="hero-foot">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#0F9D58" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 8.5l3.2 3.2L13 5"/>
+                </svg>
+                上次切换 63.9 ms · 回读已确认
+              </div>
+            </div>
+
+            <div class="devices">
+              <div class="dev lit">
+                <span class="led on" title="指示灯亮（绿）：正在使用"></span>
+                <span class="os">
+                  <svg width="26" height="26" viewBox="0 0 24 24" role="img" aria-label="Windows">
+                    <g fill="#0078D4">
+                      <rect x="2.6" y="2.6" width="8.8" height="8.8"/>
+                      <rect x="12.6" y="2.6" width="8.8" height="8.8"/>
+                      <rect x="2.6" y="12.6" width="8.8" height="8.8"/>
+                      <rect x="12.6" y="12.6" width="8.8" height="8.8"/>
+                    </g>
+                  </svg>
+                </span>
+                <div class="name">Windows</div>
+                <div class="port">HDMI · 输入源 17</div>
+                <div class="dev-st">正在使用</div>
+              </div>
+
+              <div class="dev dim">
+                <span class="led off" title="指示灯灭：当前未使用"></span>
+                <span class="os">
+                  <svg width="26" height="26" viewBox="0 0 16 16" role="img" aria-label="macOS">
+                    <path fill="#11151C" d="M11.182 7.342c.039-2.011 1.338-3.123 1.36-3.144-.75-1.093-1.912-1.245-2.322-1.372C9.05 2.553 8.061 3.337 7.454 3.337c-.607 0-1.522-.686-2.504-.667-1.288.02-2.478.75-3.14 1.905-1.34 2.326-.34 5.769.963 7.657.64.921 1.404 1.955 2.408 1.918.966-.038 1.33-.623 2.497-.623 1.167 0 1.495.623 2.517.604 1.04-.02 1.698-.939 2.333-1.864.735-1.073 1.037-2.112 1.055-2.165-.023-.01-2.024-.777-2.044-3.084zM9.548 2.11c.53-.643.888-1.535.79-2.427-.79.032-1.744.526-2.293 1.168-.49.567-.92 1.476-.805 2.348.878.068 1.777-.447 2.308-1.089z"/>
+                  </svg>
+                </span>
+                <div class="name">Mac</div>
+                <div class="port">USB-C · 输入源 18</div>
+                <div class="dev-st">未使用 · 点击切换</div>
+              </div>
+            </div>
+
+            <div class="list">
+              <button class="row">
+                <svg class="lead" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+                探测显示器
+                <span class="val">只读</span>
+                <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              </button>
+              <button class="row">
+                <svg class="lead" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 10h6M9 14h6M9 18h4"/></svg>
+                查看日志
+                <span class="val">dualswitch.log</span>
+                <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              </button>
+              <button class="row">
+                <svg class="lead" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12L16 12h5"/></svg>
+                运行诊断
+                <span class="val">doctor</span>
+                <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="statusbar">
+            <span class="dot"></span>热键已启用 · Alt + Space
+            <span class="ver">v1.0.0</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="spec" style="max-width:520px">
+        <div class="cap"><i></i><b>布局逻辑</b></div>
+        <div class="note">
+          <h3>为什么把「状态」做成最大的一块</h3>
+          <p>
+            用户按完热键，画面已经切到另一台机器了，窗口根本看不见。等回到这台机器时，第一件想知道的事是
+            「我现在按下去会去哪」——所以「当前在哪」用 31px 大字，紧随其后的按钮直接写出目标机名
+            （<b>切换到 Mac</b>），而不是抽象的「切换」。
+          </p>
+          <p class="muted">
+            按钮文案永远等于目标，不写「切换屏幕」：切错方向的成本是黑屏 3 秒 + 摸键盘，比多读两个字贵得多。
+          </p>
+        </div>
+        <div class="note">
+          <h3>信息的三个层级</h3>
+          <div class="kv"><b>L1 状态</b><span>当前主机 + 输入源值，一眼可见</span></div>
+          <div class="kv"><b>L2 动作</b><span>主按钮 + 两台设备卡（可直接点对端切过去）</span></div>
+          <div class="kv"><b>L3 排障</b><span>探测 / 日志 / 诊断，收进列表，不抢视觉</span></div>
+        </div>
+        <div class="note">
+          <h3>为什么用「亮灯 / 灭灯」</h3>
+          <p>
+            两台机器的状态本质是二元的，指示灯最省认知：<b>亮着的那台，就是画面所在的那台</b>。
+            灯用<b>绿色</b>，和显示器、路由器上那颗电源灯一个语言，用户不用学。
+          </p>
+          <p class="muted">
+            不只靠颜色区分：灭灯那台同时做了去色、降低不透明度、换灰底、文案变弱四件事，
+            色弱用户靠明度和图标形状同样能判断。指示灯本身也有「发光 vs 内凹」的质感差。
+          </p>
+        </div>
+        <div class="note">
+          <h3>交互约定</h3>
+          <p>· 关闭窗口 = 收进托盘，不退出；退出只在托盘菜单里。</p>
+          <p>· 切换进行中按钮进入禁用态（800 ms 去抖），避免连点造成 DDC 队列堆积。</p>
+          <p>· 窗口不抢焦点：热键触发时只更新托盘气泡，不弹窗。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2. 设置 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <h2>设置</h2>
+      <span>四个分页，字段与 config.json 一一对应，不引入新概念</span>
+    </div>
+
+    <div class="grid">
+      <div class="spec">
+        <div class="cap"><i></i><b>SettingsWindow</b> · 热键分页</div>
+        <div class="win">
+          <div class="titlebar">
+            <img src="../icon/png/icon-24.png" alt="">
+            <span class="tb-title">屏幕切换 · 设置</span>
+            <div class="tb-cap">
+              <button class="close" aria-label="关闭">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="win-body" style="gap:12px">
+            <div class="tabs">
+              <button>常规</button>
+              <button class="on">热键</button>
+              <button>显示器</button>
+              <button>高级</button>
+            </div>
+
+            <div class="group">
+              <div class="g-row">
+                <div>
+                  <div class="g-title">切换热键</div>
+                  <div class="g-desc">点击后按下新的组合键</div>
+                </div>
+                <div class="right">
+                  <span class="keycap">Alt <em>+</em> Space</span>
+                </div>
+              </div>
+              <div class="g-row">
+                <div>
+                  <div class="g-title">严格区分左右 Alt</div>
+                  <div class="g-desc">只认右 Alt，避免和输入法、截图工具撞车</div>
+                </div>
+                <div class="right"><span class="sw"></span></div>
+              </div>
+              <div class="g-row">
+                <div>
+                  <div class="g-title">吞掉热键</div>
+                  <div class="g-desc">阻止 Alt + Space 继续弹出窗口系统菜单</div>
+                </div>
+                <div class="right"><span class="sw"></span></div>
+              </div>
+              <div class="g-row">
+                <div>
+                  <div class="g-title">连按去抖</div>
+                  <div class="g-desc">两次触发的最小间隔</div>
+                </div>
+                <div class="right"><div class="slider"></div><span class="num">800</span></div>
+              </div>
+            </div>
+
+            <div class="g-label">显示器</div>
+            <div class="group">
+              <div class="g-row">
+                <div>
+                  <div class="g-title">匹配关键字</div>
+                  <div class="g-desc">按 device_id 子串匹配物理显示器</div>
+                </div>
+                <div class="right"><span class="keycap">AOC</span></div>
+              </div>
+              <div class="g-row">
+                <div>
+                  <div class="g-title">输入源映射</div>
+                  <div class="g-desc">VCP 0x60 · 实测 HDMI 17 / USB-C 18，27 会被这块屏拒绝</div>
+                </div>
+                <div class="right" style="gap:10px">
+                  <div class="src"><span class="num">17</span><span class="src-l">Windows</span></div>
+                  <div class="src"><span class="num" style="color:#0AA79B">18</span><span class="src-l">Mac</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="g-label">行为</div>
+            <div class="group">
+              <div class="g-row">
+                <div>
+                  <div class="g-title">切换后弹出通知</div>
+                  <div class="g-desc">回读未确认时是否提示</div>
+                </div>
+                <div class="right"><span class="sw off"></span></div>
+              </div>
+              <div class="g-row">
+                <div>
+                  <div class="g-title">开机自启</div>
+                  <div class="g-desc">登录时静默启动到托盘</div>
+                </div>
+                <div class="right"><span class="sw"></span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="win-foot">
+            <button class="btn-ghost">恢复默认</button>
+            <button class="btn-solid">保存</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="spec" style="max-width:520px">
+        <div class="cap"><i></i><b>设置的原则</b></div>
+        <div class="note">
+          <h3>只暴露改得动的字段</h3>
+          <p>
+            <code>config.json</code> 里有 20 多个字段，界面上只放 9 个。剩下的（
+            <code>ddc_backend</code>、<code>command_template</code>、<code>readback.*</code>）留给高级分页的
+            「打开配置文件」入口——它们是排障参数，不是日常设置。
+          </p>
+        </div>
+        <div class="note">
+          <h3>危险值就地解释</h3>
+          <p>
+            输入源映射旁边直接写清「实测 HDMI 17 / USB-C 18，27 会被拒绝」。
+            这一条能省掉未来 90% 的「切了没反应」求助——因为 27 是网上流传的标准值，
+            而这台显示器偏偏不认。
+          </p>
+        </div>
+        <div class="note">
+          <h3>保存即生效</h3>
+          <p>热键与显示器配置改完立即重建热键线程，不需要重启进程；DDC 后端变更会提示「需重启」。保存失败时字段级红框 + 顶部横幅，不弹模态框。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 3. 状态变体 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <h2>状态与异常</h2>
+      <span>只有三种情况需要打断用户，其余一律静默</span>
+    </div>
+
+    <div class="grid">
+      <div class="state">
+        <span class="eyebrow">切换中 · 约 65 ms</span>
+        <div class="title"><span class="spin"></span>正在切换到 Mac…</div>
+        <div class="desc">按钮进入禁用态，避免连点堆积 DDC 队列。超过 200 ms 才显示这个转圈，正常情况用户几乎看不到。</div>
+        <div class="btn-row">
+          <button class="mini-btn" disabled style="opacity:.5">切换到 Mac</button>
+        </div>
+      </div>
+
+      <div class="state">
+        <span class="eyebrow">切换失败</span>
+        <div class="banner err">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" style="flex:none;margin-top:1px"><circle cx="8" cy="8" r="6.4"/><path d="M8 4.6v4.2M8 11.4v.1"/></svg>
+          <div><b>SetVCPFeature 返回错误 31</b><br>显示器未响应，可能是线缆或输入源被占用。</div>
+        </div>
+        <div class="btn-row">
+          <button class="mini-btn solid">重试</button>
+          <button class="mini-btn">查看日志</button>
+        </div>
+      </div>
+
+      <div class="state">
+        <span class="eyebrow">热键被占用</span>
+        <div class="banner warn">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" style="flex:none;margin-top:1px"><path d="M8 2.6l6 10.8H2z"/><path d="M8 6.6v3.2M8 11.6v.1"/></svg>
+          <div><b>Alt + Space 已被其他程序注册</b><br>换一个组合键，或改用「严格右 Alt」避开冲突。</div>
+        </div>
+        <div class="btn-row">
+          <button class="mini-btn solid">改热键</button>
+          <button class="mini-btn">忽略</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="note" style="margin-top:20px;max-width:880px">
+      <h3>刻意不做的提示</h3>
+      <p class="muted">
+        切到 Mac 之后，Windows 侧的回读必然失败（显示器已从系统消失），这是<b>预期行为</b>，不弹任何提示、只写日志。
+        同理，热键重复触发的去抖、回读超时，都不打扰用户——这个工具的信噪比，就是靠「该沉默时闭嘴」换来的。
+      </p>
+    </div>
+  </section>
+
+  <!-- ================= 4. 托盘 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <h2>托盘与通知</h2>
+      <span>日常真正被使用的界面</span>
+    </div>
+
+    <div class="grid">
+      <div class="spec">
+        <div class="cap"><i></i><b>托盘菜单</b> · 左键点图标 = 直接切换（默认项）</div>
+        <div class="tray">
+          <div class="ti">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h15l-3.5-3.5M20 15H5l3.5 3.5"/></svg>
+            切换到 Mac
+            <span class="sc">Alt Space</span>
+          </div>
+          <div class="ti">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>
+            强制切到 Windows
+          </div>
+          <div class="sep"></div>
+          <div class="ti">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+            探测显示器 / 读取输入源
+          </div>
+          <div class="ti">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10l-2.5-2.5M20 17H10l2.5 2.5"/></svg>
+            打开配置目录
+          </div>
+          <div class="ti">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 10h6M9 14h6"/></svg>
+            查看日志
+          </div>
+          <div class="sep"></div>
+          <div class="ti dis">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h1M9.5 10h1M13 10h1M16.5 10h1M6 14h12"/></svg>
+            热键：Alt + Space
+          </div>
+          <div class="ti">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h5v5M20 4l-8 8"/><path d="M9 20H4v-5M4 20l8-8"/></svg>
+            退出
+          </div>
+        </div>
+      </div>
+
+      <div class="spec">
+        <div class="cap"><i></i><b>通知</b> · 仅在「未确认」或「失败」时出现</div>
+        <div class="toast">
+          <img src="../icon/png/icon-64.png" alt="">
+          <div>
+            <div class="t">切换指令已发送</div>
+            <div class="d">显示器未确认（Q2790PC 的 HDMI 通道已知现象）。切不过去时可在托盘重试。</div>
+          </div>
+        </div>
+
+        <div class="note" style="margin-top:16px;max-width:320px">
+          <h3>图标状态</h3>
+          <p class="muted">托盘图标不做变色/角标，避免用户在任务栏找不到它。运行状态靠 tooltip 表达：
+            <br><code>屏幕切换 · Alt + Space · 当前 Windows</code></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 5. 图标 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <h2>应用图标</h2>
+      <span>采用你提供的插画：双屏 + 双向弧形箭头，已抠成透明底并出齐全套尺寸</span>
+    </div>
+
+    <div class="icon-board">
+      <div class="icon-hero">
+        <img class="big" src="../icon/png/icon-512.png" alt="图标 512">
+        <div class="sizes">
+          <div class="size"><img src="../icon/png/icon-16.png" alt=""><span>16</span></div>
+          <div class="size"><img src="../icon/png/icon-24.png" alt=""><span>24</span></div>
+          <div class="size"><img src="../icon/png/icon-32.png" alt=""><span>32</span></div>
+          <div class="size"><img src="../icon/png/icon-48.png" alt=""><span>48</span></div>
+          <div class="size"><img src="../icon/png/icon-64.png" alt=""><span>64</span></div>
+        </div>
+        <div class="taskbar">
+          <div class="slot ghost">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA3B2" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>
+          </div>
+          <div class="slot ghost">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA3B2" stroke-width="1.8"><path d="M4 6h16v12H4z"/><path d="M4 10h16"/></svg>
+          </div>
+          <div class="slot on"><img src="../icon/png/icon-32.png" width="26" height="26" alt=""></div>
+          <div class="slot ghost">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA3B2" stroke-width="1.8"><path d="M3 12l9-8 9 8v8H3z"/></svg>
+          </div>
+        </div>
+        <div class="muted" style="font-size:11.5px">任务栏 26–32px 下的实际观感</div>
+      </div>
+
+      <div class="icon-notes">
+        <div class="note">
+          <h3>图形（沿用你提供的插画）</h3>
+          <p>
+            两台显示器一深一亮、两条弧形箭头首尾相接 —— 画面在两台机器之间来回换，语义比抽象箭头更直白，
+            也和主窗口里的两张设备卡形成了呼应。
+          </p>
+          <p>
+            源图是白底 JPG，已抠成透明底：按<b>亮度 + 饱和度</b>双判据算 alpha（纯白→透明、浅蓝机身→保留、柔和投影→半透明），
+            而不是简单按白色泛洪，否则机身和箭头会被一起吃掉。
+          </p>
+        </div>
+        <div class="note">
+          <h3>尺寸策略（一个诚实的提醒）</h3>
+          <p>母版 1024px → 各尺寸 Lanczos 降采样，≤128px 补一道轻锐化，抵消缩小的糊。</p>
+          <p>
+            <b>16px 下细节会丢</b>：两张屏和箭头会糊成一个蓝块，但深浅对比还在，任务栏里仍能认出是这个应用。
+            如果托盘里要求像素级清晰，可以再单独做一个 16/20px 的单色简化版（双屏轮廓 + 一条箭头），
+            需要的话我加一档，不影响其他尺寸。
+          </p>
+        </div>
+        <div class="note">
+          <h3>交付物</h3>
+          <div class="kv"><b>ICO</b><span><code>design/icon/screen-switch.ico</code> · 16→256 九档，PNG 压缩</span></div>
+          <div class="kv"><b>PNG</b><span><code>design/icon/png/</code> · 16 20 24 32 40 48 64 128 256 512</span></div>
+          <div class="kv"><b>母版</b><span><code>design/icon/source/screen-switch.png</code> · 1024 透明底</span></div>
+          <div class="kv"><b>生成</b><span><code>python design/icon/build_icon.py --cutout</code> · 换源图后一条命令重出</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 6. 规范 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <h2>设计规范</h2>
+      <span>实现时按这张表取值，不要临场发挥</span>
+    </div>
+
+    <table class="spec-table">
+      <tr><th>项</th><th>值</th><th>说明</th></tr>
+      <tr><td>窗口尺寸</td><td><code>440 × 600</code></td><td>最小 380 × 520；设置页同宽，保证切换不跳</td></tr>
+      <tr><td>圆角</td><td>窗口 14 / 卡片 11–13 / 控件 7–10</td><td>与 Windows 11 一致的内外圆角差 2px</td></tr>
+      <tr><td>间距</td><td>外边距 18 · 区块 14 · 卡片内 12–16</td><td>全部 2 的倍数，避免半像素</td></tr>
+      <tr><td>字号</td><td>31 / 17 / 14.5 / 13 / 12.5 / 11.5 / 11</td><td>状态用 31，正文 12.5，说明 11.5；数字统一 tabular-nums</td></tr>
+      <tr><td>主色</td><td><code>#2F6BFF</code></td><td>按钮、选中态、图标底色</td></tr>
+      <tr><td>两端色</td><td><code>#2F6BFF</code> / <code>#0AA79B</code></td><td>Windows / Mac，设备卡与图标共用</td></tr>
+      <tr><td>设备卡两态</td><td>绿灯亮 / 灭灯</td><td>亮：绿色描边 + 极浅绿底 + 官方原色图标 + 发光绿灯；灭：灰底 + 图标 grayscale(1) 38% + 内凹灰灯</td></tr>
+      <tr><td>语义色</td><td><code>#0F9D58</code> / <code>#B4690E</code> / <code>#D33B3B</code></td><td>成功 / 警告 / 失败</td></tr>
+      <tr><td>中文字体</td><td>Segoe UI Variable → 微软雅黑 UI</td><td>Win10 回落到 Segoe UI + 雅黑，行高 1.5–1.75</td></tr>
+      <tr><td>动效</td><td>150 ms ease-out</td><td>只有 hover、页签切换、转圈；不做入场动画</td></tr>
+      <tr><td>快捷键</td><td>Alt + Space</td><td>窗口内所有可点区域都支持 Enter / Space 激活</td></tr>
+    </table>
+
+    <div class="note" style="margin-top:20px">
+      <h3>实现建议（不改现有架构）</h3>
+      <p>
+        现有 <code>app.SwitchController</code> / <code>config</code> / <code>ddc</code> 全部不动，只加一层 <code>ui/</code>：
+        PySide6 画窗口（QSS 按上表取值），托盘继续用 pystray，窗口与托盘共用一个 controller，切换结果通过回调更新界面。
+        也可以把本页当 HTML 规格，用 pywebview 直接渲染——但托盘必须留在 Python 侧。
+      </p>
+      <p class="muted">
+        需要新增的只有三个接口：<code>controller.switch_now()</code> 的返回值（已有）、
+        <code>backend.list_monitors()</code>（已有）、<code>config.save()</code>（已有）。UI 不碰 DDC。
+      </p>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

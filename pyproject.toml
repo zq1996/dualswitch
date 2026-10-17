@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dualswitch"
+version = "1.0.0"
+description = "双系统单显示器切换助手：一个热键把显示器在 Windows(HDMI) 与 Mac(USB-C) 之间切换"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "dualswitch" }]
+keywords = ["ddc-ci", "monitor", "input-source", "kvm", "hotkey"]
+
+# 核心功能零第三方依赖：Windows 用 ctypes 直调 dxva2.dll，macOS 调 m1ddc 命令行。
+dependencies = []
+
+[project.optional-dependencies]
+# 托盘/菜单栏常驻（可选，缺失时自动降级为无界面常驻）
+tray = ["pystray>=0.19", "pillow>=9"]
+# macOS 全局热键（CGEventTap），macOS 上必装
+macos = ["pyobjc-framework-Quartz>=9.0", "pyobjc-framework-ApplicationServices>=9.0"]
+# 图形界面（主窗口 + 托盘）。不装也能用 CLI / 无界面常驻
+gui = ["PySide6-Essentials>=6.6"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+dualswitch = "dualswitch.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"dualswitch.ui" = ["assets/*.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

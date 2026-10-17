@@ -1,0 +1,34 @@
+{
+  "hotkey": "alt+space",
+  "hotkey_backend": "auto",
+  "swallow_hotkey": true,
+  "debounce_ms": 800,
+
+  "vcp_code": 96,
+  "sources": {
+    "windows": 17,
+    "mac": 18
+  },
+  "this_host": "auto",
+  "switch_mode": "other",
+  "monitor_match": "AOC",
+  "monitor_index": 0,
+  "ddc_backend": "auto",
+  "m1ddc_path": "m1ddc",
+  "m1ddc_display_index": null,
+  "command_template": [],
+  "command_get_template": [],
+  "dry_run": false,
+
+  "readback": {
+    "enabled": true,
+    "delay_ms": 300,
+    "timeout_ms": 1000,
+    "interval_ms": 200,
+    "notify_on_unconfirmed": false
+  },
+
+  "tray": true,
+  "notify": true,
+  "log_level": "INFO"
+}

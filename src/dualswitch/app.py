@@ -1,0 +1,296 @@
+"""切换编排：热键触发 → 工作线程盲发 Set → 异步回读。
+
+线程模型（保证 ≤200ms 的指令发出延迟，且热键回调永不阻塞）：
+   热键线程  →  trigger()      只做去抖 + 入队（微秒级）
+   工作线程  →  set_input()    单线程串行，避免并发抢显示器句柄
+   回读线程  →  get_input()    发完就 fork，不阻塞下一次切换
+"""
+
+from __future__ import annotations
+
+import queue
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Callable
+
+from . import logging_setup
+from .config import Config
+from .ddc.base import DDCError, DisplayBackend
+
+log = logging_setup.get("app")
+
+Notifier = Callable[[str, str], None]  # (标题, 正文)
+
+
+@dataclass
+class SwitchResult:
+    ok: bool
+    target: str
+    value: int
+    source: str = "hotkey"
+    send_latency_ms: float = 0.0   # 触发 → Set 调用发出
+    set_call_ms: float = 0.0       # Set 调用本身耗时
+    error: str | None = None
+    readback: str = "pending"      # pending / confirmed / unconfirmed / skipped
+    readback_detail: str = ""
+    dry_run: bool = False
+    at: datetime = field(default_factory=datetime.now)
+
+    def summary(self) -> str:
+        if not self.ok:
+            return f"切换到 {self.target} 失败：{self.error}"
+        if self.dry_run:
+            return f"[演练] 本应切换到 {self.target} (VCP 0x60={self.value})，未发送指令"
+        return (
+            f"已发送切换指令 → {self.target} (VCP 0x60={self.value})，"
+            f"发出延迟 {self.send_latency_ms:.1f}ms，调用耗时 {self.set_call_ms:.1f}ms"
+        )
+
+
+class SwitchController:
+    def __init__(
+        self,
+        cfg: Config,
+        backend: DisplayBackend,
+        notifier: Notifier | None = None,
+        clock: Callable[[], float] = time.perf_counter,
+    ):
+        self.cfg = cfg
+        self.backend = backend
+        self._notify = notifier or (lambda title, msg: None)
+        self._clock = clock
+        self._queue: queue.Queue = queue.Queue(maxsize=1)
+        self._worker: threading.Thread | None = None
+        self._detector: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._running = False
+        self._lock = threading.Lock()
+        self._last_trigger = float("-inf")
+        self._last_set_at = float("-inf")
+        self._last_detected: str | None = None
+        self._confirm = 0
+        self._current_source = cfg.effective_host()
+        self.history: list[SwitchResult] = []
+
+        # 外部切换（例如在 Mac 上执行 CLI）不会经过本进程，
+        # 只能靠「显示器还在不在本机」反推画面归属，见 detect_source()
+        self.detect_interval_s = 2.0   # 轮询间隔
+        self.detect_settle_s = 8.0     # 自己刚切完的静默期，等显示器真正切走/切回
+
+    def set_notifier(self, notifier: Notifier) -> None:
+        """托盘就绪后再挂上通知通道。"""
+        self._notify = notifier
+
+    # ------------------------------------------------------------------ 生命周期
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._stop_event.clear()
+        self._worker = threading.Thread(target=self._loop, name="switch-worker", daemon=True)
+        self._worker.start()
+        self._detector = threading.Thread(target=self._detect_loop, name="source-detector", daemon=True)
+        self._detector.start()
+
+    def stop(self) -> None:
+        if not self._running:
+            return
+        self._running = False
+        self._stop_event.set()
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
+        if self._worker:
+            self._worker.join(timeout=2.0)
+        if self._detector:
+            self._detector.join(timeout=2.0)
+
+    # ------------------------------------------------------------------ 触发
+    def trigger(self, source: str = "hotkey") -> bool:
+        """热键回调里调用：必须极快返回。返回 False 表示被去抖丢弃。"""
+        now = self._clock()
+        with self._lock:
+            gap = (now - self._last_trigger) * 1000
+            if gap < self.cfg.debounce_ms:
+                log.debug("去抖丢弃一次触发（间隔 %.0fms < %dms）", gap, self.cfg.debounce_ms)
+                return False
+            self._last_trigger = now
+        try:
+            self._queue.put_nowait((now, source))
+        except queue.Full:
+            log.warning("上一次切换尚未完成，忽略本次触发")
+            return False
+        return True
+
+    def switch_now(self, target: str | None = None, source: str = "cli") -> SwitchResult:
+        """同步执行一次切换（CLI / 托盘菜单用）。"""
+        return self._execute(self._clock(), source, forced_target=target)
+
+    # ------------------------------------------------------------------ 外部状态检测
+    def detect_source(self) -> str | None:
+        """按「显示器还在不在本机」推断画面现在属于哪台机器。
+
+        显示器只会在它当前选中的输入端被枚举到：
+          · 能枚举到这台屏 → 画面在本机
+          · 枚举不到       → 画面在另一台
+        返回 None 表示这次判断不了（枚举异常）。
+        """
+        try:
+            monitors = self.backend.list_monitors()
+        except Exception as exc:  # 枚举失败不代表画面变了，直接放弃这一轮
+            log.debug("检测画面归属失败：%s", exc)
+            return None
+        needle = (self.cfg.monitor_match or "").strip()
+        present = any(m.matches(needle) for m in monitors) if needle else bool(monitors)
+        return self.cfg.effective_host() if present else self.cfg.other_host()
+
+    def _detect_loop(self) -> None:
+        """后台轮询：外部（另一台机器上的 CLI / 显示器 OSD）切换后同步状态。"""
+        while not self._stop_event.wait(self.detect_interval_s):
+            if self.cfg.dry_run:                       # 演练模式不碰真实状态
+                continue
+            if time.monotonic() - self._last_set_at < self.detect_settle_s:
+                continue                               # 自己刚切完，等显示器真正切走/切回
+            detected = self.detect_source()
+            if detected is None:
+                self._last_detected = None
+                self._confirm = 0
+                continue
+            # 连续两轮结果一致才认：显示器消失/出现都有滞后，单轮容易误判
+            if detected == self._last_detected:
+                self._confirm += 1
+            else:
+                self._last_detected = detected
+                self._confirm = 1
+            if self._confirm < 2:
+                continue
+            with self._lock:
+                if detected == self._current_source:
+                    continue
+                self._current_source = detected
+            log.info(
+                "检测到画面已在 %s（显示器%s），已同步内部状态",
+                detected,
+                "接回本机" if detected == self.cfg.effective_host() else "离开本机",
+            )
+
+    # ------------------------------------------------------------------ 内部
+    def _resolve_target(self, forced: str | None = None) -> str:
+        if forced in ("windows", "mac"):
+            return forced
+        if forced == "toggle":
+            return self.cfg.other_host() if self._current_source == self.cfg.effective_host() else self.cfg.effective_host()
+        if self.cfg.switch_mode == "toggle":
+            return self.cfg.other_host() if self._current_source == self.cfg.effective_host() else self.cfg.effective_host()
+        return self.cfg.other_host()
+
+    def _loop(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                break
+            t0, source = item
+            try:
+                self._execute(t0, source)
+            except Exception:  # 任何异常都不能让常驻进程挂掉
+                log.exception("切换过程中出现未捕获异常")
+
+    def _execute(self, t0: float, source: str, forced_target: str | None = None) -> SwitchResult:
+        target = self._resolve_target(forced_target)
+        value = self.cfg.target_value(target)
+        t_send = self._clock()
+        result = SwitchResult(
+            ok=False,
+            target=target,
+            value=value,
+            source=source,
+            send_latency_ms=(t_send - t0) * 1000.0,
+        )
+
+        if self.cfg.dry_run:
+            result.ok = True
+            result.dry_run = True
+            result.readback = "skipped"
+            result.set_call_ms = 0.0
+            log.info("[dry-run] 本应发送 Set VCP 0x%02X = %d（目标 %s）", self.cfg.vcp_code, value, target)
+            self._record(result)
+            return result
+
+        try:
+            self.backend.set_input(value)
+            result.ok = True
+        except DDCError as exc:
+            result.error = str(exc)
+            log.error("切换失败（目标 %s / 值 %d）：%s", target, value, exc)
+            self._record(result)
+            if self.cfg.notify:
+                self._notify("切换失败", f"未能把显示器切到 {target}。\n{exc}")
+            return result
+        except Exception as exc:  # 兜底，避免驱动层抛出奇怪异常
+            result.error = f"{type(exc).__name__}: {exc}"
+            log.exception("切换时出现意外异常")
+            self._record(result)
+            return result
+        finally:
+            result.set_call_ms = (self._clock() - t_send) * 1000.0
+
+        self._last_set_at = time.monotonic()
+        with self._lock:
+            self._current_source = target
+
+        log.info("%s", result.summary())
+        if result.send_latency_ms > 200:
+            log.warning("指令发出延迟 %.1fms 超过 200ms 目标", result.send_latency_ms)
+
+        self._record(result)
+
+        if self.cfg.readback.enabled:
+            threading.Thread(
+                target=self._readback, args=(result,), name="readback", daemon=True
+            ).start()
+        else:
+            result.readback = "skipped"
+        return result
+
+    def _readback(self, result: SwitchResult) -> None:
+        rb = self.cfg.readback
+        deadline = time.monotonic() + rb.timeout_ms / 1000.0
+        time.sleep(rb.delay_ms / 1000.0)
+        last_detail = "无读数"
+        attempts = 0
+        while time.monotonic() < deadline:
+            attempts += 1
+            try:
+                current = self.backend.get_input()
+                if current == result.value:
+                    result.readback = "confirmed"
+                    result.readback_detail = f"VCP 0x{self.cfg.vcp_code:02X} = {current}（{attempts} 次尝试）"
+                    log.info("回读确认：%s", result.readback_detail)
+                    return
+                last_detail = f"读回 {current}，期望 {result.value}"
+            except DDCError as exc:
+                last_detail = f"读取失败：{exc}"
+            except Exception as exc:  # pragma: no cover
+                last_detail = f"读取异常：{exc}"
+            time.sleep(rb.interval_ms / 1000.0)
+
+        result.readback = "unconfirmed"
+        result.readback_detail = last_detail
+        # 切走之后显示器已从本机消失，回读失败属于预期；按文档只记录，不打扰
+        log.info("回读未确认（%s）；Q2790PC 的 HDMI 通道读数已知不可靠，仅记录", last_detail)
+        if rb.notify_on_unconfirmed and self.cfg.notify:
+            self._notify("切换指令已发送", "显示器未确认，详见日志。")
+
+    def _record(self, result: SwitchResult) -> None:
+        with self._lock:
+            self.history.append(result)
+            if len(self.history) > 50:
+                del self.history[:-50]
+
+    @property
+    def current_source(self) -> str:
+        with self._lock:
+            return self._current_source
