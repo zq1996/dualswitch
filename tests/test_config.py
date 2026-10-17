@@ -97,7 +97,10 @@ def test_save_and_load(tmp_path):
 
 def test_load_missing_returns_defaults(tmp_path):
     cfg = config_mod.load(tmp_path / "nope.json")
-    assert cfg.hotkey == "alt+space"
+    # 默认值按平台走：Windows 是 alt+space，macOS 是右 Option（ralt+space）
+    default = config_mod.platform_defaults()
+    assert cfg.hotkey == default.hotkey
+    assert cfg.sources == default.sources
 
 
 def test_load_invalid_json(tmp_path):

@@ -19,10 +19,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config import Config, ConfigError, from_dict, save as save_config
+from ..config import Config, ConfigError, from_dict, platform_defaults, save as save_config
 from ..hotkey.base import HotkeyError, parse_hotkey
 from . import theme
-from .widgets import Combo, ElidedLabel, StatusBar, TitleBar, ToggleSwitch, label, soft_shadow
+from .chrome import current as chrome
+from .widgets import Combo, ElidedLabel, StatusBar, ToggleSwitch, label, soft_shadow
 
 
 # --------------------------------------------------------------------------- #
@@ -145,7 +146,7 @@ class HotkeyRecorder(QPushButton):
             return
         try:
             raw = parse_hotkey(self._spec).describe()
-            text = " + ".join(raw.replace(" ", "").split("+"))
+            text = theme.pretty_hotkey(raw)          # mac → ⌥ Space，Windows → Alt + Space
         except HotkeyError:
             text = self._spec
         self.setText(text)
@@ -241,26 +242,34 @@ class SettingsWindow(QWidget):
         self.cfg = cfg
         self.config_file = Path(config_file)
 
+        self.chrome = chrome()
         self.setWindowTitle("屏幕切换 · 设置")
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(theme.WIN_W, theme.SETTINGS_H)
+        if self.chrome.NATIVE_CHROME:
+            self.setAttribute(Qt.WA_MacShowFocusRect, False)
+            self.setFixedSize(theme.WIN_W, theme.SETTINGS_H)
+        else:
+            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+            self.setAttribute(Qt.WA_TranslucentBackground)
+            self.setFixedSize(theme.WIN_W, theme.SETTINGS_H)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.root = QFrame()
         self.root.setObjectName("root")
         outer.addWidget(self.root)
-        soft_shadow(self.root, "#0F172A", blur=38, dy=14, alpha=52)
+        if not self.chrome.NATIVE_CHROME:
+            soft_shadow(self.root, "#0F172A", blur=38, dy=14, alpha=52)
 
         root_lay = QVBoxLayout(self.root)
-        root_lay.setContentsMargins(1, 1, 1, 1)
+        m = 0 if self.chrome.NATIVE_CHROME else 1
+        root_lay.setContentsMargins(m, m, m, m)
         root_lay.setSpacing(0)
 
-        self.titlebar = TitleBar("屏幕切换 · 设置", show_settings=False)
-        self.titlebar.closeClicked.connect(self.hide)
-        self.titlebar.minimizeClicked.connect(self.showMinimized)
-        root_lay.addWidget(self.titlebar)
+        self.titlebar = self.chrome.titlebar("屏幕切换 · 设置", show_settings=False)
+        if self.titlebar is not None:
+            self.titlebar.closeClicked.connect(self.hide)
+            self.titlebar.minimizeClicked.connect(self.showMinimized)
+            root_lay.addWidget(self.titlebar)
 
         body = QWidget()
         body_lay = QVBoxLayout(body)
@@ -384,15 +393,16 @@ class SettingsWindow(QWidget):
 
         self.recorder = HotkeyRecorder(self.cfg.hotkey)
         self.recorder.recordingChanged.connect(self.recordingChanged)
-        self.sw_strict = ToggleSwitch(self.cfg.hotkey_backend == "hook")
+        # 严格左右修饰键：Windows 靠低级钩子才能做到，macOS 的 CGEventTap 天生能分左右
+        self.sw_strict = ToggleSwitch("ralt" in parse_hotkey(self.cfg.hotkey).modifiers)
         self.sw_swallow = ToggleSwitch(self.cfg.swallow_hotkey)
         self.sw_tray = ToggleSwitch(self.cfg.tray)
-
+        copy = self.chrome.HOTKEY_COPY
         lay.addWidget(group_box(
             group_row("切换热键", "点击后按下新组合键，保存即生效", self.recorder),
-            group_row("严格区分左右 Alt", "改用低级键盘钩子，只认右 Alt", self.sw_strict),
-            group_row("吞掉热键", "阻止 Alt + Space 继续弹出系统菜单", self.sw_swallow),
-            group_row("开机后常驻托盘", "关闭窗口时不退出程序", self.sw_tray, last=True),
+            group_row(copy["strict_title"], copy["strict_desc"], self.sw_strict),
+            group_row("吞掉热键", copy["swallow_desc"], self.sw_swallow),
+            group_row(copy["tray_title"], copy["tray_desc"], self.sw_tray, last=True),
         ))
         lay.addStretch(1)
         return page
@@ -447,11 +457,7 @@ class SettingsWindow(QWidget):
             pl.addLayout(col)
 
         lay.addWidget(group_box(
-            group_row(
-                "显示器匹配关键字",
-                "按设备名或 device_id 的片段定位这台屏，匹配不到就用第一台",
-                match_box,
-            ),
+            group_row("显示器匹配关键字", self.chrome.MATCH_DESC, match_box),
             group_row(
                 "输入源映射",
                 "切到该机器时设成此值（VCP 0x60）",
@@ -468,8 +474,11 @@ class SettingsWindow(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
 
-        self.combo_backend = Combo(["auto", "dxva2", "m1ddc", "command", "mock"])
-        self.combo_backend.setCurrentText(self.cfg.ddc_backend)
+        # mac 上没有 dxva2，Windows 上没有 m1ddc —— 下拉里只放这台机器真的能用的后端
+        backends = list(self.chrome.BACKEND_OPTIONS)
+        self.combo_backend = Combo(backends)
+        current = self.cfg.ddc_backend if self.cfg.ddc_backend in backends else "auto"
+        self.combo_backend.setCurrentText(current)
         self.combo_backend.setFixedWidth(116)
         self.sw_dryrun = ToggleSwitch(self.cfg.dry_run)
         self.sw_readback = ToggleSwitch(self.cfg.readback.enabled)
@@ -499,13 +508,13 @@ class SettingsWindow(QWidget):
     # ------------------------------------------------------------------ 保存
     def _reset(self) -> None:
         self.recorder.stop_recording()
-        defaults = Config()
+        defaults = platform_defaults()
         self.seg_mode.set_value(defaults.switch_mode)
         self.sw_notify.setChecked(defaults.notify)
         self.sw_readback_notify.setChecked(defaults.readback.notify_on_unconfirmed)
         self.slider.setValue(defaults.debounce_ms)
         self.recorder.set_spec(defaults.hotkey)
-        self.sw_strict.setChecked(False)
+        self.sw_strict.setChecked("ralt" in parse_hotkey(defaults.hotkey).modifiers)
         self.sw_swallow.setChecked(defaults.swallow_hotkey)
         self.sw_tray.setChecked(defaults.tray)
         self.edit_match.setText(defaults.monitor_match)
@@ -515,6 +524,14 @@ class SettingsWindow(QWidget):
         self.sw_dryrun.setChecked(defaults.dry_run)
         self.sw_readback.setChecked(defaults.readback.enabled)
 
+    @staticmethod
+    def _with_strict_modifier(spec: str, strict: bool) -> str:
+        """把热键里的 alt / ralt 改成与「只认右 Alt(Option)」开关一致。"""
+        tokens = [t for t in spec.replace(" ", "").split("+") if t]
+        if strict:
+            return "+".join("ralt" if t.lower() in ("alt", "option", "opt") else t for t in tokens)
+        return "+".join("alt" if t.lower() in ("ralt", "rightalt", "right_option") else t for t in tokens)
+
     def _save(self) -> None:
         self.recorder.stop_recording()
         try:
@@ -522,6 +539,11 @@ class SettingsWindow(QWidget):
             mac = int(self.edit_mac.text() or 0)
             if win == mac:
                 raise ConfigError("Windows 与 Mac 的输入源值不能相同")
+
+            # 「只认右 Option」是热键语义的一部分：两种平台都落到 spec 的 ralt 上
+            # （Windows 靠低级钩子区分左右，macOS 靠 CGEventTap，配置字段一致）
+            hotkey = self._with_strict_modifier(self.recorder.spec(), self.sw_strict.isChecked())
+            parse_hotkey(hotkey)
 
             # 关键：不要就地修改 self.cfg。这份对象就是运行中的配置，
             # 就地改会让 runner 的「旧值 vs 新值」比较失效（热键永远不会重建），
@@ -531,11 +553,12 @@ class SettingsWindow(QWidget):
                 switch_mode=self.seg_mode.value(),
                 notify=self.sw_notify.isChecked(),
                 debounce_ms=int(self.slider.value()),
-                hotkey=self.recorder.spec(),
-                hotkey_backend="hook" if self.sw_strict.isChecked() else "auto",
+                hotkey=hotkey,
+                # Windows 走 hook 后端才能区分左右 Alt；macOS 只有一种后端，保持 auto
+                hotkey_backend=self.chrome.STRICT_BACKEND if self.sw_strict.isChecked() else "auto",
                 swallow_hotkey=self.sw_swallow.isChecked(),
                 tray=self.sw_tray.isChecked(),
-                monitor_match=self.edit_match.text().strip() or "AOC",
+                monitor_match=self.edit_match.text().strip(),
                 sources={"windows": win, "mac": mac},
                 ddc_backend=self.combo_backend.currentText(),
                 dry_run=self.sw_dryrun.isChecked(),

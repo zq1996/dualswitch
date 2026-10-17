@@ -10,8 +10,11 @@ CGEventTap 能区分左右修饰键，因此不需要像 Windows 那样退化。
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import threading
+from pathlib import Path
 
 from .base import Hotkey, HotkeyError, to_mac_keycode
 
@@ -19,6 +22,23 @@ if sys.platform != "darwin":  # pragma: no cover - 平台守卫
     raise ImportError("dualswitch.hotkey.macos 只能在 macOS 上导入")
 
 KEYCODE_RIGHT_OPTION = 61
+
+# 「辅助功能」面板的深链接。macOS 13+ 用 settings 扩展 id，旧系统回落到老的 preference 锚点。
+ACCESSIBILITY_PANE = (
+    "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"
+)
+
+# 终端类程序的 TERM_PROGRAM → 系统设置里显示的名字
+_TERM_NAMES = {
+    "Apple_Terminal": "终端",
+    "iTerm.app": "iTerm",
+    "WarpTerminal": "Warp",
+    "vscode": "Visual Studio Code",
+    "Hyper": "Hyper",
+    "ghostty": "Ghostty",
+    "WezTerm": "WezTerm",
+    "Tabby": "Tabby",
+}
 
 # CGEventFlags
 FLAG_SHIFT = 0x00020000
@@ -38,7 +58,12 @@ def _import_quartz():
     return Quartz
 
 
-def _accessibility_trusted(prompt: bool = False) -> bool:
+def accessibility_granted(prompt: bool = False) -> bool:
+    """当前进程是否已拿到「辅助功能」权限。
+
+    prompt=True 时系统会弹一次授权对话框 —— **这一步很关键**：TCC 只会把
+    「主动请求过」的可执行文件写进列表，所以不弹窗时用户在设置里根本找不到本应用。
+    """
     try:
         from ApplicationServices import (  # type: ignore
             AXIsProcessTrustedWithOptions,
@@ -50,6 +75,50 @@ def _accessibility_trusted(prompt: bool = False) -> bool:
         return bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: bool(prompt)}))
     except Exception:  # pragma: no cover
         return True
+
+
+def permission_target() -> str:
+    """该去系统设置里勾选谁。
+
+    · 打包后（PyInstaller）→ 「屏幕切换」
+    · 从终端跑脚本     → 授权对象是**终端本身**（TCC 按"负责进程"归属），
+                         这也是用户「找不到本应用」的原因
+    """
+    if getattr(sys, "frozen", False):
+        return "屏幕切换"
+    term = os.environ.get("TERM_PROGRAM")
+    if term:
+        return _TERM_NAMES.get(term, term)
+    return Path(sys.executable).name
+
+
+def open_accessibility_settings() -> None:
+    """直接打开 系统设置 → 隐私与安全性 → 辅助功能。"""
+    try:
+        subprocess.Popen(["open", ACCESSIBILITY_PANE])
+    except Exception:  # pragma: no cover
+        pass
+
+
+def request_accessibility() -> bool:
+    """要权限：先弹系统对话框（会把本进程加进列表），没弹成再打开设置面板。"""
+    granted = accessibility_granted(prompt=True)
+    open_accessibility_settings()
+    return granted
+
+
+def permission_message() -> str:
+    """给用户看的一句话：授权对象 + 怎么做。"""
+    target = permission_target()
+    if getattr(sys, "frozen", False):
+        how = f"在列表里打开「{target}」"
+    else:
+        how = f"在列表里打开「{target}」（本程序是从它启动的，所以授权给它）"
+    return f"请在「隐私与安全性 → 辅助功能」里{how}，然后点「重试」或重启程序。"
+
+
+def _accessibility_trusted(prompt: bool = False) -> bool:
+    return accessibility_granted(prompt=prompt)
 
 
 class QuartzEventTapBackend:
@@ -74,10 +143,8 @@ class QuartzEventTapBackend:
         self._Quartz = _import_quartz()
         self._keycode = to_mac_keycode(self.hotkey.key)
         if not _accessibility_trusted(prompt=True):
-            raise HotkeyError(
-                "缺少「辅助功能」权限，无法监听全局按键。请到 系统设置 → 隐私与安全性 → 辅助功能 "
-                "中勾选运行本程序的终端 / Python / dualswitch.app，然后重新启动本程序。"
-            )
+            # prompt=True 会弹出系统对话框；即使弹了，本次仍可能还没授权（用户要去点开关）
+            raise HotkeyError("缺少「辅助功能」权限，无法监听全局按键。" + permission_message())
         self._thread = threading.Thread(target=self._run, name="hotkey-quartz", daemon=True)
         self._thread.start()
         self._ready.wait(timeout)
@@ -135,7 +202,7 @@ class QuartzEventTapBackend:
         if tap is None:
             self.error = (
                 "CGEventTapCreate 返回空：通常是缺少辅助功能权限，或被安全软件拦截。"
-                "请到 系统设置 → 隐私与安全性 → 辅助功能 授权后重启程序。"
+                + permission_message()
             )
             self._ready.set()
             return

@@ -109,127 +109,26 @@ def logo_pixmap(kind: str, size: int, dim: bool = False) -> QPixmap:
 
 
 # --------------------------------------------------------------------------- #
-# 标题栏
+# 齿轮路径（Windows 标题栏按钮与列表图标共用）
 # --------------------------------------------------------------------------- #
-class CaptionButton(QAbstractButton):
-    """标题栏按钮：线性图标自绘，避免 Unicode 字形大小与基线不一致。
-
-    kind: "gear" 设置 / "min" 最小化 / "close" 关闭
-    """
-
-    def __init__(self, kind: str, parent=None):
-        super().__init__(parent)
-        self.kind = kind
-        self.setFixedSize(30 if kind == "gear" else 34, 26)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFocusPolicy(Qt.NoFocus)
-        self.setToolTip("设置" if kind == "gear" else "")
-
-    def enterEvent(self, event):  # noqa: N802
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):  # noqa: N802
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        hover = self.underMouse()
-        rect = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
-        if hover:
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor("#E81123" if self.kind == "close" else "#E4E9F1"))
-            p.drawRoundedRect(rect, 6, 6)
-
-        white = hover and self.kind == "close"
-        color = QColor("#FFFFFF") if white else QColor("#4B5566")
-        c = QPointF(self.width() / 2, self.height() / 2)
-
-        if self.kind == "gear":
-            self._paint_gear(p, c, color)
-        else:
-            pen = QPen(color, 1.3)
-            pen.setCapStyle(Qt.RoundCap)
-            p.setPen(pen)
-            p.setBrush(Qt.NoBrush)
-            if self.kind == "min":
-                p.drawLine(QPointF(c.x() - 5, c.y() + 0.5), QPointF(c.x() + 5, c.y() + 0.5))
-            else:
-                p.drawLine(QPointF(c.x() - 4.2, c.y() - 4.2), QPointF(c.x() + 4.2, c.y() + 4.2))
-                p.drawLine(QPointF(c.x() + 4.2, c.y() - 4.2), QPointF(c.x() - 4.2, c.y() + 4.2))
-        p.end()
-
-    @staticmethod
-    def _paint_gear(p: QPainter, c: QPointF, color: QColor) -> None:
-        body = QPainterPath()
-        body.addEllipse(c, 5.3, 5.3)
-        for i in range(8):
-            tooth = QPainterPath()
-            tooth.addRoundedRect(QRectF(-1.15, -7.0, 2.3, 3.4), 0.85, 0.85)
-            t = QTransform()
-            t.translate(c.x(), c.y())
-            t.rotate(i * 45)
-            body = body.united(t.map(tooth))
-        hole = QPainterPath()
-        hole.addEllipse(c, 2.55, 2.55)
-        p.setPen(Qt.NoPen)
-        p.setBrush(color)
-        p.drawPath(body.subtracted(hole))
-
-
-class TitleBar(QWidget):
-    minimizeClicked = Signal()
-    closeClicked = Signal()
-    settingsClicked = Signal()
-
-    def __init__(self, title: str, show_settings: bool = True, parent=None):
-        super().__init__(parent)
-        self.setObjectName("titlebar")
-        # QWidget 子类默认不画 QSS 背景，必须显式打开
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(44)
-        self._drag_pos: QPointF | None = None
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(15, 0, 8, 0)
-        lay.setSpacing(6)
-
-        icon = QLabel()
-        pm = QIcon(str(theme.asset("screen-switch.ico"))).pixmap(QSize(18, 18))
-        icon.setPixmap(pm)
-        icon.setFixedSize(18, 18)
-        lay.addWidget(icon)
-        lay.addWidget(label(title, "tbTitle"))
-        lay.addStretch(1)
-
-        self.btn_settings = CaptionButton("gear")
-        self.btn_settings.setVisible(show_settings)
-        self.btn_min = CaptionButton("min")
-        self.btn_close = CaptionButton("close")
-        for btn in (self.btn_settings, self.btn_min, self.btn_close):
-            lay.addWidget(btn, 0, Qt.AlignVCenter)
-
-        self.btn_settings.clicked.connect(self.settingsClicked)
-        self.btn_min.clicked.connect(self.minimizeClicked)
-        self.btn_close.clicked.connect(self.closeClicked)
-
-    # 无边框窗口的拖动
-    def mousePressEvent(self, event):  # noqa: N802
-        if event.button() == Qt.LeftButton:
-            window = self.window()
-            self._drag_pos = event.globalPosition() - QPointF(window.frameGeometry().topLeft())
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):  # noqa: N802
-        if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
-            self.window().move((event.globalPosition() - self._drag_pos).toPoint())
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):  # noqa: N802
-        self._drag_pos = None
-        super().mouseReleaseEvent(event)
+def paint_gear(p: QPainter, c: QPointF, color: QColor, scale: float = 1.0) -> None:
+    """在 c 处画一个 8 齿齿轮；scale=1 时直径约 14px。"""
+    body = QPainterPath()
+    body.addEllipse(QPointF(0, 0), 5.3, 5.3)
+    for i in range(8):
+        tooth = QPainterPath()
+        tooth.addRoundedRect(QRectF(-1.15, -7.0, 2.3, 3.4), 0.85, 0.85)
+        spin = QTransform()
+        spin.rotate(i * 45)
+        body = body.united(spin.map(tooth))
+    hole = QPainterPath()
+    hole.addEllipse(QPointF(0, 0), 2.55, 2.55)
+    place = QTransform()
+    place.translate(c.x(), c.y())
+    place.scale(scale, scale)
+    p.setPen(Qt.NoPen)
+    p.setBrush(color)
+    p.drawPath(place.map(body.subtracted(hole)))
 
 
 # --------------------------------------------------------------------------- #
@@ -477,11 +376,11 @@ class HeroCard(QFrame):
         self.btn_text.setText(f"切换到 {other}")
 
     def set_hotkey(self, hotkey_label: str) -> None:
-        """主按钮右侧键帽芯片显示当前热键（如 'Alt+Space' → 'Alt + Space'）。"""
-        pretty = " + ".join(hotkey_label.replace(" ", "").split("+"))
-        self.kbd.setText(pretty)
+        """主按钮右侧键帽芯片显示当前热键（`Alt+Space` → `Alt + Space`；mac 上 → `⌥ Space`）。"""
+        self.kbd.setText(theme.pretty_hotkey(hotkey_label))
         self._kbd_enabled = bool(hotkey_label and hotkey_label != "未启用")
         self.kbd.setVisible(self._kbd_enabled)
+        self.kbd.setToolTip(hotkey_label)
 
     def set_busy(self, busy: bool, target_label: str = "") -> None:
         self.button.setEnabled(not busy)
@@ -507,7 +406,7 @@ class HeroCard(QFrame):
 # 列表行
 # --------------------------------------------------------------------------- #
 class Glyph(QWidget):
-    """15px 线性小图标（搜索 / 文档 / 波形），比 Unicode 字形稳定。"""
+    """15px 线性小图标（搜索 / 文档 / 波形 / 齿轮），比 Unicode 字形稳定。"""
 
     def __init__(self, kind: str, size: int = 15, color: str = theme.INK3, parent=None):
         super().__init__(parent)
@@ -533,6 +432,8 @@ class Glyph(QWidget):
             p.drawLine(QPointF(5.6, 5.6), QPointF(9.4, 5.6))
             p.drawLine(QPointF(5.6, 8.2), QPointF(9.4, 8.2))
             p.drawLine(QPointF(5.6, 10.8), QPointF(8.2, 10.8))
+        elif self.kind == "gear":
+            paint_gear(p, QPointF(w / 2, w / 2), self.color, scale=0.78)
         else:  # pulse
             path = QPainterPath()
             path.moveTo(1.6, 7.5)

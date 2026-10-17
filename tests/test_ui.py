@@ -30,19 +30,45 @@ def test_asset_resolves():
     assert theme.asset("apple-logo-dim.png").exists()
 
 
+def test_pretty_hotkey_multiword_modifier():
+    """`Right Option` / `Right Alt` 是带空格的单个片段，不能粘成 `RightOption`。
+
+    早期实现先 `replace(" ", "")` 再切分，导致 mac 上键帽显示成 `RightOption Space`。
+    """
+    from dualswitch.hotkey.base import Hotkey
+    from dualswitch.ui.chrome import current
+
+    hk = Hotkey(modifiers=("ralt",), key="space")
+    for text in (hk.describe(), hk.mac_describe()):
+        pretty = theme.pretty_hotkey(text)
+        assert "RightOption" not in pretty
+        assert "RightAlt" not in pretty
+
+    if current().PALETTE.key_glyphs:
+        assert theme.pretty_hotkey("Right Option+Space") == "⌥ Space"
+    else:
+        assert theme.pretty_hotkey("Right Alt+Space") == "Right Alt + Space"
+
+
 def test_main_window_states(app):
+    """状态卡随当前主机翻转；两端共用同一套断言（主机身份按平台算）。"""
     cfg = Config()
     win = MainWindow(cfg, "Alt+Space", "v1.0.0")
 
-    assert win.hero.title.text() == "Windows"
-    assert "输入源 17" in win.hero.sub.text()
-    assert win.hero.btn_text.text() == "切换到 Mac"
+    here = cfg.effective_host()
+    other = cfg.other_host()
+    here_title = "Windows" if here == "windows" else "Mac"
+    other_title = "Windows" if other == "windows" else "Mac"
 
-    win.set_state("mac")
-    assert win.hero.title.text() == "Mac"
-    assert "输入源 18" in win.hero.sub.text()
-    assert win.card_mac._active is True
-    assert win.card_win._active is False
+    assert win.hero.title.text() == here_title
+    assert f"输入源 {cfg.sources[here]}" in win.hero.sub.text()
+    assert win.hero.btn_text.text() == f"切换到 {other_title}"
+
+    win.set_state(other)
+    assert win.hero.title.text() == other_title
+    assert f"输入源 {cfg.sources[other]}" in win.hero.sub.text()
+    assert win.card_mac._active is (other == "mac")
+    assert win.card_win._active is (other == "windows")
 
     win.set_busy(True)
     assert win.hero.button.isEnabled() is False
@@ -58,16 +84,31 @@ def test_main_window_states(app):
 
 
 def test_main_window_has_settings_entry(app):
-    """主页面标题栏的设置按钮应能触发 openSettingsRequested。"""
+    """两端的设置入口都要能触发 openSettingsRequested。
+
+    Windows：自绘标题栏的齿轮；macOS：内容区末尾的「设置…」行（标题栏是系统的）。
+    """
+    from dualswitch.ui.chrome import current as chrome
+
+    C = chrome()
     win = MainWindow(Config(), "Alt+Space", "v1.0.0")
     fired: list[int] = []
     win.openSettingsRequested.connect(lambda: fired.append(1))
-    win.titlebar.btn_settings.click()
+
+    if C.INLINE_SETTINGS_ROW:
+        assert win.row_settings is not None, "mac 主窗口应有「设置…」行"
+        win.row_settings.click()
+    else:
+        assert win.titlebar is not None, "Windows 主窗口应有自绘标题栏"
+        win.titlebar.btn_settings.click()
     assert fired == [1]
 
-    # 设置窗口自身不再显示设置齿轮
+    # 设置窗口自己不再提供设置入口（避免点进去还是设置）
     settings = SettingsWindow(Config(), Path("config.json"), "Alt+Space", "v1.0.0")
-    assert not settings.titlebar.btn_settings.isVisibleTo(settings)
+    if C.NATIVE_CHROME:
+        assert settings.titlebar is None
+    else:
+        assert not settings.titlebar.btn_settings.isVisibleTo(settings)
 
 
 def test_display_page_probe_button(app, tmp_path: Path):
@@ -172,19 +213,33 @@ def test_save_keeps_live_config_untouched(app, tmp_path: Path):
     assert cfg.sources == {"windows": 17, "mac": 18}
 
 
-def test_tray_double_click_switches_single_click_does_not(app):
-    """托盘改成双击切换：单击不响应，避免误触。"""
+def test_tray_single_click_does_not_switch(app):
+    """Windows 托盘：单击不响应，双击才切（防误触）。"""
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QSystemTrayIcon
 
-    from dualswitch.ui.runner import UiRunner
+    from dualswitch.ui.chrome.win import QtStatusItem
 
     calls: list[int] = []
+    item = QtStatusItem(QIcon(), lambda: calls.append(1))
+    try:
+        item._activated(QSystemTrayIcon.Trigger)
+        assert calls == []                   # 单击：不切
+        item._activated(QSystemTrayIcon.DoubleClick)
+        assert calls == [1]                  # 双击：切
+    finally:
+        item.hide()
 
-    class Stub:
-        def do_switch(self):
-            calls.append(1)
 
-    UiRunner._on_tray_activated(Stub(), QSystemTrayIcon.Trigger)
-    assert calls == []                       # 单击：不切
-    UiRunner._on_tray_activated(Stub(), QSystemTrayIcon.DoubleClick)
-    assert calls == [1]                      # 双击：切
+def test_menu_entries_track_state(app):
+    """菜单栏/托盘菜单的「当前画面」「切换目标」要跟着状态翻。"""
+    from dualswitch.ui.statusitem import build_menu_entries
+
+    entries = build_menu_entries(Config(), "windows", "alt+space", {})
+    titles = [e.title for e in entries]
+    assert any("当前画面：Windows" in x for x in titles)
+    assert any("切换到 Mac" in x for x in titles)
+
+    flipped = [e.title for e in build_menu_entries(Config(), "mac", "alt+space", {})]
+    assert any("当前画面：Mac" in x for x in flipped)
+    assert any("切换到 Windows" in x for x in flipped)

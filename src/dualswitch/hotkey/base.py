@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import Callable, Protocol, runtime_checkable
 
@@ -105,6 +106,13 @@ class Hotkey:
         return "alt" in self.modifiers or "ralt" in self.modifiers
 
     def describe(self) -> str:
+        """给人看的热键文案。
+
+        macOS 的键盘上没有 Alt 键，界面上出现「Alt」会让人找不到该按哪个键，
+        所以 mac 上直接用系统叫法（Option / Command），Windows 仍用 Alt / Win。
+        """
+        if sys.platform == "darwin":
+            return self.mac_describe()
         names = {"alt": "Alt", "ralt": "Right Alt", "ctrl": "Ctrl", "shift": "Shift", "win": "Win"}
         parts = [names.get(m, m.title()) for m in self.modifiers]
         parts.append(self.key.upper() if len(self.key) == 1 else self.key.title())

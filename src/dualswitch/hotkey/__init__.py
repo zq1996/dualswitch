@@ -22,11 +22,13 @@ def resolve_backend_name(cfg) -> str:  # noqa: ANN001
     """把 auto 解析成具体后端名。"""
     hk = parse_hotkey(cfg.hotkey)
     name = cfg.hotkey_backend
+    # macOS 只有 CGEventTap 一种实现：配置里残留 register/hook（比如从 Windows
+    # 拷过来的 config.json）不应该让程序启动就失败，统一归一到 quartz。
+    if sys.platform == "darwin":
+        return "quartz"
     if name == "auto":
         if sys.platform == "win32":
             return "hook" if hk.strict_right_alt else "register"
-        if sys.platform == "darwin":
-            return "quartz"
         return "manual"
     if name == "register" and sys.platform != "win32":
         raise HotkeyError("register 后端只适用于 Windows")

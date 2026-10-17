@@ -1,12 +1,20 @@
-"""界面主题：设计 token 与 QSS。
+"""界面主题：组装 token 与 QSS。
 
-颜色 / 尺寸与 `design/windows/index.html` 一一对应，改这里就等于改设计稿。
+配色 / 字体 / 字号来自当前平台的外观模块（`chrome/win.py` 或 `chrome/mac.py`），
+这里只负责把它们拼成 QSS 与常量，**不写任何平台分支**。
+
+改 Windows 的蓝、mac 的系统蓝 → 改各自的 chrome 模块，不要改这个文件。
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+
+from .chrome import current as _chrome
+
+_C = _chrome()
+_P = _C.PALETTE
 
 # --------------------------------------------------------------------------- #
 # token
@@ -17,9 +25,16 @@ INK3 = "#818B9C"
 LINE = "#E5E9F1"
 LINE_SOFT = "#EEF1F6"
 
-ACCENT = "#2F6BFF"
-ACCENT_DEEP = "#1E4FD8"
-ACCENT_SOFT = "#EDF3FF"
+ACCENT = _P.accent
+ACCENT_DEEP = _P.accent_deep
+ACCENT_SOFT = _P.accent_soft
+
+PRIMARY_TOP = _P.primary_top
+PRIMARY_BOTTOM = _P.primary_bottom
+PRIMARY_TOP_HOVER = _P.primary_top_hover
+PRIMARY_BOTTOM_HOVER = _P.primary_bottom_hover
+PRIMARY_TOP_DOWN = _P.primary_top_down
+PRIMARY_BOTTOM_DOWN = _P.primary_bottom_down
 
 GREEN = "#0E9F5B"          # 亮灯状态文字
 LED_CORE = "#34C759"
@@ -35,7 +50,37 @@ RADIUS_WIN = 14
 RADIUS_CARD = 13
 RADIUS_CTRL = 10
 
-FONT_FAMILIES = ["Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC"]
+# 平台外观（窗口外框 / 标题栏 / 字号 / 字体）
+NATIVE_CHROME = _C.NATIVE_CHROME
+TITLEBAR_H = 0 if NATIVE_CHROME else 44
+BODY_TOP = _C.BODY_TOP
+FONT_FAMILIES = list(_P.font_families)
+BODY_FS = _P.body_font_size
+APP_FONT_POINT = _P.app_font_point
+CLICK_HINT = _C.CLICK_HINT
+
+
+def pretty_hotkey(describe: str) -> str:
+    """把 `Hotkey.describe()` 的文案变成界面上的写法。
+
+    Windows  `Alt+Space`         → `Alt + Space`
+    macOS    `Right Option+Space` → `⌥ Space`（符号表来自 chrome.PALETTE.key_glyphs，
+                                     完整文案留给 tooltip / 状态栏）
+    """
+    if not describe or describe == "未启用":
+        return describe
+    # 只按 "+" 切分，不要先吃掉空格：`Right Option` / `Right Alt` 这类修饰键本身就带空格
+    parts = [p.strip() for p in describe.split("+") if p.strip()]
+    if not parts:
+        return describe
+    glyphs = _P.key_glyphs
+    if glyphs:
+        out = []
+        for part in parts:
+            glyph = glyphs.get(part) or glyphs.get(part.replace(" ", ""))
+            out.append(glyph or part)
+        return " ".join(out)
+    return " + ".join(parts)
 
 
 def asset(name: str) -> Path:
@@ -45,12 +90,23 @@ def asset(name: str) -> Path:
     # 开发态：从包目录向上找 design/icon（src/dualswitch/ui → 仓库根）
     for parent in here.parents[:5]:
         candidates.append(parent / "design" / "icon" / name)
+        candidates.append(parent / "design" / "icon" / "png" / name)
     candidates.append(Path(getattr(sys, "_MEIPASS", ".")) / "assets" / name)
     candidates.append(Path(getattr(sys, "_MEIPASS", ".")) / "dualswitch" / "ui" / "assets" / name)
     for cand in candidates:
         if cand.exists():
             return cand
     raise FileNotFoundError(f"找不到资源 {name}")
+
+
+def app_icon() -> Path:
+    """应用图标：候选名由平台提供（macOS 优先 .icns，Windows 用 .ico）。"""
+    for name in _C.APP_ICON_NAMES:
+        try:
+            return asset(name)
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError("找不到应用图标 screen-switch.icns / .ico")
 
 
 # --------------------------------------------------------------------------- #
@@ -60,16 +116,14 @@ def qss() -> str:
     return f"""
     QWidget {{
         color: {INK};
-        font-size: 12.5px;
+        font-size: {BODY_FS}px;
     }}
     #root {{
-        background: #FFFFFF;
-        border: 1px solid rgba(16,24,40,0.07);
-        border-radius: {RADIUS_WIN}px;
+        {_C.ROOT_QSS}
     }}
     #body {{ background: transparent; }}
 
-    /* ---------- 标题栏（比内容区浅一档，形成层次） ---------- */
+    /* ---------- 标题栏（仅 Windows 自绘；macOS 用系统标题栏） ---------- */
     #titlebar {{
         background: #F5F7FB;
         border: 0;
@@ -77,7 +131,7 @@ def qss() -> str:
         border-top-left-radius: {RADIUS_WIN - 1}px;
         border-top-right-radius: {RADIUS_WIN - 1}px;
     }}
-    #tbTitle {{ color: {INK2}; font-size: 12.5px; font-weight: 600; }}
+    #tbTitle {{ color: {INK2}; font-size: {BODY_FS}px; font-weight: 600; }}
 
     /* ---------- 状态卡 ---------- */
     #hero {{
@@ -88,7 +142,7 @@ def qss() -> str:
     }}
     #eyebrow {{ color: {INK3}; font-size: 11px; font-weight: 600; }}
     #heroTitle {{ color: {INK}; font-size: 31px; font-weight: 600; }}
-    #heroSub {{ color: {INK2}; font-size: 12.5px; }}
+    #heroSub {{ color: {INK2}; font-size: {BODY_FS}px; }}
     #heroFoot {{ color: {INK2}; font-size: 11.5px; }}
     #heroFootOk {{ color: {GREEN}; font-size: 11.5px; }}
     #heroFootErr {{ color: {DANGER}; font-size: 11.5px; }}
@@ -97,15 +151,15 @@ def qss() -> str:
     }}
 
     QPushButton#primary {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3F7BFF, stop:1 #2456E0);
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {PRIMARY_TOP}, stop:1 {PRIMARY_BOTTOM});
         color: #FFFFFF; border: 0; border-radius: {RADIUS_CTRL}px;
         font-size: 14.5px; font-weight: 600; text-align: left; padding-left: 14px;
     }}
     QPushButton#primary:hover {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4A83FF, stop:1 #2A5CE6);
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {PRIMARY_TOP_HOVER}, stop:1 {PRIMARY_BOTTOM_HOVER});
     }}
     QPushButton#primary:pressed {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2F6BFF, stop:1 #1B47C4);
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {PRIMARY_TOP_DOWN}, stop:1 {PRIMARY_BOTTOM_DOWN});
     }}
     QPushButton#primary:disabled {{
         background: #B7C6E8; color: #FFFFFF;
@@ -146,11 +200,11 @@ def qss() -> str:
     #listWrap {{ border: 1px solid {LINE}; border-radius: 11px; background: #FFFFFF; }}
     QPushButton#row {{
         background: #FFFFFF; border: 0; border-bottom: 1px solid {LINE_SOFT};
-        color: {INK}; font-size: 12.5px; text-align: left; padding-left: 0;
+        color: {INK}; font-size: {BODY_FS}px; text-align: left; padding-left: 0;
     }}
     QPushButton#row:hover {{ background: #F7F9FD; }}
     QPushButton#rowLast {{
-        background: #FFFFFF; border: 0; color: {INK}; font-size: 12.5px; text-align: left;
+        background: #FFFFFF; border: 0; color: {INK}; font-size: {BODY_FS}px; text-align: left;
     }}
     QPushButton#rowLast:hover {{ background: #F7F9FD; }}
     #rowVal {{ color: {INK3}; font-size: 11.5px; }}
@@ -159,8 +213,7 @@ def qss() -> str:
     /* ---------- 状态栏 ---------- */
     #statusbar {{
         background: #F7F9FC; border-top: 1px solid {LINE_SOFT};
-        border-bottom-left-radius: {RADIUS_WIN - 1}px;
-        border-bottom-right-radius: {RADIUS_WIN - 1}px;
+        {_C.STATUSBAR_QSS}
     }}
     #statusText {{ color: {INK3}; font-size: 11.5px; }}
 
@@ -168,7 +221,7 @@ def qss() -> str:
     #tabs {{ background: #F1F4FA; border-radius: 10px; }}
     QPushButton#tab {{
         background: transparent; border: 0; border-radius: 8px;
-        color: {INK2}; font-size: 12.5px; font-weight: 500;
+        color: {INK2}; font-size: {BODY_FS}px; font-weight: 500;
         padding: 0 6px;
     }}
     QPushButton#tab:hover:!checked {{
@@ -179,20 +232,20 @@ def qss() -> str:
     }}
     #groupTitle {{ color: {INK3}; font-size: 10.5px; font-weight: 700; }}
     #pageHint {{ color: {INK3}; font-size: 11px; padding: 0 2px 2px 2px; }}
-    #gTitle {{ color: {INK}; font-size: 12.5px; font-weight: 600; }}
+    #gTitle {{ color: {INK}; font-size: {BODY_FS}px; font-weight: 600; }}
     #gDesc {{ color: {INK3}; font-size: 11px; }}
     #group {{ background: {LINE_SOFT}; border: 1px solid {LINE}; border-radius: 11px; }}
     #gRow {{ background: #FFFFFF; border-bottom: 1px solid {LINE_SOFT}; }}
     #gRowLast {{ background: #FFFFFF; }}
     QPushButton#ghost {{
         background: #FFFFFF; border: 1px solid #D5DCE8; border-radius: 8px;
-        color: {INK2}; font-size: 12.5px; padding: 0 14px; min-width: 52px;
+        color: {INK2}; font-size: {BODY_FS}px; padding: 0 14px; min-width: 52px;
     }}
     QPushButton#ghost:hover {{ background: #F7F9FD; border-color: #C3CCDB; }}
     QPushButton#ghost:pressed {{ background: #EEF2F8; }}
     QPushButton#solid {{
         background: {ACCENT}; border: 0; border-radius: 8px;
-        color: #FFFFFF; font-size: 12.5px; font-weight: 600;
+        color: #FFFFFF; font-size: {BODY_FS}px; font-weight: 600;
         padding: 0 22px; min-width: 44px;
     }}
     QPushButton#solid:hover {{ background: {ACCENT_DEEP}; }}
@@ -221,12 +274,12 @@ def qss() -> str:
     /* 下拉框本体由 widgets.Combo 自绘（QSS 画不出三角箭头），这里只管弹层 */
     QComboBox QAbstractItemView {{
         background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
-        color: {INK}; font-size: 12.5px; padding: 4px; outline: 0;
+        color: {INK}; font-size: {BODY_FS}px; padding: 4px; outline: 0;
         selection-background-color: {ACCENT_SOFT}; selection-color: {INK};
     }}
     QLineEdit#num {{
         background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
-        color: {INK}; font-size: 12.5px; font-weight: 600; padding: 4px 6px;
+        color: {INK}; font-size: {BODY_FS}px; font-weight: 600; padding: 4px 6px;
     }}
     QLineEdit#num:focus {{ border-color: {ACCENT}; }}
     QLineEdit#text {{
@@ -235,13 +288,13 @@ def qss() -> str:
     }}
     QLineEdit#text:focus {{ border-color: {ACCENT}; }}
 
-    /* ---------- 托盘菜单 ---------- */
+    /* ---------- 托盘 / 菜单栏菜单 ---------- */
     QMenu {{
         background: #FFFFFF; border: 1px solid rgba(16,24,40,0.10);
         border-radius: 8px; padding: 5px;
     }}
     QMenu::item {{
-        padding: 6px 26px 6px 12px; border-radius: 6px; font-size: 12.5px; color: {INK};
+        padding: 6px 26px 6px 12px; border-radius: 6px; font-size: {BODY_FS}px; color: {INK};
     }}
     QMenu::item:selected {{ background: #F2F5FA; }}
     QMenu::item:disabled {{ color: #A7B0BE; }}
@@ -256,4 +309,13 @@ def qss() -> str:
         background: #FDF1F1; border: 1px solid #F4D6D6; border-radius: 9px;
         color: #8C2222; font-size: 11.5px;
     }}
+    /* 横幅里的动作（去授权 / 重试）：白底细边，压在浅色横幅上不抢眼但能点 */
+    QPushButton#bannerAction {{
+        background: rgba(255,255,255,0.92); border: 1px solid rgba(16,24,40,0.16);
+        border-radius: 7px; color: {INK}; font-size: 11.5px; font-weight: 600;
+        padding: 3px 10px;
+    }}
+    QPushButton#bannerAction:hover {{ background: #FFFFFF; border-color: {ACCENT}; color: {ACCENT}; }}
+    QPushButton#bannerAction:pressed {{ background: {ACCENT_SOFT}; }}
+    {_C.QSS_EXTRA}
     """

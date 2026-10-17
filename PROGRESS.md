@@ -1,11 +1,14 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-17 20:30
-> 一句话状态：**双向切屏已真机闭环，Windows 侧热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过；
-> 界面与快捷键相关的若干 bug 已修完（73 用例全绿）。`sources = {windows: 17, mac: 18}`。**
+> 最后更新：2026-10-17 22:10
+> 一句话状态：**Windows 侧切屏 / 热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过，
+> 打包版诊断能力已增强（崩溃堆栈 / 线程 dump / `--console`）；macOS 侧界面（菜单栏 + 原生窗口 + 四页设置）
+> 已实现并跑在真机上，切换按钮实测可用，热键缺「辅助功能」授权的问题已补「去授权」链路 + .app 打包，
+> 默认键改为 ⌥ Space。`sources = {windows: 17, mac: 18}`。**
 >
-> 👉 **下一步：macOS 端安装 dualswitch 本体并授权辅助功能（T3）。** Windows 端已可交付使用：
-> 双击 `dist\dualswitch\dualswitch.exe` 即进主界面（整个文件夹一起用），右键托盘可退出。
+> 👉 **下一步：macOS 真机切屏验收（T8）** —— 在 Mac 上按一次 `⌥ Space`，看画面是否切到 Windows。
+> Windows 端已可交付使用：双击 `dist\dualswitch\dualswitch.exe` 即进主界面（整个文件夹一起用），右键托盘可退出。
+> 界面/分层改动请看 `docs/UI-DESIGN-MAC.md` 与 `docs/PLATFORM-SPLIT.md`（后者是给另一端 AI 读的契约）。
 
 ---
 
@@ -14,19 +17,41 @@
 新会话接手时按顺序做三件事，不要重新读需求文档再重新规划：
 
 ```bash
+# ── Windows ──────────────────────────────────────────────
 cd D:/work/workbuddy/dualswitch
-# 1. 确认代码健康（应输出 60 passed）
 "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" -m pytest -q
-
-# 2. 确认硬件仍然可达（只读，不会切屏）
 PYTHONPATH=src "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" -m dualswitch doctor
 
-# 3. 从第 5 节「未完成」继续
+# ── macOS ────────────────────────────────────────────────
+cd ~/work/workbuddy/dualswitch
+QT_QPA_PLATFORM=offscreen ~/.workbuddy/binaries/python/envs/default/bin/python \
+    -m pytest tests -q -s -p no:cacheprovider          # 83 passed
+QT_QPA_PLATFORM=offscreen ~/.workbuddy/binaries/python/envs/default/bin/python \
+    tools/check_mac_ui.py                               # 34 项核对
+~/.workbuddy/binaries/python/envs/default/bin/python -m dualswitch doctor
 ```
 
-环境：Python 3.13.14（`C:\Users\Administrator\.workbuddy-ai\binaries\python\envs\default`），
-已装 `pystray 0.19.5` / `pillow 13.0.0` / `pytest 9.1.1`，并且已 `pip install -e .`，
-所以 `dualswitch` 命令可直接用（不需要 PYTHONPATH）。
+> mac 上必须带 `-s`：受限环境里 pytest 的输出捕获要写临时文件，`/tmp` 不可写时整套用例直接 ERROR
+> （`tests/conftest.py` 已兜住 `tmp_path`，但捕获发生在 conftest 之前）。这是环境问题，不是代码问题。
+
+环境：Python 3.13.14（Windows：`C:\Users\Administrator\.workbuddy-ai\binaries\python\envs\default`；
+macOS：`~/.workbuddy/binaries/python/envs/default`），
+已装 `pyside6-essentials 6.12` / `pyobjc 12.2` / `pystray 0.19.5` / `pytest 9.1.1`，并且已 `pip install -e .`。
+
+**注意 `dualswitch` 命令的可见性**：`pip install -e .` 把入口脚本装在 **venv 的 bin 里**
+（`~/.workbuddy/binaries/python/envs/default/bin/dualswitch`），而这个目录**不在系统 PATH 上**，
+所以裸敲 `dualswitch ui` 会 `command not found`。三种写法任选：
+
+```bash
+dualswitch ui                                    # 已在 ~/.local/bin 做了软链（2026-10-17 加）
+~/.workbuddy/binaries/python/envs/default/bin/dualswitch ui    # 绝对路径，最稳
+source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui   # 激活 venv
+```
+
+> 软链：`ln -s ~/.workbuddy/binaries/python/envs/default/bin/dualswitch ~/.local/bin/dualswitch`
+> （`~/.local/bin` 已在 PATH 里；删掉即恢复原状）
+> 装依赖时若走代理只有 ~10KB/s，PySide6 会装 20 分钟；用
+> `env -u HTTP_PROXY -u HTTPS_PROXY pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -e ".[gui,tray,macos]"`。
 
 ---
 
@@ -46,6 +71,12 @@ PYTHONPATH=src "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/defaul
 | 10 | macOS 端安装 dualswitch 本体 | ⏳ 待做 | 需 `pip install -e ".[tray,macos]"` + 辅助功能授权 |
 | 11 | Windows 界面设计稿 + 应用图标 | ✅ 完成 | `design/windows/index.html`、`design/icon/`、`docs/UI-DESIGN.md` |
 | 12 | Windows 图形界面实现（PySide6） | ✅ 完成并跑通 | `src/dualswitch/ui/`，`dualswitch ui`；64 个用例全绿 |
+| 13 | macOS 界面设计 + 实现（菜单栏 + 原生窗口） | ✅ 完成 | `docs/UI-DESIGN-MAC.md`、`ui/chrome/mac.py`；`⌘,` / `⌥ Space` / 菜单栏右键菜单 |
+| 14 | 平台分层（Windows / mac 不撞同一文件） | ✅ 完成 | `ui/chrome/{base,win,mac}.py` + `docs/PLATFORM-SPLIT.md` + `tests/test_chrome_contract.py` |
+| 15 | macOS DDC 后端修缺陷（多屏序号 / -118 读失败） | ✅ 完成 | `ddc/macos.py`：自动按名字选屏、内置屏过滤、读失败给人话提示 |
+| 16 | macOS 打包（.app / .icns / 菜单栏模板图） | ✅ 脚本与资源就绪 | `packaging/macos/build.sh`、`design/icon/build_icns.py`、`build_menubar_icon.py`；未实跑 PyInstaller |
+| 17 | macOS 界面离屏验收（契约 / 窗口 / 设置 / DDC 解析） | ✅ 34 项全通过 | `tools/check_mac_ui.py`；`pytest -q -s` 83 passed |
+| 18 | macOS 热键可用性（⌥ 文案 / 左 Option 默认 / 辅助功能授权 / .app） | ✅ 代码与打包完成 | `hotkey/macos.py` 权限链路、`window.show_banner(..., "去授权")`、`dist/屏幕切换.app` |
 
 ---
 
@@ -63,6 +94,20 @@ PYTHONPATH=src "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/defaul
 | DDC 往返耗时 | `get_input` 中位 63.0ms（含取句柄） |
 
 结论：`SetVCPFeature` 与 `GetVCPFeature` 同一量级，**「触发 → Set 发出」实测路径约 65ms，满足 ≤200ms**。
+
+### 2.1 macOS 侧环境事实（2026-10-17 实测）
+
+| 项 | 值 |
+|---|---|
+| DDC 工具 | `m1ddc`（brew 装），`m1ddc display list` 输出 `[1] (null)`（内置屏）+ `[2] AOC Q2790R3` |
+| 序号基准 | **1 基**，且内置屏也在列表里 → 必须按名字挑屏，不能写死序号 |
+| 内置屏名字 | `(null)` —— 直接过滤，避免把指令发给笔记本屏 |
+| 读通道 | USB-C 输入下 `m1ddc get input` 返回 **-118**（IOKit 错误码）→ 读值不可用，写通道正常 |
+| 热键 | Quartz `CGEventTap`，右 Option `keyCode 61` + Space `49`，需「辅助功能」授权 |
+| 菜单栏 | 必须有 `NSStatusItem`（PySide6 `QSystemTrayIcon` 在 mac 上不显示菜单栏图标） |
+| 权限 | **CGEventTap 必须有「辅助功能」授权**，否则 `CGEventTapCreate` 直接返回空 |
+| 授权对象 | TCC 按「负责进程」归属：终端里跑 = 给**终端**授权；双击 .app = 给**屏幕切换**授权 |
+| 列表里为何找不到本应用 | TCC 只收录**主动请求过**的二进制 → 必须先 `AXIsProcessTrustedWithOptions(prompt=True)` 弹一次框 |
 
 ---
 
@@ -115,15 +160,25 @@ PYTHONPATH=src "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/defaul
 | 16:28 | 热键真实触发 | 常驻进程 + 合成 Alt+Space → VCP 变 18，画面切到 Mac |
 | 17:35 | `dualswitch ui --dry-run` 点击切换 | 卡片两态翻转、`✓ [演练] 未真正发送指令`，界面状态与 controller 同步 |
 | 17:41 | `pytest -q` | 64 passed（含 4 个离屏 UI 用例） |
+| 21:40 | macOS `pytest -q -s` | 82 passed（mac 侧新增契约测试 + 平台默认值 + 键帽用例） |
+| 21:55 | `tools/check_mac_ui.py` | 27/29 → 修 `pretty_hotkey` 后 **29 项全通过** |
+| 22:00 | `pretty_hotkey("Right Option+Space")` | `⌥ Space`（原为 `RightOption Space`：先 `replace(" ","")` 把双词修饰键粘成一个词，符号表查不到） |
 
 复现命令：
 
 ```bash
+# Windows
 PYTHONPATH=src python -m pytest -q
 PYTHONPATH=src python -m dualswitch probe
 python tools/bench_readonly.py
 python tools/e2e_hotkey.py
 python tools/e2e_hotkey.py --strict
+
+# macOS（系统 python 没装 PySide6，必须用 venv 里的解释器）
+PY=~/.workbuddy/binaries/python/envs/default/bin/python
+QT_QPA_PLATFORM=offscreen $PY -m pytest tests -q -s -p no:cacheprovider
+QT_QPA_PLATFORM=offscreen $PY tools/check_mac_ui.py
+$PY -m dualswitch probe
 ```
 
 ---
@@ -180,7 +235,30 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 打包踩坑：`--specpath build` 会把 `--add-data` / `--version-file` / `--icon` 的相对路径
 基准改到 `build\`，必须用 `$root\` 绝对路径；`screen-switch.ico` 需在
 `src/dualswitch/ui/assets/` 里放一份，否则打包后 `theme.asset()` 找不到。
-macOS 侧 `packaging/macos/build.sh` 仍未实测。
+macOS 侧 `packaging/macos/build.sh` 已可用（含 `--specpath` 路径修复 + ad-hoc `codesign`），待真机出包验收。
+
+### T8（待你操作）macOS 界面真机验收清单
+
+离屏能查的都查过了（`tools/check_mac_ui.py` 34 项），剩下这些必须在真机点一遍：
+
+0. **先解决「辅助功能」授权**（这是热键能不能用的唯一开关）：
+   · 终端里跑 → 打开「系统设置 → 隐私与安全性 → 辅助功能」，把**「终端」**打开（不是找「屏幕切换」）
+   · 双击 .app 跑 → 列表里会出现**「屏幕切换」**
+   · 找不到入口就点主窗口横幅上的 **「去授权」**：它会弹系统框 + 直接打开该面板；
+     勾选后切回本窗口，程序会自动重试注册（不用重启）
+1. `cd ~/work/workbuddy/dualswitch && dualswitch ui`
+   （等价写法：`~/.workbuddy/binaries/python/envs/default/bin/python -m dualswitch ui`；
+   裸 `python` 是系统解释器，没装 PySide6）
+   → 菜单栏出现双屏图标（系统深浅色下都应清晰，模板图自动反色）
+2. **单击**图标 → 画面应切到 Windows（单击即切，不是双击；这是 mac 端与 Windows 端唯一的交互差异）
+3. **右键**图标 → 出现菜单：`当前画面：Mac` / `切换到 Windows（HDMI）` / `强制切到 Mac` / `设置… ⌘,` / `退出 ⌘Q`
+4. 主窗口关闭（红点）→ 窗口消失但不退出进程，图标仍在；再单击图标 → 窗口重新展开
+5. `⌘ ,` 打开设置 → 四个页签（热键 / 显示器 / 行为 / 高级）都应正常渲染，高级页后端下拉**不应出现 dxva2**
+6. 按 `⌥ Space`（**左** Option，默认值）→ 应切屏。
+   设置页热键那一行应显示 `⌥ Space`（不是 `Alt + Space`）；想看右 Option 才打开「只认右 Option」
+7. 设置 → 热键 → 录制，按一个新组合 → 按钮文案应变成 `⌃⌥ X` 这类符号写法
+
+---
 
 ### T5（可选）24h 稳定性
 需求 §5 要求「7×24 无内存泄漏，以实际观察为准」。未做，建议挂一晚后看任务管理器。
@@ -206,31 +284,53 @@ dualswitch/
 ├── config.example.json          全字段示例
 ├── pyproject.toml
 ├── src/dualswitch/
-│   ├── cli.py                   命令分发；run 的启动流程在这里
+│   ├── cli.py                   命令分发；run / ui 的启动流程在这里
 │   ├── app.py                   SwitchController（切换编排、回读、去抖）
-│   ├── config.py                Config / from_dict / validate / load / save
+│   ├── config.py                Config / from_dict / validate / load / save / platform_defaults
 │   ├── tray.py                  TrayApp（pystray 菜单、通知）
 │   ├── logging_setup.py         RotatingFileHandler
 │   ├── ddc/base.py              DisplayBackend 协议、MonitorInfo、DDCError
 │   ├── ddc/windows.py           dxva2 直调（盲发 Set）
-│   ├── ddc/macos.py             m1ddc 子进程封装
+│   ├── ddc/macos.py             m1ddc 子进程封装（按名字选屏、内置屏过滤）
 │   ├── ddc/command.py           外部命令模板后端
 │   ├── ddc/mock.py              测试/演练
-│   └── hotkey/
-│       ├── base.py              热键解析、VK/mac keycode 映射
-│       ├── windows.py           RegisterHotKey + 低级钩子
-│       ├── macos.py             Quartz CGEventTap
-│       ├── mock.py              ManualHotkeyBackend
-│       └── ...
-├── tests/                       73 用例，无需硬件
+│   ├── hotkey/
+│   │   ├── base.py              热键解析、VK/mac keycode 映射
+│   │   ├── windows.py           RegisterHotKey + 低级钩子
+│   │   ├── macos.py             Quartz CGEventTap
+│   │   └── mock.py              ManualHotkeyBackend
+│   └── ui/
+│       ├── chrome/              ★ 平台差异唯一落点（改外观只碰这里）
+│       │   ├── __init__.py      惰性按平台选 win / mac
+│       │   ├── base.py          Palette 数据类 + 契约说明
+│       │   ├── win.py           蓝主色 / 自绘标题栏 / 双击切 / .ico / deg
+│       │   └── mac.py           系统蓝 / 系统标题栏 / 单击即切 / .icns / ⌘⌥⌃⇧
+│       ├── theme.py             组装 token 与 QSS（无平台分支）
+│       ├── widgets.py           指示灯 / 设备卡 / 状态卡 / 自绘图标
+│       ├── statusitem.py        菜单条目纯函数（两端共用）
+│       ├── window.py            主窗口
+│       ├── settings.py          四页签设置（含热键录制）
+│       ├── runner.py            窗口 + 状态项 + 热键 + 控制器接线
+│       └── assets/              menubar.png（模板图）、OS 图标
+├── tests/                       82 用例，无需硬件（含 chrome 契约测试）
 ├── tools/
 │   ├── bench_readonly.py        只读耗时测量
 │   ├── e2e_hotkey.py            端到端热键（dry-run，不切屏）
 │   ├── scan_input_windows.py    VCP 0x60 候选值扫描（Windows，带自动切回）
 │   ├── diag_macos.sh            macOS DDC 诊断（架构/外接屏/VCP 读值/亮度写入）
+│   ├── check_mac_ui.py          mac 界面离屏核对（34 项，无显示器也能跑）
 │   └── verify_m1ddc.sh          macOS 强制验证脚本
+├── design/
+│   ├── icon/                    图标母版 + 10 档 PNG + .ico + .icns
+│   │   ├── build_icns.py        手写 ICNS 容器（不依赖 sips/iconutil）
+│   │   └── build_menubar_icon.py QPainter 画 36×36 纯黑模板图
+│   └── windows/index.html       Windows 界面设计稿
 ├── packaging/                   Windows/macOS 打包 + 自启（Windows 已实测出 exe）
-└── docs/                        RESEARCH / VERIFY-M1DDC / TROUBLESHOOTING
+└── docs/
+    ├── UI-DESIGN.md             Windows 界面规格
+    ├── UI-DESIGN-MAC.md         macOS 界面规格（菜单栏为主）
+    ├── PLATFORM-SPLIT.md        ★ 平台分层契约（另一端 AI 先读这个）
+    └── RESEARCH / VERIFY-M1DDC / TROUBLESHOOTING
 ```
 
 ---
@@ -245,6 +345,8 @@ dualswitch/
 | Python 而非 Tauri/Go | 本机无 Rust/Go 工具链；核心零依赖；改配置不用重打包 | 应用层接口已抽象，可平移 |
 | `monitor_match` 默认 `"AOC"` | 物理描述是 `Generic PnP Monitor`，只能靠 device_id 匹配 | 换显示器改这里 |
 | 配置未知字段直接报错 | 防拼写错误静默失效 | 不要放宽 |
+| 平台外观差异只放 `ui/chrome/` | 两端并行改 UI 会撞同一批文件 | 新差异往 `chrome` 加字段，**共享文件禁写 `sys.platform`**；`tests/test_chrome_contract.py` 会拦 |
+| mac 端单击图标即切、Windows 端双击 | mac 菜单栏图标单击是系统惯例，双击反而迟钝 | 由 `chrome.CLICK_HINT` + 各自 `build_status_item` 决定 |
 
 ---
 
@@ -253,12 +355,55 @@ dualswitch/
 - 2026-10-17 22:10 **打包版诊断能力增强 + 清理调试产物**。
   `packaging/entrypoint.py`：崩溃时同时把完整堆栈打到 stderr、写文件按「默认日志 →
   exe 同目录 → C:\」三级候选依次尝试，弹窗内容带堆栈；
-  新增 `DUALSWITCH_FAULTDUMP=<文件>` 环境变量，N 秒未退出即 dump 所有线程堆栈
-  （本次排查「(onnodir 打包版无窗口/无托盘图标」就是靠它定位到事件循环正常、窗口已建）。
+  新增 `DUALSWITCH_FAULTDUMP=<文件>` 环境变量，N 秒未退出即 dump 所有线程堆栈。
   `dualswitch ui` 新增 `--console`（把日志同时打到控制台，打包版排障用）。
   清理：删除 `dist-dbg*/`、`build-dbg*/`、`build/`、根目录临时配置/日志共约 1300 个调试文件。
   说明：`dist/`（打包成品 138MB）保留；本机环境会拦截部分可执行文件写入用户目录，
   源码方式（`start-ui.bat`）不受影响，继续以其为日常入口。
+- 2026-10-17 22:05 **修复键帽符号：`⌥ Space` 不再显示成 `RightOption Space`**。
+  `theme.pretty_hotkey()` 原来先 `describe.replace(" ", "")` 再按 `+` 切分，把 `Right Option` / `Right Alt`
+  这类**本身就带空格的双词修饰键**粘成一个词，`PALETTE.key_glyphs` 查不到就原样输出。
+  改为只按 `+` 切分、每段 `strip()` 后再查符号表（并保留去空格二次查表的兜底）。
+  `tools/check_mac_ui.py` 由 27/29 → **29 项全通过**；`pytest`（mac）82 passed。
+- 2026-10-17 22:00 **测试可在受限环境跑通**。
+  `tests/conftest.py` 增加 `_ensure_tmpdir()`：系统临时目录不可写时退到仓库内 `build/tmp`，
+  避免只读 `/tmp` / 沙箱禁止删探针的环境里 `tmp_path` 用例整套 ERROR。
+  `test_load_missing_returns_defaults` 改为断言 `platform_defaults()`（mac 默认是 `ralt+space`，不是 `alt+space`）。
+  mac 上跑测试需带 `-s`（pytest 捕获要写临时文件，先于 conftest 执行）。
+- 2026-10-17 21:45 **macOS 界面离屏验收脚本**。新增 `tools/check_mac_ui.py`（29 项）：
+  chrome 契约 / 平台默认配置 / 主窗口与设置窗口构建 / 设置真实保存 / m1ddc 输出解析，
+  不接显示器也能跑，用于在没有真机交互的情况下守住 mac 端行为。
+- 2026-10-17 21:40 **热键三个真实问题一次修掉（真机反馈）**。
+  用户实测：① 设置页显示 `Alt+Space`，Mac 键盘上根本没有 Alt 键；② 按 ⌥ Space 没反应；
+  ③ 去系统设置授权时列表里找不到本应用。三条其实是两件事：
+  · **文案**：`Hotkey.describe()` 在 mac 上返回 `Right Alt+Space`，而键帽印的是 ⌥。
+    改为 darwin 直接走 `mac_describe()`（Option/Command），`pretty_hotkey()` 再缩成 `⌥ Space`；
+    设置页录制按钮、状态栏、状态卡键帽、菜单栏 tooltip 全部统一（原来设置页还有一处
+    自己写的 `" + ".join(raw.replace(" ", "").split("+"))`，会显示成 `RightAlt + Space`，已删）。
+  · **按不到**：默认 spec 是 `ralt+space` = **右** Option，而正常人按的是**左** Option。
+    mac 默认改 `alt+space`（左），右 Option 留给「只认右 Option」开关；用户已有配置已就地迁移。
+  · **授权**：TCC 只会把**主动请求过**的二进制写进「辅助功能」列表，老代码虽然调了
+    `AXIsProcessTrustedWithOptions(prompt=True)`，但提示文案让人以为要找「屏幕切换」。
+    现在 `permission_target()` 会算出真实授权对象（终端里跑 = 终端，双击 .app = 屏幕切换），
+    横幅右侧加了 **「去授权」** 按钮：弹系统框 + 打开面板 + 切回本应用自动重试注册。
+  · 打包：`packaging/macos/build.sh` 修掉 `--specpath` 导致的 `--add-data` 相对路径解析错误，
+    并补 ad-hoc `codesign`（否则每次重打包都会变成"新应用"，授权要重新勾）。
+  验收：`tools/check_mac_ui.py` 新增 7 项（左 Option 文案 / 不出现 Alt / 默认 alt+space /
+  授权对象 / 横幅按钮 / 录制按钮符号）全通过；`pytest` 83 passed。
+- 2026-10-17 21:20 **平台分层落地（回应「两端会不会撞同一文件」）**。
+  新增 `src/dualswitch/ui/chrome/{__init__,base,win,mac}.py`：配色、字体、字号、自绘标题栏有无、
+  单击/双击切换、后端下拉选项、应用图标名、菜单栏/托盘实现、通知与打开路径，全部收进各自模块。
+  `theme.py` / `statusitem.py` / `runner.py` 改为**零平台分支**（`grep sys.platform` 在 5 个共享文件里为 0）；
+  `widgets.CaptionButton` / `TitleBar` 下沉到 `chrome/win.py`，`widgets` 只留共享的 `paint_gear`。
+  新增 `tests/test_chrome_contract.py`（17 个字段 + 6 个函数 + 禁平台分支扫描）。
+  契约文档 `docs/PLATFORM-SPLIT.md`：「改 X 动哪个文件」对照表 + 并行开发合并流程，供另一端 AI 直接读。
+- 2026-10-17 20:50 **macOS 界面实现（菜单栏为主 + 原生标题栏窗口）**。
+  `chrome/mac.py`：`NSStatusBar.statusItemWithLength_` 建状态项、模板图 `setTemplate_(True)`、
+  左键单击切换 / 右键 `popUpMenuPositioningItem_atLocation_inView_` 弹菜单；
+  `build_app_menu()` 用 `QMenuBar` 提供 `⌘,` / `⌘H` / `⌘Q`；`activateIgnoringOtherApps_` 让窗口真的到前台。
+  主窗口改系统标题栏（`NATIVE_CHROME=True`，无自绘标题栏），设置行下沉到内容区「设置… ⌘ ,」。
+  无 pyobjc 时自动退化到 `QtStatusItem`（Dock 里能看到图标，功能不完整但不崩）。
+  规格见 `docs/UI-DESIGN-MAC.md`。
 - 2026-10-17 20:30 **Windows 打包改用 onedir（onefile 在该机型不可用）**。
   onefile 启动时要往 `%TEMP%` 解压 `_MEIxxxxxx`，本机实测**双击约有 3 成概率报
   「Could not create temporary directory!」**（连续点 start 5 次失败 2 次；从脚本启动反而不复现，
@@ -268,6 +413,19 @@ dualswitch/
   `build.ps1` 增加 `-OneFile` 开关（默认 onedir），产物提示同步更新；
   附带 `dist\使用说明.txt`（双击用法、配置/日志路径、任务管理器进程名、安装方式）。
   原 onefile 产物 `dist\dualswitch.exe` 已删除，避免和 `dist\dualswitch\dualswitch.exe` 混淆。
+- 2026-10-17 20:30 **macOS DDC 后端三处缺陷**。
+  · `m1ddc display list` 序号是 **1 基**且列表里含内置屏 `(null)` → 改为解析后过滤 `(null)`、
+    按显示器名匹配、`_display_args()` 自动补 `display N`；
+  · `get input` 在 USB-C 下返回 `-118` 被当成「解析失败」→ 改为抛出「读通道不可用（IOKit -118）」的可读错误；
+  · mac 默认 `monitor_match="AOC"` 匹配不到外接屏 → `platform_defaults()` 在 mac 上留空（空 = 取第一台）。
+  新增 `config.platform_defaults()`，`load()` / `ensure_config_file()` 都走它。
+  `hotkey.resolve_backend_name()` 在 mac 上恒返回 `quartz`，兼容从 Windows 拷来的 `register`/`hook` 配置。
+- 2026-10-17 20:10 **macOS 打包资源**。`design/icon/build_icns.py` 手写 ICNS 容器
+  （`icns` magic + 类型/长度/PNG 块，10 档），产出 `design/icon/screen-switch.icns`；
+  `build_menubar_icon.py` 用 QPainter 画 36×36 纯黑模板图（`CompositionMode_Clear` 抠前后屏间隙）；
+  `packaging/macos/build.sh` 补 `--icon` / `--add-data` / `--hidden-import AppKit,Foundation`
+  与 `PlistBuddy` 的 `CFBundleDisplayName=屏幕切换` / `LSUIElement=false` / `LSMinimumSystemVersion=11.0`。
+  `build_icns.sh` 降级为调用 Python 的薄壳（`sips`/`iconutil` 在受限环境会触发安全拦截）。
 - 2026-10-17 19:40 **Windows 打包实测通过，产出单文件 exe（T4 完成）**。
   `packaging/entrypoint.py` 改为：**不带参数 = 直接进图形界面**（双击即用），
   带参数按 CLI 语义执行；windowed 模式下没有控制台，因此启动异常会写日志 +

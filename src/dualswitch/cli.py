@@ -289,7 +289,7 @@ def cmd_doctor(args) -> int:
         add("热键可用性", "ok" if ok else "fail", detail)
     elif sys.platform == "darwin":
         try:
-            from .hotkey.macos import _accessibility_trusted, _import_quartz
+            from .hotkey.macos import _accessibility_trusted, _import_quartz, permission_target
 
             _import_quartz()
             trusted = _accessibility_trusted(prompt=False)
@@ -297,7 +297,7 @@ def cmd_doctor(args) -> int:
             add(
                 "辅助功能权限",
                 "ok" if trusted else "fail",
-                "已授权" if trusted else "未授权：系统设置 → 隐私与安全性 → 辅助功能 中勾选终端/Python",
+                "已授权" if trusted else f"未授权：到「隐私与安全性 → 辅助功能」打开「{permission_target()}」",
             )
         except Exception as exc:
             add("pyobjc/Quartz", "fail", str(exc))
@@ -369,7 +369,7 @@ def cmd_config(args) -> int:
         if path.exists() and not args.force:
             print(f"配置文件已存在：{path}（加 --force 覆盖）")
             return 1
-        config_mod.save(config_mod.DEFAULTS, path)
+        config_mod.save(config_mod.platform_defaults(), path)
         print(f"已写入：{path}")
         return 0
     if args.action == "show":

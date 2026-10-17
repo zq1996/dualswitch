@@ -8,17 +8,18 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from . import theme
+from .chrome import current as chrome
 from .widgets import (
     DeviceCard,
     HeroCard,
     ListRow,
     StatusBar,
-    TitleBar,
     label,
     soft_shadow,
 )
@@ -28,7 +29,9 @@ BANNER_EXTRA = 54   # 横幅出现时窗口额外高度
 
 
 class Banner(QFrame):
-    """失败 / 警告横幅，默认隐藏。"""
+    """失败 / 警告横幅，默认隐藏。可带一个可点击的动作（如「去授权」）。"""
+
+    actionClicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -39,23 +42,32 @@ class Banner(QFrame):
         self.icon = QLabel("\u26a0")
         self.text = QLabel("")
         self.text.setWordWrap(True)
-        for w in (self.icon, self.text):
-            w.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.action = QPushButton("")
+        self.action.setObjectName("bannerAction")
+        self.action.setCursor(Qt.PointingHandCursor)
+        self.action.setVisible(False)
+        self.action.clicked.connect(self.actionClicked)
+        self.icon.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.text.setAttribute(Qt.WA_TransparentForMouseEvents)
         lay.addWidget(self.icon, 0, Qt.AlignTop)
         lay.addWidget(self.text, 1)
+        lay.addWidget(self.action, 0, Qt.AlignTop)
 
-    def show_message(self, kind: str, message: str) -> None:
+    def show_message(self, kind: str, message: str, action_text: str = "") -> None:
         self.setObjectName("bannerErr" if kind == "error" else "bannerWarn")
         color = theme.DANGER if kind == "error" else theme.WARN
         self.icon.setStyleSheet(f"color:{color};font-size:12px;background:transparent;")
         self.text.setStyleSheet(f"color:{'#8C2222' if kind == 'error' else '#7A4A05'};font-size:11.5px;")
         self.text.setText(message)
+        self.action.setText(action_text)
+        self.action.setVisible(bool(action_text))
         self.style().unpolish(self)
         self.style().polish(self)
         self.setVisible(True)
 
     def clear(self) -> None:
         self.setVisible(False)
+        self.action.setVisible(False)
 
 
 class MainWindow(QWidget):
@@ -65,17 +77,34 @@ class MainWindow(QWidget):
     probeRequested = Signal()
     doctorRequested = Signal()
 
-    def __init__(self, cfg, hotkey_label: str, version: str, parent=None):
+    def __init__(
+        self,
+        cfg,
+        hotkey_label: str,
+        version: str,
+        parent=None,
+        monitor_name: str = "",
+    ):
         super().__init__(parent)
         self.cfg = cfg
         self.hotkey_label = hotkey_label
+        self.monitor_name = monitor_name
         self._allow_close = False
         self._host = cfg.effective_host()
 
+        # 平台差异（谁画窗口、要不要自绘标题栏）全部来自 chrome，这里不做判断
+        self.chrome = chrome()
+
         self.setWindowTitle("屏幕切换")
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(theme.WIN_W, theme.WIN_H)
+        if self.chrome.NATIVE_CHROME:
+            # macOS：用系统标题栏（红绿灯 + 居中标题），窗口外框、圆角、投影都交给系统，
+            # 自绘一套反而显得不像 mac 应用。这里只保证内容区能正常撑满。
+            self.setAttribute(Qt.WA_MacShowFocusRect, False)
+            self.setFixedSize(theme.WIN_W, theme.WIN_H)
+        else:
+            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+            self.setAttribute(Qt.WA_TranslucentBackground)
+            self.setFixedSize(theme.WIN_W, theme.WIN_H)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -83,22 +112,27 @@ class MainWindow(QWidget):
         self.root = QFrame()
         self.root.setObjectName("root")
         outer.addWidget(self.root)
-        soft_shadow(self.root, "#0F172A", blur=38, dy=14, alpha=52)
+        if not self.chrome.NATIVE_CHROME:
+            soft_shadow(self.root, "#0F172A", blur=38, dy=14, alpha=52)
 
         root_lay = QVBoxLayout(self.root)
-        root_lay.setContentsMargins(1, 1, 1, 1)
+        m = 0 if self.chrome.NATIVE_CHROME else 1      # Windows 的 1px 描边内缩
+        root_lay.setContentsMargins(m, m, m, m)
         root_lay.setSpacing(0)
 
-        self.titlebar = TitleBar("屏幕切换")
-        self.titlebar.closeClicked.connect(self.hide)
-        self.titlebar.minimizeClicked.connect(self.showMinimized)
-        self.titlebar.settingsClicked.connect(self.openSettingsRequested)
-        root_lay.addWidget(self.titlebar)
+        # 标题栏由平台决定：Windows 返回自绘控件，macOS 返回 None（系统给）
+        self.titlebar = self.chrome.titlebar("屏幕切换")
+        if self.titlebar is not None:
+            self.titlebar.closeClicked.connect(self.hide)
+            self.titlebar.minimizeClicked.connect(self.showMinimized)
+            self.titlebar.settingsClicked.connect(self.openSettingsRequested)
+            root_lay.addWidget(self.titlebar)
 
         body = QWidget()
         body.setObjectName("body")
         body_lay = QVBoxLayout(body)
-        body_lay.setContentsMargins(18, 16, 18, 14)
+        top = self.chrome.BODY_TOP
+        body_lay.setContentsMargins(18, top, 18, 14)
         body_lay.setSpacing(14)
 
         self.hero = HeroCard()
@@ -106,6 +140,8 @@ class MainWindow(QWidget):
         body_lay.addWidget(self.hero)
 
         self.banner = Banner()
+        self._banner_action = None
+        self.banner.actionClicked.connect(self._on_banner_action)
         body_lay.addWidget(self.banner)
 
         devices = QHBoxLayout()
@@ -130,11 +166,18 @@ class MainWindow(QWidget):
         list_lay.setSpacing(0)
         self.row_probe = ListRow("search", "探测显示器", "只读")
         self.row_log = ListRow("doc", "查看日志", "dualswitch.log")
-        self.row_doctor = ListRow("pulse", "运行诊断", "doctor", last=True)
+        self.row_doctor = ListRow("pulse", "运行诊断", "doctor", last=not self.chrome.INLINE_SETTINGS_ROW)
         self.row_probe.clicked.connect(self.probeRequested)
         self.row_log.clicked.connect(self.openLogRequested)
         self.row_doctor.clicked.connect(self.doctorRequested)
-        for row in (self.row_probe, self.row_log, self.row_doctor):
+        rows = [self.row_probe, self.row_log, self.row_doctor]
+        # macOS 没有自绘标题栏，设置入口收进这张列表（⌘, 同时可用）
+        self.row_settings = None
+        if self.chrome.INLINE_SETTINGS_ROW:
+            self.row_settings = ListRow("gear", "设置…", self.chrome.SETTINGS_ROW_HINT, last=True)
+            self.row_settings.clicked.connect(self.openSettingsRequested)
+            rows.append(self.row_settings)
+        for row in rows:
             list_lay.addWidget(row)
         body_lay.addWidget(self.list_wrap)
         body_lay.addStretch(1)
@@ -161,7 +204,7 @@ class MainWindow(QWidget):
         self._other = other
 
     def _monitor_line(self, host: str) -> str:
-        name = (self.cfg.monitor_match or "").strip().upper() or "显示器"
+        name = (self.monitor_name or self.cfg.monitor_match or "").strip() or "显示器"
         return f"{name} · {PORT[host]} · 输入源 {self.cfg.sources[host]}"
 
     def set_busy(self, busy: bool) -> None:
@@ -173,9 +216,18 @@ class MainWindow(QWidget):
     def set_foot(self, text: str, ok: bool = True) -> None:
         self.hero.set_foot(text, ok)
 
-    def show_banner(self, kind: str, message: str) -> None:
-        self.banner.show_message(kind, message)
+    def show_banner(self, kind: str, message: str, action_text: str = "", action=None) -> None:
+        """横幅。action_text + action 用于「去授权」「重试」这类需要用户动手的提示。"""
+        self._banner_action = action
+        self.banner.show_message(kind, message, action_text)
         self._apply_height(theme.WIN_H + BANNER_EXTRA)
+
+    def _on_banner_action(self) -> None:
+        if callable(self._banner_action):
+            try:
+                self._banner_action()
+            except Exception:  # pragma: no cover - 动作不能把界面打挂
+                pass
 
     def clear_banner(self) -> None:
         if self.banner.isHidden():      # isVisible() 在窗口未 show 时恒为 False，这里只看显式状态

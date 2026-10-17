@@ -1,51 +1,36 @@
-"""把窗口、托盘、热键、切换控制器接到一起。
+"""把窗口、常驻入口（mac 菜单栏 / Win 托盘）、热键、切换控制器接到一起。
 
 线程模型沿用 app.SwitchController：
   · 界面上点按钮 → 后台线程 switch_now()（阻塞约 65ms）
   · 热键触发     → controller.trigger() 自己入队，UI 只轮询状态
 UI 线程只做绘制，不碰 DDC。
+
+平台差异都收在 `statusitem` 与 `theme` 里，这个文件只走一条主流程：
+菜单栏（或托盘）左键/双击 = 切换，右键 = 菜单，窗口关闭 = 收起来但继续常驻。
 """
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Qt
-from PySide6.QtGui import QAction, QFont, QIcon
-from PySide6.QtWidgets import (
-    QApplication,
-    QMenu,
-    QMessageBox,
-    QSystemTrayIcon,
-)
+from PySide6.QtCore import QEvent, QObject, QTimer
+from PySide6.QtGui import QFont, QIcon
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .. import logging_setup
 from . import theme
+from .chrome import current as chrome
 from .settings import SettingsWindow
 from .window import MainWindow
 
 log = logging_setup.get("ui")
 
 
-def _tray_tip(hotkey_label: str) -> str:
-    """托盘提示：顺带告诉用户是双击切换，避免单击没反应以为坏了。"""
-    return f"屏幕切换 · {hotkey_label}（双击图标切换）"
-
-
-def _open_path(path: Path) -> None:
-    try:
-        if sys.platform == "win32":
-            os.startfile(str(path))  # type: ignore[attr-defined]
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)])
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
-    except Exception as exc:  # pragma: no cover
-        log.warning("打开路径失败 %s: %s", path, exc)
+def _status_tip(hotkey_label: str) -> str:
+    """常驻图标提示：写清点击能干什么，避免点一下没反应以为坏了。"""
+    return f"屏幕切换 · {theme.pretty_hotkey(hotkey_label)}（{theme.CLICK_HINT}）"
 
 
 class UiRunner(QObject):
@@ -61,19 +46,23 @@ class UiRunner(QObject):
 
         self.app = QApplication.instance() or QApplication(sys.argv[:1])
         self.app.setApplicationName("屏幕切换")
+        self.app.setApplicationDisplayName("屏幕切换")
         self.app.setQuitOnLastWindowClosed(False)
 
         font = QFont()
         font.setFamilies(theme.FONT_FAMILIES)
-        font.setPointSizeF(9.75)
+        font.setPointSizeF(theme.APP_FONT_POINT)
         self.app.setFont(font)
         self.app.setStyleSheet(theme.qss())
+        self.chrome = chrome()
 
-        self.icon = QIcon(str(theme.asset("screen-switch.ico")))
+        self.icon = QIcon(str(theme.app_icon()))
         self.app.setWindowIcon(self.icon)
 
         hotkey_label = hotkey.describe() if hotkey else "未启用"
-        self.window = MainWindow(cfg, hotkey_label, self._version())
+        self.window = MainWindow(
+            cfg, hotkey_label, self._version(), monitor_name=self._monitor_name()
+        )
         self.window.setWindowIcon(self.icon)
         self.settings = SettingsWindow(cfg, self.cfg_file, hotkey_label, self._version())
         self.settings.setWindowIcon(self.icon)
@@ -81,11 +70,14 @@ class UiRunner(QObject):
         self._busy = False
         self._hotkey_suspended = False
         self._quitting = False
+        self._retry_on_activate = False       # 去授权后切回应用就自动重试热键
         self._hotkey_spec = cfg.hotkey
         self._seen_history = len(controller.history)
         self._seen_source = controller.current_source
 
-        self._build_tray(hotkey_label)
+        self.menubar = None
+        self._build_status(hotkey_label)
+        self._build_app_menu()
         self._shown_hotkey = hotkey_label      # 启动时界面已经是这个值
         self._wire()
 
@@ -98,7 +90,7 @@ class UiRunner(QObject):
         self._center(self.settings)
         self.window.show()
         if warning:
-            self.window.show_banner("warn", f"热键未启用：{warning}　可继续用界面或托盘切换。")
+            self._show_hotkey_problem(warning)
 
     # ------------------------------------------------------------------ 组装
     def _center(self, win) -> None:
@@ -113,82 +105,83 @@ class UiRunner(QObject):
 
         return f"v{__version__}"
 
+    def _monitor_name(self) -> str:
+        """状态卡上显示的显示器名：优先用后端枚举到的真实名字。"""
+        if self.cfg.monitor_match:
+            return self.cfg.monitor_match
+        try:
+            monitors = self.backend.list_monitors()
+        except Exception:
+            return ""
+        if not monitors:
+            return ""
+        return monitors[0].description or ""
+
     def _wire(self) -> None:
         self.window.switchRequested.connect(lambda: self.do_switch())
         self.window.probeRequested.connect(self.do_probe)
         self.window.doctorRequested.connect(self.do_doctor)
-        self.window.openLogRequested.connect(lambda: _open_path(self.log_file))
+        self.window.openLogRequested.connect(lambda: self.chrome.open_path(self.log_file))
         self.window.openSettingsRequested.connect(self.show_settings)
         self.settings.saved.connect(self.on_config_saved)
-        self.settings.openConfigDirRequested.connect(lambda: _open_path(self.cfg_file))
+        self.settings.openConfigDirRequested.connect(lambda: self.chrome.open_path(self.cfg_file))
         self.settings.probeRequested.connect(self.do_probe)
         self.settings.recordingChanged.connect(self._on_recording_changed)
+        # Dock 图标点击 / Cmd+Tab 回到本应用时，若窗口收起来了就再拿出来
+        self.app.installEventFilter(self)
 
-        # 托盘左键双击 = 切换；单击不响应（单击太容易误触）
-        self.tray.activated.connect(self._on_tray_activated)
+    def _build_status(self, hotkey_label: str) -> None:
+        # Windows 返回托盘（双击切换），macOS 返回菜单栏状态项（单击切换）
+        self.status = self.chrome.build_status_item(self.icon, self._on_status_click)
+        self.status.set_tooltip(_status_tip(hotkey_label))
+        self._refresh_menu()
 
-    def _build_tray(self, hotkey_label: str) -> None:
-        self.tray = QSystemTrayIcon(self.icon)
-        self.tray.setToolTip(_tray_tip(hotkey_label))
+    def _status_actions(self) -> dict:
+        return {
+            "open": self.show_window,
+            "switch": lambda: self.do_switch(),
+            "force": lambda: self.do_switch(self.cfg.effective_host()),
+            "probe": self.do_probe,
+            "config_dir": lambda: self.chrome.open_path(self.cfg_file.parent),
+            "log": lambda: self.chrome.open_path(self.log_file),
+            "settings": self.show_settings,
+            "quit": self.quit,
+        }
 
-        menu = QMenu()
-        act_open = QAction("打开主界面", menu)
-        act_open.triggered.connect(self.show_window)
-        menu.addAction(act_open)
-        menu.addSeparator()
+    def _refresh_menu(self) -> None:
+        from .statusitem import build_menu_entries
 
-        other = self.cfg.other_host()
-        other_label = "Mac (USB-C)" if other == "mac" else "Windows (HDMI)"
-        self_label = "Mac (USB-C)" if other == "windows" else "Windows (HDMI)"
+        entries = build_menu_entries(
+            self.cfg,
+            self.controller.current_source,
+            self._hotkey_label(),
+            self._status_actions(),
+        )
+        try:
+            self.status.set_menu(entries)
+        except Exception:  # pragma: no cover
+            log.exception("刷新常驻菜单失败")
 
-        act_switch = QAction(f"切换到 {other_label}", menu)
-        act_switch.triggered.connect(lambda: self.do_switch())
-        menu.addAction(act_switch)
-        act_force = QAction(f"强制切到 {self_label}", menu)
-        act_force.triggered.connect(lambda: self.do_switch(self.cfg.effective_host()))
-        menu.addAction(act_force)
-        menu.addSeparator()
-
-        act_probe = QAction("探测显示器 / 读取输入源", menu)
-        act_probe.triggered.connect(self.do_probe)
-        menu.addAction(act_probe)
-        act_cfg = QAction("打开配置目录", menu)
-        act_cfg.triggered.connect(lambda: _open_path(self.cfg_file.parent))
-        menu.addAction(act_cfg)
-        act_log = QAction("查看日志", menu)
-        act_log.triggered.connect(lambda: _open_path(self.log_file))
-        menu.addAction(act_log)
-        act_settings = QAction("设置…", menu)
-        act_settings.triggered.connect(self.show_settings)
-        menu.addAction(act_settings)
-        menu.addSeparator()
-
-        act_hotkey = QAction(f"热键：{hotkey_label}", menu)
-        act_hotkey.setEnabled(False)
-        self._act_hotkey = act_hotkey
-        menu.addAction(act_hotkey)
-        act_quit = QAction("退出", menu)
-        act_quit.triggered.connect(self.quit)
-        menu.addAction(act_quit)
-
-        self._menu = menu
-        self.tray.setContextMenu(menu)
-        self.tray.show()
+    def _build_app_menu(self) -> None:
+        """全局菜单栏（仅 macOS 有）：设置 ⌘, / 隐藏 ⌘H / 退出 ⌘Q。"""
+        self.menubar = self.chrome.build_app_menu(self)
 
     # ------------------------------------------------------------------ 动作
     def show_window(self) -> None:
         self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()
+        self.chrome.activate(self.window)
 
     def show_settings(self) -> None:
         self.settings.showNormal()
         self.settings.raise_()
         self.settings.activateWindow()
+        self.chrome.activate(self.settings)
 
-    def _on_tray_activated(self, reason) -> None:
-        if reason == QSystemTrayIcon.DoubleClick:
-            self.do_switch()
+    def _on_status_click(self) -> None:
+        # macOS 菜单栏左键直接切换；Windows 侧 QtStatusItem 已过滤成只认双击
+        self.do_switch()
 
     def do_switch(self, target: str | None = None) -> None:
         if self._busy:
@@ -218,26 +211,31 @@ class UiRunner(QObject):
             try:
                 detail = f"\n\n当前 VCP 0x{self.cfg.vcp_code:02X} = {self.backend.get_input()}（读数仅供参考）"
             except Exception as exc:
-                detail = f"\n\n读取失败：{exc}（Q2790PC 的 HDMI 通道已知现象）"
+                detail = f"\n\n读取失败：{exc}"
             QTimer.singleShot(0, lambda: self._info("显示器探测", "\n".join(lines) + detail))
 
         threading.Thread(target=work, name="ui-probe", daemon=True).start()
 
     def do_doctor(self) -> None:
-        host = "Windows" if sys.platform == "win32" else "macOS"
+        host = self.chrome.PLATFORM_LABEL
         hotkey_state = "已启用" if self.hotkey else "未启用"
-        text = (
-            f"平台　　：{host}\n"
-            f"本机　　：{self.cfg.effective_host()}\n"
-            f"目标　　：{self.cfg.other_host()}\n"
-            f"热键　　：{self.hotkey.describe() if self.hotkey else '未启用'}（{hotkey_state}）\n"
-            f"DDC 后端：{self.cfg.ddc_backend}\n"
-            f"输入源　：Windows {self.cfg.sources['windows']} / Mac {self.cfg.sources['mac']}\n"
-            f"配置文件：{self.cfg_file}\n"
-            f"日志　　：{self.log_file}\n"
-            f"演练模式：{'开' if self.cfg.dry_run else '关'}"
-        )
-        self._info("环境自检", text)
+        lines = [
+            f"平台　　：{host}",
+            f"本机　　：{self.cfg.effective_host()}",
+            f"目标　　：{self.cfg.other_host()}",
+            f"热键　　：{self.hotkey.describe() if self.hotkey else '未启用'}（{hotkey_state}）",
+            f"DDC 后端：{self.cfg.ddc_backend}",
+            f"输入源　：Windows {self.cfg.sources['windows']} / Mac {self.cfg.sources['mac']}",
+            f"配置文件：{self.cfg_file}",
+            f"日志　　：{self.log_file}",
+            f"演练模式：{'开' if self.cfg.dry_run else '关'}",
+        ]
+        try:
+            monitors = self.backend.list_monitors()
+            lines.append("显示器　：" + ("; ".join(m.description or m.label() for m in monitors) or "未发现"))
+        except Exception as exc:
+            lines.append(f"显示器　：枚举失败（{exc}）")
+        self._info("环境自检", "\n".join(lines))
 
     def _info(self, title: str, text: str) -> None:
         box = QMessageBox(self.window)
@@ -247,6 +245,16 @@ class UiRunner(QObject):
         box.exec()
 
     # ------------------------------------------------------------------ 状态同步
+    def eventFilter(self, obj, event):  # noqa: N802
+        if event.type() == QEvent.ApplicationActivate and self.chrome.REOPEN_ON_ACTIVATE:
+            # 点 Dock 图标 / Cmd+Tab 回来：窗口被收起来就再打开（mac 原生行为）
+            if not self._quitting and self.window.isHidden() and not self.settings.isVisible():
+                self.window.showNormal()
+            # 刚从「辅助功能」设置授权回来：就地重试，不用重启程序
+            if self._retry_on_activate and self.hotkey is None and not self._hotkey_suspended:
+                QTimer.singleShot(250, self.retry_hotkey)
+        return super().eventFilter(obj, event)
+
     def _poll_state(self) -> None:
         changed = False
         self._refresh_hotkey_ui()      # 兜底：任何路径改了热键，250ms 内界面一定跟上
@@ -254,6 +262,7 @@ class UiRunner(QObject):
         if source != self._seen_source:
             self._seen_source = source
             self.window.set_state(source)
+            self._refresh_menu()       # 菜单里的「当前画面 / 切换目标」跟着翻
             changed = True
             # 没有新的切换记录 = 状态是后台检测纠正的（另一台机器切回来的）
             if len(self.controller.history) == self._seen_history:
@@ -297,8 +306,44 @@ class UiRunner(QObject):
             self.window.set_foot(f"上次切换 {ms:.1f} ms · 指令已发送")
 
     def _notify(self, title: str, message: str) -> None:
-        if self.cfg.notify and self.tray.isVisible():
-            self.tray.showMessage(title, message, self.icon, 4000)
+        if not self.cfg.notify:
+            return
+        try:
+            self.chrome.notify(self.status, title, message, self.icon)
+        except Exception:  # pragma: no cover
+            pass
+
+    # ------------------------------------------------------------------ 权限
+    def _show_hotkey_problem(self, message: str) -> None:
+        """热键起不来：mac 上给一句「该给谁授权」+ 一个「去授权」按钮。
+
+        没这个按钮时，用户只会看到「缺少辅助功能权限」然后去设置里翻，
+        而 TCC 列表里根本还没有本应用 —— 因为只有主动请求过才会被写进去。
+        """
+        target = self.chrome.permission_target()
+        text = f"热键未启用：{message}"
+        if target:
+            self._retry_on_activate = True
+            self.window.show_banner("warn", text, "去授权", self.go_grant_permission)
+        else:
+            self.window.show_banner("warn", text)
+
+    def go_grant_permission(self) -> None:
+        """打开「辅助功能」面板；用户勾选后切回本应用会自动再试一次。"""
+        granted = self.chrome.request_accessibility()
+        if granted:
+            self.retry_hotkey()
+        elif self.chrome.permission_target():
+            self.window.show_banner(
+                "warn",
+                f"已打开「辅助功能」设置：请在列表里打开「{self.chrome.permission_target()}」，"
+                "然后切回本窗口，会自动重试。",
+            )
+
+    def retry_hotkey(self) -> None:
+        """重新注册一次热键（授权后不用重启整个程序）。"""
+        self._retry_on_activate = False
+        self._rebuild_hotkey(self.cfg)
 
     # ------------------------------------------------------------------ 配置
     def on_config_saved(self, cfg) -> None:
@@ -310,11 +355,12 @@ class UiRunner(QObject):
         self.settings.cfg = cfg
         self.window.set_state(self.controller.current_source)
 
-        # 热键或后端变了才重建，避免每次保存都抢一次注册
+        # 热键改了才重建，避免每次保存都抢一次注册
         if cfg.hotkey != old_hotkey or self.hotkey is None:
             self._rebuild_hotkey(cfg)
 
         self._refresh_hotkey_ui()
+        self._refresh_menu()
         self._notify("设置已保存", "配置已生效，无需重启。")
 
     # ------------------------------------------------------------------ 热键文案
@@ -322,7 +368,7 @@ class UiRunner(QObject):
         return self.hotkey.describe() if self.hotkey else "未启用"
 
     def _refresh_hotkey_ui(self) -> None:
-        """把"当前实际生效的热键"同步到主页面键帽、状态栏、托盘提示。
+        """把"当前实际生效的热键"同步到主页面键帽、状态栏、菜单栏提示与菜单项。
 
         统一走这里 + 轮询里兜底，避免某条路径漏更新（曾经出现过保存后主页面还是旧热键）。
         """
@@ -333,8 +379,8 @@ class UiRunner(QObject):
         text = f"热键已启用 · {label}" if self.hotkey else "热键未启用"
         self.window.statusbar.text.setText(text)
         self.window.hero.set_hotkey(label)
-        self._act_hotkey.setText(f"热键：{label}")
-        self.tray.setToolTip(_tray_tip(label))
+        self.status.set_tooltip(_status_tip(label))
+        self._refresh_menu()
 
     def _on_recording_changed(self, recording: bool) -> None:
         """录制热键时暂停全局热键。
@@ -345,7 +391,7 @@ class UiRunner(QObject):
         if recording:
             self._suspend_hotkey()
         else:
-            # 延后一点再注册：录制是在 keyPress 里结束的，如果立刻 RegisterHotKey，
+            # 延后一点再注册：录制是在 keyPress 里结束的，如果立刻注册，
             # 这一次按下的组合键会被刚注册好的热键再吞一次（表现为录完就切走了）
             QTimer.singleShot(350, self._resume_hotkey)
 
@@ -384,11 +430,12 @@ class UiRunner(QObject):
             hk.start()
             self.hotkey = hk
             self._hotkey_spec = cfg.hotkey     # 记录"实际注册的那一个"，用来判断是否需要重建
+            self._retry_on_activate = False
             log.info("热键已重建：%s（后端 %s）", hk.describe(), hk.name)
             self.window.clear_banner()
         except HotkeyError as exc:
             log.error("新热键注册失败：%s", exc)
-            self.window.show_banner("warn", f"新热键未生效：{exc}")
+            self._show_hotkey_problem(str(exc))
         self._refresh_hotkey_ui()
 
     def quit(self) -> None:
@@ -402,7 +449,10 @@ class UiRunner(QObject):
                     self.hotkey.stop()
                 except Exception:  # pragma: no cover
                     pass
-            self.tray.hide()
+            try:
+                self.status.hide()
+            except Exception:  # pragma: no cover
+                pass
             self.window.quit_completely()
             self.app.quit()
 

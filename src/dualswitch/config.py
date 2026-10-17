@@ -125,6 +125,27 @@ class Config:
 DEFAULTS = Config()
 
 
+def platform_defaults() -> Config:
+    """按平台补齐默认值的配置副本。
+
+    macOS 与 Windows 的差异只在「开箱即用」的几个字段上，业务字段（sources /
+    readback / debounce）保持完全一致，否则两端配置文件会互相看不懂：
+
+    | 字段 | Windows | macOS | 原因 |
+    |---|---|---|---|
+    | hotkey | alt+space | alt+space（= ⌥ Space，左 Option） | mac 键盘上没有 Alt 键，⌥ 才是用户会去按的那个；右 Option 需要刻意伸手指 |
+    | monitor_match | AOC | 空 | mac 的显示器列表里只有外接屏（内置屏被过滤），空 = 取第一台 |
+    | m1ddc_display_index | — | None | 由后端按显示器名自动解析，不写死序号 |
+    """
+    cfg = copy.deepcopy(DEFAULTS)
+    if sys.platform == "darwin":
+        # alt = Option（左）；想只认右 Option 的用户在设置里打开「只认右 Option」，
+        # 那条路径会把 hotkey 改写成 ralt+space（见 settings._with_strict_modifier）
+        cfg.hotkey = "alt+space"
+        cfg.monitor_match = ""
+    return cfg
+
+
 # --------------------------------------------------------------------------- #
 # 校验
 # --------------------------------------------------------------------------- #
@@ -231,10 +252,10 @@ def validate(cfg: Config) -> None:
 # 读写
 # --------------------------------------------------------------------------- #
 def load(path: str | os.PathLike[str] | None = None, *, strict: bool = True) -> Config:
-    """读取配置；文件不存在时返回默认配置（不落盘）。"""
+    """读取配置；文件不存在时返回本平台的默认配置（不落盘）。"""
     target = Path(path).expanduser() if path else config_path()
     if not target.exists():
-        return copy.deepcopy(DEFAULTS)
+        return platform_defaults()
     try:
         raw = json.loads(target.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -244,7 +265,7 @@ def load(path: str | os.PathLike[str] | None = None, *, strict: bool = True) -> 
     except ConfigError:
         if strict:
             raise
-        return copy.deepcopy(DEFAULTS)
+        return platform_defaults()
 
 
 def save(cfg: Config, path: str | os.PathLike[str] | None = None) -> Path:
@@ -259,5 +280,5 @@ def ensure_config_file(path: str | os.PathLike[str] | None = None) -> tuple[Path
     target = Path(path).expanduser() if path else config_path()
     if target.exists():
         return target, False
-    save(DEFAULTS, target)
+    save(platform_defaults(), target)
     return target, True
