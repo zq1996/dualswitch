@@ -108,3 +108,27 @@ def test_mac_keycodes():
     assert to_mac_keycode("f1") == 122
     with pytest.raises(HotkeyError):
         to_mac_keycode("f13")
+
+
+@pytest.mark.skipif(not IS_MAC, reason="辅助功能授权只在 macOS 上存在")
+def test_accessibility_prompt_only_once_per_process(monkeypatch):
+    """热键每次重建都会查权限，但系统授权框一个进程只该弹一次。
+
+    不设限的话：切回窗口重试 → 弹一次，改配置 → 弹一次，录制结束 → 再弹一次，
+    用户看到的就是「已经授权了还一直弹窗让我授权」。
+    """
+    from dualswitch.hotkey import macos as hk_mac
+
+    calls: list[bool] = []
+    monkeypatch.setattr(hk_mac, "_ax_trusted", lambda prompt=False: calls.append(prompt) or False)
+    monkeypatch.setattr(hk_mac, "_prompted_once", False)
+    monkeypatch.setattr(hk_mac, "open_accessibility_settings", lambda: None)  # 别真去开系统设置
+
+    assert hk_mac.accessibility_granted(prompt=True) is False
+    assert hk_mac.accessibility_granted(prompt=True) is False
+    assert hk_mac.accessibility_granted(prompt=False) is False
+    assert calls == [True, False, False], "只有第一次带 prompt，后面都应静默"
+
+    # 用户主动点「去授权」必须还能再弹
+    hk_mac.request_accessibility()
+    assert calls[-1] is True

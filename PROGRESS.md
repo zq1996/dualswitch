@@ -352,6 +352,22 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-17 22:44 **「已授权却一直弹窗要授权」的根因：ad-hoc 签名让 TCC 记录按 cdhash 认人**。
+  现象：辅助功能里 dualswitch 开关明明是打开的，程序仍报未授权，且系统授权框反复弹。
+  两个独立原因叠在一起：
+  · **记录失效**：`codesign -d -r-` 显示 ad-hoc 签名的 designated requirement 是
+    `cdhash H"..."` —— 纯二进制哈希。TCC 授权时把这条要求存进库，**重新打包换 cdhash
+    后旧记录就永远匹配不上**，开关还留在 ON，看起来像"已授权"。修法：把失效条目点「−」
+    移除再重新添加（或 `tccutil reset Accessibility com.dualswitch.app`）。
+    长期解：用固定身份的证书签名（DR 变成 identifier + 证书），TCC 才能跨重打包存活。
+  · **弹窗放大器**：`QuartzEventTapBackend.start()` 每次都 `prompt=True`，而
+    `_retry_on_activate` 让每次切回应用都重试一次 → 对话框连环弹。改为
+    `accessibility_granted()` 一个进程只放行一次 prompt，用户主动点「去授权」才再弹
+    （`request_accessibility()` 绕过抑制）。
+  另外提示文案补了两点：TCC 列表里显示的是 `dualswitch`（不是中文名「屏幕切换」），
+  以及「开关是开的却仍报未授权 = 旧构建的失效记录，移除后重新添加」。
+  新增用例 `test_accessibility_prompt_only_once_per_process`。
+
 - 2026-10-17 22:38 **修复打包版双击闪退：chrome 平台模块没被打进包**。
   现象：`dist/dualswitch.app` 双击后窗口一闪就消失，日志末尾
   `ModuleNotFoundError: No module named 'dualswitch.ui.chrome.mac'`。

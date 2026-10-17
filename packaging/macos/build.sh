@@ -68,10 +68,32 @@ if [[ -f "$PLIST" ]]; then
         || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1.0.0" "$PLIST"
 fi
 
-# ad-hoc 签名：TCC（辅助功能）按「签名 + 路径」记住授权，没签名的包每次重打包
-# 都可能被系统当成新应用，导致用户要反复勾选。
-/usr/bin/codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
-/usr/bin/codesign --verify --deep "$APP" >/dev/null 2>&1 && echo "[ok] ad-hoc 签名已应用" || echo "[warn] 签名校验失败（不影响本机运行）"
+# 签名：TCC（辅助功能）授权是「认签名」的，选错身份会导致每次重打包都要重新勾选。
+#   · ad-hoc（--sign -）：designated requirement 是**纯 cdhash**，重打包换了哈希，
+#     旧授权立刻失效 —— 症状是「开关明明开着，程序还说没授权」。
+#   · 固定证书：DR 变成「identifier + 证书」，授权能跨重打包存活。
+# 所以这里优先找一个名字以 dualswitch 开头的自签名证书（建一次即可，见文件末尾提示），
+# 找不到才退回 ad-hoc；也可以用 CODESIGN_IDENTITY="名字" 显式指定。
+IDENTITY="${CODESIGN_IDENTITY:-}"
+if [[ -z "$IDENTITY" ]]; then
+    IDENTITY="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*"\(dualswitch[^"]*\)".*/\1/p' | head -1)"
+fi
+if [[ -z "$IDENTITY" ]]; then
+    IDENTITY="-"
+    echo "[warn] 没找到 dualswitch 自签名证书，退回 ad-hoc：重打包后辅助功能要重新勾选"
+fi
+
+/usr/bin/codesign --force --deep --sign "$IDENTITY" "$APP" >/dev/null 2>&1 || true
+if /usr/bin/codesign --verify --deep "$APP" >/dev/null 2>&1; then
+    if [[ "$IDENTITY" == "-" ]]; then
+        echo "[ok] ad-hoc 签名已应用"
+    else
+        echo "[ok] 已用固定身份签名：$IDENTITY（重打包不用重新授权）"
+    fi
+else
+    echo "[warn] 签名校验失败（不影响本机运行）"
+fi
 
 # 打包自检：用字符串拼模块名的动态导入（importlib.import_module）会被分析器漏掉，
 # 源码跑得好好的、双击 .app 却立刻闪退，日志里只有一句 ModuleNotFoundError。

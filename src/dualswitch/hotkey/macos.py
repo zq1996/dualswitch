@@ -58,12 +58,11 @@ def _import_quartz():
     return Quartz
 
 
-def accessibility_granted(prompt: bool = False) -> bool:
-    """当前进程是否已拿到「辅助功能」权限。
+_prompted_once = False
 
-    prompt=True 时系统会弹一次授权对话框 —— **这一步很关键**：TCC 只会把
-    「主动请求过」的可执行文件写进列表，所以不弹窗时用户在设置里根本找不到本应用。
-    """
+
+def _ax_trusted(prompt: bool = False) -> bool:
+    """直接问系统「可信吗」，不做任何抑制。"""
     try:
         from ApplicationServices import (  # type: ignore
             AXIsProcessTrustedWithOptions,
@@ -77,15 +76,35 @@ def accessibility_granted(prompt: bool = False) -> bool:
         return True
 
 
+def accessibility_granted(prompt: bool = False) -> bool:
+    """当前进程是否已拿到「辅助功能」权限。
+
+    prompt=True 时系统会弹一次授权对话框 —— **这一步很关键**：TCC 只会把
+    「主动请求过」的可执行文件写进列表，所以不弹窗时用户在设置里根本找不到本应用。
+
+    但一个进程里只弹**一次**：热键每次重建（改配置、录制结束、授权后自动重试、
+    切回窗口重试）都会走到这里，不设限的话对话框会反复弹——
+    「已授权还一直弹窗让我授权」的观感就是这么来的。要再弹一次走 `request_accessibility()`。
+    """
+    global _prompted_once
+    if prompt and _prompted_once:
+        prompt = False
+    if prompt:
+        _prompted_once = True
+    return _ax_trusted(prompt=prompt)
+
+
 def permission_target() -> str:
     """该去系统设置里勾选谁。
 
-    · 打包后（PyInstaller）→ 「屏幕切换」
+    · 打包后（PyInstaller）→ 「屏幕切换」。注意 TCC 列表里显示的是 CFBundleName
+      `dualswitch`，中文名只在 Dock / 关于面板生效，所以提示里两个名字都给，
+      否则用户会照着提示找不到那一行。
     · 从终端跑脚本     → 授权对象是**终端本身**（TCC 按"负责进程"归属），
                          这也是用户「找不到本应用」的原因
     """
     if getattr(sys, "frozen", False):
-        return "屏幕切换"
+        return "屏幕切换（列表中显示为 dualswitch）"
     term = os.environ.get("TERM_PROGRAM")
     if term:
         return _TERM_NAMES.get(term, term)
@@ -101,8 +120,13 @@ def open_accessibility_settings() -> None:
 
 
 def request_accessibility() -> bool:
-    """要权限：先弹系统对话框（会把本进程加进列表），没弹成再打开设置面板。"""
-    granted = accessibility_granted(prompt=True)
+    """要权限：先弹系统对话框（会把本进程加进列表），没弹成再打开设置面板。
+
+    用户主动点的「去授权」，所以绕过「一个进程只弹一次」的抑制。
+    """
+    global _prompted_once
+    _prompted_once = True
+    granted = _ax_trusted(prompt=True)
     open_accessibility_settings()
     return granted
 
@@ -114,7 +138,12 @@ def permission_message() -> str:
         how = f"在列表里打开「{target}」"
     else:
         how = f"在列表里打开「{target}」（本程序是从它启动的，所以授权给它）"
-    return f"请在「隐私与安全性 → 辅助功能」里{how}，然后点「重试」或重启程序。"
+    return (
+        f"请在「隐私与安全性 → 辅助功能」里{how}，然后点「重试」或重启程序。"
+        "若开关本来就是打开的却仍报未授权：那是旧构建留下的失效记录——"
+        "ad-hoc 签名的授权是按二进制哈希认的，重新打包就失效了。"
+        "选中本应用点列表下方的「−」移除，再重新添加一次即可。"
+    )
 
 
 def _accessibility_trusted(prompt: bool = False) -> bool:
