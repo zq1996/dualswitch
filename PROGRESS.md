@@ -1,11 +1,11 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-17 19:40
-> 一句话状态：**双向切屏已真机闭环，Windows 侧热键 / DDC / 回读 / 托盘 / 图形界面 / 单文件 exe 全部实测通过；
+> 最后更新：2026-10-17 20:30
+> 一句话状态：**双向切屏已真机闭环，Windows 侧热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过；
 > 界面与快捷键相关的若干 bug 已修完（73 用例全绿）。`sources = {windows: 17, mac: 18}`。**
 >
 > 👉 **下一步：macOS 端安装 dualswitch 本体并授权辅助功能（T3）。** Windows 端已可交付使用：
-> 双击 `dist\dualswitch.exe` 即进主界面，右键托盘可退出。
+> 双击 `dist\dualswitch\dualswitch.exe` 即进主界面（整个文件夹一起用），右键托盘可退出。
 
 ---
 
@@ -161,23 +161,24 @@ Mac → Windows : Set 0x60=17 → 回读确认 17，调用耗时 64.4ms
 5. `dualswitch run` —— 菜单栏出现图标，右 Option + Space 应能切回 Windows
 6. 验证：Mac 按右 Option + Space → 切到 Windows；Windows 按 Alt + Space → 切回 Mac
 
-### T4 ✅ Windows 打包实测 —— 已通过（2026-10-17 19:40）
+### T4 ✅ Windows 打包实测 —— 已通过（2026-10-17 20:30，采用 onedir）
 
 ```
 powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
-# 或直接跑等价的 PyInstaller 命令（脚本里已把路径改成 $root\ 绝对形式）
+# 默认 --onedir；确目标机器没有 Temp 拦截问题时可用 -OneFile 换回单文件
 ```
 
 | 项 | 结果 |
 |---|---|
-| 产物 | `dist\dualswitch.exe`，56MB 单文件，`--windowed` 无控制台 |
+| 产物 | `dist\dualswitch\` 文件夹（exe 5.2MB + `_internal`，共 138MB），`--windowed` 无控制台 |
 | 版本信息 | 产品名「屏幕切换」，文件详情页可识别 |
 | `probe` | 正常枚举 AOC2790、VCP 0x60 = 17 |
-| `ui --dry-run` | 窗口/托盘正常，任务管理器进程名 `dualswitch`，窗口标题「屏幕切换」 |
+| `ui --dry-run` | 窗口/托盘正常，进程名 `dualswitch`、窗口标题「屏幕切换」 |
+| 可靠性 | onedir 连续启动 8/8 成功；**onefile 双击约 3 成失败**（Temp 被拦截），已弃用 |
 | 双击运行 | 不带参数默认进 `ui`（见 `packaging/entrypoint.py`） |
 
 打包踩坑：`--specpath build` 会把 `--add-data` / `--version-file` / `--icon` 的相对路径
-基准改到 `build\`，必须用 `$root\` 绝对路径；另外 `screen-switch.ico` 需在
+基准改到 `build\`，必须用 `$root\` 绝对路径；`screen-switch.ico` 需在
 `src/dualswitch/ui/assets/` 里放一份，否则打包后 `theme.asset()` 找不到。
 macOS 侧 `packaging/macos/build.sh` 仍未实测。
 
@@ -249,6 +250,15 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-17 20:30 **Windows 打包改用 onedir（onefile 在该机型不可用）**。
+  onefile 启动时要往 `%TEMP%` 解压 `_MEIxxxxxx`，本机实测**双击约有 3 成概率报
+  「Could not create temporary directory!」**（连续点 start 5 次失败 2 次；从脚本启动反而不复现，
+  判定为系统镜像 / 安全软件对交互启动的进程间歇性拦截 Temp 建目录）。
+  改为默认 `--onedir`：产物是 `dist\dualswitch\` 整个文件夹（exe 5.2MB + `_internal`，共 138MB），
+  启动不解压 → 从根上规避，启动也更快；8/8 连续启动全部成功。
+  `build.ps1` 增加 `-OneFile` 开关（默认 onedir），产物提示同步更新；
+  附带 `dist\使用说明.txt`（双击用法、配置/日志路径、任务管理器进程名、安装方式）。
+  原 onefile 产物 `dist\dualswitch.exe` 已删除，避免和 `dist\dualswitch\dualswitch.exe` 混淆。
 - 2026-10-17 19:40 **Windows 打包实测通过，产出单文件 exe（T4 完成）**。
   `packaging/entrypoint.py` 改为：**不带参数 = 直接进图形界面**（双击即用），
   带参数按 CLI 语义执行；windowed 模式下没有控制台，因此启动异常会写日志 +
@@ -260,6 +270,7 @@ dualswitch/
   实测：`dist/dualswitch.exe` 56MB 单文件，`probe` 正常读出 AOC2790 / VCP 0x60 = 17；
   `ui --dry-run` 起窗口，任务管理器里进程名为 `dualswitch`、窗口标题「屏幕切换」，与源码方式
   （`pythonw.exe -m dualswitch ui`）区分明显。
+  ⚠️ 该 onefile 版本在「双击启动」场景下不稳定（见上一条），已被 onedir 版取代。
 - 2026-10-17 19:20 **托盘切换改为左键双击**。
   单击误触率太高：`_on_tray_activated` 只认 `QSystemTrayIcon.DoubleClick`，单击不做任何事。
   托盘提示补「（双击图标切换）」，避免单击没反应被当成坏了；右键菜单不变。

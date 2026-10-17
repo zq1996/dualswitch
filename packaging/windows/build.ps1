@@ -1,11 +1,16 @@
-# 打包 Windows 单文件可执行程序
+# 打包 Windows 可执行程序
 # 用法（在项目根目录执行）：
 #   powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
-# 产物：dist\dualswitch.exe
+# 产物：dist\dualswitch\dualswitch.exe（整个文件夹一起拷走 / 建快捷方式）
+#
+# 默认 --onedir：启动不需要往 %TEMP% 解压，本机实测 onefile 双击有大约三成概率报
+# "Could not create temporary directory!"（系统镜像/安全软件间歇性拦截 Temp 建目录）。
+# 只有确认目标机器没有这个问题时，才用 -OneFile 换成单文件。
 
 param(
     [string]$Python = "",
-    [switch]$Console
+    [switch]$Console,
+    [switch]$OneFile
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,11 +34,13 @@ Write-Host "使用 Python: $Python"
 & $Python -m pip install --quiet --upgrade pyinstaller pystray pillow PySide6-Essentials
 
 $mode = if ($Console) { "--console" } else { "--windowed" }
+$layout = if ($OneFile) { "--onefile" } else { "--onedir" }
+$target = if ($OneFile) { "$root\dist\dualswitch.exe" } else { "$root\dist\dualswitch\dualswitch.exe" }
 
 & $Python -m PyInstaller `
     --noconfirm --clean `
     --name dualswitch `
-    --onefile `
+    $layout `
     $mode `
     --paths "$root\src" `
     --icon "$root\design\icon\screen-switch.ico" `
@@ -49,9 +56,9 @@ $mode = if ($Console) { "--console" } else { "--windowed" }
 if ($LASTEXITCODE -ne 0) { throw "打包失败" }
 
 Write-Host ""
-Write-Host "产物：$root\dist\dualswitch.exe"
+Write-Host "产物：$target"
 Write-Host "下一步："
-Write-Host "  .\dist\dualswitch.exe probe      # 只读探测，不切屏"
-Write-Host "  .\dist\dualswitch.exe run        # 常驻运行（托盘）"
-Write-Host "  .\dist\dualswitch.exe ui         # 图形界面"
-Write-Host "  powershell -ExecutionPolicy Bypass -File packaging\windows\install_autostart.ps1 -Exe .\dist\dualswitch.exe"
+Write-Host "  $target probe      # 只读探测，不切屏"
+Write-Host "  $target run        # 常驻运行（托盘）"
+Write-Host "  $target ui         # 图形界面（不带参数默认就是这个）"
+Write-Host "  powershell -ExecutionPolicy Bypass -File packaging\windows\install_autostart.ps1 -Exe `"$target`""
