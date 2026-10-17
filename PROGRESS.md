@@ -1,9 +1,11 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-17 16:30
-> 一句话状态：**双向切屏已真机闭环。`sources = {windows: 17, mac: 18}`，Windows 侧热键、DDC、回读、托盘全部实测通过；macOS 侧还需装 dualswitch 本体并授权辅助功能。**
+> 最后更新：2026-10-17 19:40
+> 一句话状态：**双向切屏已真机闭环，Windows 侧热键 / DDC / 回读 / 托盘 / 图形界面 / 单文件 exe 全部实测通过；
+> 界面与快捷键相关的若干 bug 已修完（73 用例全绿）。`sources = {windows: 17, mac: 18}`。**
 >
-> 👉 **下一步：macOS 侧安装运行（T3）。** 双端切屏链路本身已经验证完毕。
+> 👉 **下一步：macOS 端安装 dualswitch 本体并授权辅助功能（T3）。** Windows 端已可交付使用：
+> 双击 `dist\dualswitch.exe` 即进主界面，右键托盘可退出。
 
 ---
 
@@ -37,7 +39,7 @@ PYTHONPATH=src "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/defaul
 | 3 | DDC 后端（Win/macOS/command/mock） | ✅ 完成（Win 真机） | `probe` 输出 `MONITOR\AOC2790`、`VCP 0x60 = 17` |
 | 4 | 全局热键（Win register + hook，macOS CGEventTap） | ✅ 完成（Win 真机） | `tools/e2e_hotkey.py` 两种模式均 OK |
 | 5 | 编排 / 异步回读 / 托盘 / CLI | ✅ 完成 | 38 个 app+ddc 用例；托盘冒烟通过 |
-| 6 | 打包与开机自启 | ✅ 脚本就绪 | `packaging/` 下 6 个脚本，未实际执行打包 |
+| 6 | 打包与开机自启 | ✅ Windows 已实测 | `packaging/` 下脚本齐全；`dist\dualswitch.exe`（56MB 单文件）已构建并验证 |
 | 7 | 文档 | ✅ 完成 | README / RESEARCH / VERIFY / TROUBLESHOOTING / 本文件 |
 | 8 | 真机切屏验收 | ✅ **双向闭环** | `Set 18`→Mac（回读确认 64ms）；`Set 17`→Windows（回读确认 64ms）；热键真实触发也已验证 |
 | 9 | macOS 实机验证 | ✅ 切屏已验证 | `m1ddc set input 17` 成功；USB-C 真实值 = 18（需求文档的 27 是错的） |
@@ -159,9 +161,25 @@ Mac → Windows : Set 0x60=17 → 回读确认 17，调用耗时 64.4ms
 5. `dualswitch run` —— 菜单栏出现图标，右 Option + Space 应能切回 Windows
 6. 验证：Mac 按右 Option + Space → 切到 Windows；Windows 按 Alt + Space → 切回 Mac
 
-### T4（可选）打包实测
-`packaging/windows/build.ps1` 与 `packaging/macos/build.sh` 只写了脚本，没有实际跑过 PyInstaller。
-首次打包可能需要在 `--hidden-import` 里补模块（pystray 后端、PIL 插件）。
+### T4 ✅ Windows 打包实测 —— 已通过（2026-10-17 19:40）
+
+```
+powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
+# 或直接跑等价的 PyInstaller 命令（脚本里已把路径改成 $root\ 绝对形式）
+```
+
+| 项 | 结果 |
+|---|---|
+| 产物 | `dist\dualswitch.exe`，56MB 单文件，`--windowed` 无控制台 |
+| 版本信息 | 产品名「屏幕切换」，文件详情页可识别 |
+| `probe` | 正常枚举 AOC2790、VCP 0x60 = 17 |
+| `ui --dry-run` | 窗口/托盘正常，任务管理器进程名 `dualswitch`，窗口标题「屏幕切换」 |
+| 双击运行 | 不带参数默认进 `ui`（见 `packaging/entrypoint.py`） |
+
+打包踩坑：`--specpath build` 会把 `--add-data` / `--version-file` / `--icon` 的相对路径
+基准改到 `build\`，必须用 `$root\` 绝对路径；另外 `screen-switch.ico` 需在
+`src/dualswitch/ui/assets/` 里放一份，否则打包后 `theme.asset()` 找不到。
+macOS 侧 `packaging/macos/build.sh` 仍未实测。
 
 ### T5（可选）24h 稳定性
 需求 §5 要求「7×24 无内存泄漏，以实际观察为准」。未做，建议挂一晚后看任务管理器。
@@ -201,15 +219,16 @@ dualswitch/
 │       ├── base.py              热键解析、VK/mac keycode 映射
 │       ├── windows.py           RegisterHotKey + 低级钩子
 │       ├── macos.py             Quartz CGEventTap
-│       └── mock.py              ManualHotkeyBackend
-├── tests/                       60 用例，无需硬件
+│       ├── mock.py              ManualHotkeyBackend
+│       └── ...
+├── tests/                       73 用例，无需硬件
 ├── tools/
 │   ├── bench_readonly.py        只读耗时测量
 │   ├── e2e_hotkey.py            端到端热键（dry-run，不切屏）
 │   ├── scan_input_windows.py    VCP 0x60 候选值扫描（Windows，带自动切回）
 │   ├── diag_macos.sh            macOS DDC 诊断（架构/外接屏/VCP 读值/亮度写入）
 │   └── verify_m1ddc.sh          macOS 强制验证脚本
-├── packaging/                   Windows/macOS 打包 + 自启
+├── packaging/                   Windows/macOS 打包 + 自启（Windows 已实测出 exe）
 └── docs/                        RESEARCH / VERIFY-M1DDC / TROUBLESHOOTING
 ```
 
@@ -230,6 +249,17 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-17 19:40 **Windows 打包实测通过，产出单文件 exe（T4 完成）**。
+  `packaging/entrypoint.py` 改为：**不带参数 = 直接进图形界面**（双击即用），
+  带参数按 CLI 语义执行；windowed 模式下没有控制台，因此启动异常会写日志 +
+  `MessageBoxW` 弹窗，不再「双击没反应」。
+  新增 `packaging/windows/version_info.txt`（产品名「屏幕切换」，任务管理器/文件详情页可直接认出来）。
+  `screen-switch.ico` 补进 `src/dualswitch/ui/assets/`（原来只在 design/icon，打包后 theme.asset 找不到）。
+  `build.ps1` 的所有路径参数改成 `$root\\` 绝对形式——**`--specpath build` 会把 `--add-data` /
+  `--version-file` 的相对路径基准改到 build 目录**（第一次、第二次构建都栽在这）。
+  实测：`dist/dualswitch.exe` 56MB 单文件，`probe` 正常读出 AOC2790 / VCP 0x60 = 17；
+  `ui --dry-run` 起窗口，任务管理器里进程名为 `dualswitch`、窗口标题「屏幕切换」，与源码方式
+  （`pythonw.exe -m dualswitch ui`）区分明显。
 - 2026-10-17 19:20 **托盘切换改为左键双击**。
   单击误触率太高：`_on_tray_activated` 只认 `QSystemTrayIcon.DoubleClick`，单击不做任何事。
   托盘提示补「（双击图标切换）」，避免单击没反应被当成坏了；右键菜单不变。
