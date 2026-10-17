@@ -27,6 +27,7 @@ macOS 与 Windows 的两个关键差异（都是实测踩出来的）：
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -39,6 +40,17 @@ _DISPLAY_LINE = re.compile(r"^\[(?P<index>\d+)\]\s*(?P<name>.*?)\s*(?:\((?P<uuid
 
 # 内置屏 / 无名的屏：m1ddc 里名字是 (null)，没有 DDC 通道
 _PLACEHOLDER_NAMES = {"", "null", "(null)", "none"}
+
+# Finder 双击 .app 启动时 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，
+# brew 装的 m1ddc 不在里面 —— shutil.which 直接找不到，表现为「切换失败：找不到 m1ddc」。
+# 把这些常见位置作为兜底，同时把它们补进子进程的 PATH（m1ddc 自己可能调用其他工具）。
+_EXTRA_BIN_DIRS = (
+    "/opt/homebrew/bin",   # Apple Silicon 的 brew
+    "/usr/local/bin",      # Intel 的 brew
+    "/opt/local/bin",      # MacPorts
+    "~/.local/bin",
+    "~/bin",
+)
 
 
 class M1ddcBackend(BaseBackend):
@@ -66,10 +78,31 @@ class M1ddcBackend(BaseBackend):
         found = shutil.which(self.m1ddc_path)
         if found:
             return found
+        # PATH 里没有（双击 .app 启动的典型情况）：到常见安装目录里找同名文件
+        name = Path(self.m1ddc_path).name
+        for folder in _EXTRA_BIN_DIRS:
+            folder_path = Path(folder).expanduser()
+            candidate = folder_path / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        searched = "、".join(_EXTRA_BIN_DIRS)
         raise DDCError(
             f"找不到 m1ddc 可执行文件（{self.m1ddc_path}）。"
+            f"已查找 PATH 与 {searched}。"
             "请先安装：brew install m1ddc，或在配置中把 m1ddc_path 指到绝对路径。"
         )
+
+    def _env(self) -> dict[str, str]:
+        """给子进程补上常见 bin 目录，避免 Finder 启动时 PATH 太窄。"""
+        env = os.environ.copy()
+        extra = [str(Path(d).expanduser()) for d in _EXTRA_BIN_DIRS]
+        current = env.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        parts = [p for p in current.split(os.pathsep) if p]
+        for folder in extra:
+            if folder not in parts and Path(folder).is_dir():
+                parts.insert(0, folder)
+        env["PATH"] = os.pathsep.join(parts)
+        return env
 
     def _run(self, args: list[str], display_args: list[str] | None = None) -> str:
         binary = self._resolve_binary()
@@ -78,7 +111,9 @@ class M1ddcBackend(BaseBackend):
             cmd += display_args
         cmd += args
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self.timeout, env=self._env()
+            )
         except subprocess.TimeoutExpired as exc:
             raise DDCError(f"m1ddc 调用超时（{self.timeout}s）: {' '.join(cmd)}") from exc
         except OSError as exc:

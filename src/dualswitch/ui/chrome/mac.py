@@ -158,15 +158,30 @@ class MacStatusItem:
 
         self._item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
         self._item.retain()
+        # 某些情况下系统会把新建的状态项当作隐藏（尤其启动早期创建时），显式打开一次
+        try:
+            self._item.setVisible_(True)
+        except Exception:  # pragma: no cover - 老系统没有该方法
+            pass
         self._button = self._item.button()
 
         image = NSImage.alloc().initWithContentsOfFile_(str(icon_path))
-        if image is not None:
+        image_ok = bool(image is not None and image.isValid())
+        if image_ok:
             image.setSize_(NSMakeSize(18, 18))
             image.setTemplate_(True)          # 随菜单栏明暗自动反色
             self._button.setImage_(image)
         else:  # pragma: no cover - 资源缺失时至少还能点
             self._button.setTitle_("\u21c4")
+        # 排障用：菜单栏图标「看不见」时，先看这行日志判断是没建出来还是建了图不显示
+        log.info(
+            "菜单栏状态项：图标=%s 有效=%s 长度=%s 宽=%s 可见=%s",
+            icon_path,
+            image_ok,
+            self._item.length(),
+            getattr(self._button.bounds().size, "width", "?"),
+            self._item.isVisible(),
+        )
 
         # 左右键都回调进来，自己判断是「切换」还是「弹菜单」
         from AppKit import NSEventMaskLeftMouseUp, NSEventMaskRightMouseUp
@@ -277,9 +292,13 @@ def build_status_item(icon, on_click: Callable[[], None]):  # noqa: ANN001
 
     if macos_available():
         try:
-            return MacStatusItem(theme.asset("menubar.png"), on_click)
+            item = MacStatusItem(theme.asset("menubar.png"), on_click)
+            log.info("状态项实现：原生 NSStatusBar（菜单栏）")
+            return item
         except Exception:  # pragma: no cover - 资源或 AppKit 异常都不该让程序起不来
-            log.exception("菜单栏状态项创建失败，退回收托盘")
+            log.exception("菜单栏状态项创建失败，退回 Qt 托盘")
+    else:  # pragma: no cover - 依赖缺失
+        log.warning("AppKit 不可用，退回 Qt 托盘（QSystemTrayIcon）")
     from .win import QtStatusItem
 
     return QtStatusItem(icon, on_click)
