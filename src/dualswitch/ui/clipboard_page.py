@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPixmap
+from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 
 from ..sync.engine import ClipRecord
 from . import theme
-from .widgets import ElidedLabel, StatusBar
+from .widgets import ElidedLabel, StatusBar, logo_pixmap
 
 HEADER_H = 40
 ROW_H = 52
@@ -84,8 +84,18 @@ def _source_text(rec: ClipRecord) -> str:
     return "本机"
 
 
+def _blend(a: QColor, b: QColor, t: float) -> QColor:
+    """按 t∈[0,1] 在两种颜色间线性插值（hover 背景过渡用）。"""
+    t = max(0.0, min(1.0, t))
+    return QColor(
+        int(a.red() + (b.red() - a.red()) * t),
+        int(a.green() + (b.green() - a.green()) * t),
+        int(a.blue() + (b.blue() - a.blue()) * t),
+    )
+
+
 class Thumb(QWidget):
-    """36×36 缩略图：图片画缩放后的图，文本画等宽 `T`。"""
+    """36×36 缩略图：图片画缩放后的图，文本画本机系统图标。"""
 
     def __init__(self, record: ClipRecord, parent=None):
         super().__init__(parent)
@@ -98,6 +108,9 @@ class Thumb(QWidget):
                 self._pix = QPixmap.fromImage(
                     image.scaled(36, 36, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
                 )
+        elif record.kind == "text":
+            # 文本记录没有图：画一个浅底 + 本机系统 logo（Mac→，Windows→）
+            self._pix = logo_pixmap(theme.SYSTEM_LOGO, 22)
 
     def paintEvent(self, event):  # noqa: N802
         p = QPainter(self)
@@ -106,16 +119,17 @@ class Thumb(QWidget):
         path = QPainterPath()
         path.addRoundedRect(rect, 7, 7)
         p.setClipPath(path)
+        p.fillRect(rect, QColor("#F4F6FA"))
         if self._pix is not None:
-            p.drawPixmap(rect, self._pix)
-        else:
-            p.fillRect(rect, QColor("#EEF1F7"))
-            f = QFont(theme.FONT_FAMILIES[0])
-            f.setPixelSize(15)
-            f.setBold(True)
-            p.setFont(f)
-            p.setPen(QColor("#7C8698"))
-            p.drawText(rect, Qt.AlignCenter, "T")
+            if self._kind == "image":
+                # 图片铺满整个缩略图
+                p.drawPixmap(rect, self._pix)
+            else:
+                # 系统图标居中，不拉伸
+                target = self._pix
+                x = rect.x() + (rect.width() - target.width()) // 2
+                y = rect.y() + (rect.height() - target.height()) // 2
+                p.drawPixmap(x, y, target)
         p.end()
 
 
@@ -137,7 +151,11 @@ class StatePill(QLabel):
 
 
 class ClipRow(QFrame):
-    """一条记录：缩略图 + 主行 + 副行 + 状态药丸。"""
+    """一条记录：缩略图 + 主行 + 副行 + 状态药丸。
+
+    背景自绘：hover 用 QPropertyAnimation 平滑淡入淡出（不再瞬切 setStyleSheet），
+    选中的浅蓝底 + 左侧主色条是明确点击，保持瞬时、不掺动画。
+    """
 
     clicked = Signal(str)
     activated = Signal(str)      # 双击
@@ -150,8 +168,12 @@ class ClipRow(QFrame):
         self.setObjectName("clipRow")
         self.setFixedHeight(ROW_H)
         self.setCursor(Qt.PointingHandCursor)
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_StyledBackground, False)
         self._selected = False
+        self._hover = 0.0
+        self._hover_anim = QPropertyAnimation(self, b"hover", self)
+        self._hover_anim.setDuration(140)
+        self._hover_anim.setEasingCurve(QEasingCurve.OutCubic)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 8, 10, 8)
@@ -192,7 +214,26 @@ class ClipRow(QFrame):
         self._del.clicked.connect(lambda: self.deleteRequested.emit(self.record.id))
         lay.addWidget(self._del, 0, Qt.AlignTop)
 
-        self._apply_style()
+    # hover 动画属性（QPropertyAnimation 驱动）
+    def _get_hover(self) -> float:
+        return self._hover
+
+    def _set_hover(self, value: float) -> None:
+        self._hover = float(value)
+        self.update()
+
+    hover = Property(float, _get_hover, _set_hover)
+
+    def paintEvent(self, event):  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        r = self.rect()
+        if self._selected:
+            p.fillRect(r, QColor("#F3F7FF"))
+            p.fillRect(0, 0, 3, r.height(), QColor(theme.ACCENT))
+        elif self._hover > 0.0:
+            p.fillRect(r, _blend(QColor("#FFFFFF"), QColor("#F8FAFD"), self._hover))
+        p.end()
 
     @staticmethod
     def _title(rec: ClipRecord) -> str:
@@ -209,27 +250,23 @@ class ClipRow(QFrame):
 
     # ---- 交互 ----
     def set_selected(self, selected: bool) -> None:
+        if self._selected == selected:
+            return
         self._selected = selected
-        self._apply_style()
-
-    def _apply_style(self) -> None:
-        if self._selected:
-            self.setStyleSheet(
-                "QFrame#clipRow{background:#F3F7FF;border-left:2.5px solid "
-                f"{theme.ACCENT};}}"
-            )
-        else:
-            self.setStyleSheet("QFrame#clipRow{background:transparent;}")
+        self.update()
 
     def enterEvent(self, event):  # noqa: N802
         self._del.setVisible(True)
-        if not self._selected:
-            self.setStyleSheet("QFrame#clipRow{background:#F8FAFD;}")
+        self._hover_anim.stop()
+        self._hover_anim.setEndValue(1.0)
+        self._hover_anim.start()
         super().enterEvent(event)
 
     def leaveEvent(self, event):  # noqa: N802
         self._del.setVisible(False)
-        self._apply_style()
+        self._hover_anim.stop()
+        self._hover_anim.setEndValue(0.0)
+        self._hover_anim.start()
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):  # noqa: N802
@@ -247,19 +284,22 @@ class ClipRow(QFrame):
 
 
 class PreviewPane(QFrame):
-    """固定高度的预览区：图片等比缩放，文本可选中。"""
+    """固定高度的预览区：图片等比缩放，文本可选中。
+
+    图片可双击放大（发出 `imageActivated`，由页面层弹查看器）。
+    """
+
+    imageActivated = Signal(object)   # ClipRecord
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("previewPane")
         self.setFixedHeight(PREVIEW_H)
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(
-            "QFrame#previewPane{background:#FBFCFE;border-top:1px solid #EEF1F6;"
-            "border-bottom:1px solid #EEF1F6;}"
-        )
+        self.setStyleSheet("QFrame#previewPane{background:#FAFBFD;border-top:1px solid #EEF1F6;}")
+        self._current: ClipRecord | None = None
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 6, 12, 8)
+        lay.setContentsMargins(12, 8, 12, 8)
         lay.setSpacing(4)
 
         head = QHBoxLayout()
@@ -275,7 +315,10 @@ class PreviewPane(QFrame):
 
         self.image = QLabel()
         self.image.setAlignment(Qt.AlignCenter)
+        self.image.setCursor(Qt.PointingHandCursor)
         self.image.setStyleSheet("background:transparent;")
+        lay.addWidget(self.image, 1)
+
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
         self.text.setStyleSheet(
@@ -284,15 +327,22 @@ class PreviewPane(QFrame):
             "font-family:'SF Mono','Menlo',monospace;}"
         )
         self.text.setVisible(False)
-        lay.addWidget(self.image, 1)
         lay.addWidget(self.text, 1)
 
+    def mouseDoubleClickEvent(self, event):  # noqa: N802
+        if event.button() == Qt.LeftButton and self._current is not None and self._current.is_image:
+            self.imageActivated.emit(self._current)
+            return
+        super().mouseDoubleClickEvent(event)
+
     def show_record(self, rec: ClipRecord | None) -> None:
+        self._current = rec
         if rec is None:
             self.caption.setText("预览")
             self.hint.setText("选中一条看内容")
             self.image.clear()
             self.image.setVisible(True)
+            self.image.setCursor(Qt.ArrowCursor)
             self.text.setVisible(False)
             return
         if rec.png is not None:
@@ -303,6 +353,7 @@ class PreviewPane(QFrame):
                 )
                 self.image.setPixmap(pix)
                 self.image.setVisible(True)
+                self.image.setCursor(Qt.PointingHandCursor)
                 self.text.setVisible(False)
                 self.caption.setText(f"预览  图片 · {_human_size(rec.size)}")
                 self.hint.setText("双击查看原图")
@@ -312,6 +363,115 @@ class PreviewPane(QFrame):
         self.text.setPlainText(rec.text or "")
         self.caption.setText(f"预览  文本 · {_human_size(rec.size)}")
         self.hint.setText("可直接选中文本")
+
+
+class ImageViewer(QWidget):
+    """双击预览图后的原图查看浮层：覆盖整个剪贴板页，点任意处或 Esc 关闭。
+
+    不是独立窗口（遵守「整个应用只有一个窗口」的约定），而是页面里的一个透明
+    遮罩层。原图在遮罩内等比缩放到可用空间，双击放大到 100% 后可用滚动条细看。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("imageViewer")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "QWidget#imageViewer{background:rgba(17,21,28,0.82);}"
+            "QLabel#viewerImg{background:transparent;}"
+            "QLabel#viewerHint{color:#C9D2E0;font-size:11px;}"
+        )
+        self.setFocusPolicy(Qt.StrongFocus)
+        self._zoom = False
+        self._pix: QPixmap | None = None
+        self._close_timer = QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.setInterval(250)
+        self._close_timer.timeout.connect(self.hide)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(8)
+
+        self.hint = QLabel("点击关闭 · 双击切换 100%/适应")
+        self.hint.setObjectName("viewerHint")
+        self.hint.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.hint)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet(
+            "QScrollArea{background:transparent;border:none;}"
+            "QScrollBar:horizontal,QScrollBar:vertical{width:8px;background:transparent;}"
+            "QScrollBar::handle:horizontal,QScrollBar::handle:vertical{background:#4A5468;"
+            "border-radius:4px;min-width:18px;min-height:18px;}"
+            "QScrollBar::add-line,QScrollBar::sub-line{height:0;width:0;}"
+        )
+        self.img = QLabel()
+        self.img.setObjectName("viewerImg")
+        self.img.setAlignment(Qt.AlignCenter)
+        self.scroll.setWidget(self.img)
+        lay.addWidget(self.scroll, 1)
+
+    def show_image(self, rec: ClipRecord) -> None:
+        if rec.png is None:
+            return
+        image = QImage()
+        if not image.loadFromData(rec.png, "PNG"):
+            return
+        self._close_timer.stop()
+        self._pix = QPixmap.fromImage(image)
+        self._zoom = False
+        self.setGeometry(self.parent().rect())
+        self.show()
+        self.raise_()
+        self._apply_scale()
+        self.setFocus()
+
+    def _apply_scale(self) -> None:
+        if self._pix is None:
+            return
+        if self._zoom:
+            self.img.setPixmap(self._pix)
+            self.img.adjustSize()
+            self.hint.setText("点击关闭 · 双击回到适应窗口（可滚动）")
+        else:
+            avail = self.scroll.viewport().size()
+            scaled = self._pix.scaled(
+                max(1, avail.width() - 4),
+                max(1, avail.height() - 4),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            self.img.setPixmap(scaled)
+            self.img.adjustSize()
+            self.hint.setText("点击关闭 · 双击查看 100%")
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if not self._zoom:
+            self._apply_scale()
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            # 延迟关闭：若紧接着是双击，则让双击接管（切缩放）
+            self._close_timer.start()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._close_timer.stop()
+            self._zoom = not self._zoom
+            self._apply_scale()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() == Qt.Key_Escape:
+            self.hide()
+            return
+        super().keyPressEvent(event)
 
 
 class ClipboardPage(QWidget):
@@ -420,26 +580,32 @@ class ClipboardPage(QWidget):
         self.preview = PreviewPane()
         outer.addWidget(self.preview)
 
-        # 操作栏
+        # 原图查看浮层：覆盖在页面上，不另开窗口
+        self.viewer = ImageViewer(self)
+        self.viewer.setVisible(False)
+        self.preview.imageActivated.connect(self.viewer.show_image)
+
+        # 操作栏（样式用全局 QSS 的 #clipBar：裸 setStyleSheet 会级联到子按钮，
+        # 把 clipPrimary 的渐变盖成白底白字）
         bar = QWidget()
+        bar.setObjectName("clipBar")
         bar.setFixedHeight(ACTION_H)
         bar.setAttribute(Qt.WA_StyledBackground, True)
-        bar.setStyleSheet("background:#FFFFFF;border-top:1px solid #EEF1F6;")
         bl = QHBoxLayout(bar)
         bl.setContentsMargins(12, 8, 12, 8)
         bl.setSpacing(8)
         self.btn_copy = QPushButton("复制到本机")
+        self.btn_copy.setObjectName("clipPrimary")
+        self.btn_copy.setFixedHeight(30)
         self.btn_retry = QPushButton("重发")
+        self.btn_retry.setObjectName("clipBtn")
+        self.btn_retry.setFixedHeight(30)
         for btn in (self.btn_copy, self.btn_retry):
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setObjectName("ghost")
         self.btn_clear = QPushButton("清空记录")
+        self.btn_clear.setObjectName("clipDanger")
+        self.btn_clear.setFixedHeight(30)
         self.btn_clear.setCursor(Qt.PointingHandCursor)
-        self.btn_clear.setStyleSheet(
-            "QPushButton{border:none;background:transparent;color:#A82B2B;"
-            "font-size:11.5px;padding:0 6px;}"
-            "QPushButton:hover{text-decoration:underline;}"
-        )
         self.btn_copy.clicked.connect(self._copy_selected)
         self.btn_retry.clicked.connect(self._retry_selected)
         self.btn_clear.clicked.connect(self._clear)
@@ -573,7 +739,10 @@ class ClipboardPage(QWidget):
     def keyPressEvent(self, event):  # noqa: N802
         key = event.key()
         if key == Qt.Key_Escape:
-            self.backRequested.emit()
+            if self.viewer.isVisible():
+                self.viewer.hide()
+            else:
+                self.backRequested.emit()
             return
         if key in (Qt.Key_Up, Qt.Key_Down):
             self._move(key == Qt.Key_Down)
@@ -603,3 +772,9 @@ class ClipboardPage(QWidget):
         row = self._rows.get(ids[index])
         if row is not None:
             self.scroll.ensureWidgetVisible(row, 0, 8)
+
+    # ------------------------------------------------------------------ 浮层
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        # 原图查看浮层覆盖整个页面
+        self.viewer.setGeometry(self.rect())

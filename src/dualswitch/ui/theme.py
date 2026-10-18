@@ -52,6 +52,8 @@ RADIUS_CTRL = 10
 
 # 平台外观（窗口外框 / 标题栏 / 字号 / 字体）
 NATIVE_CHROME = _C.NATIVE_CHROME
+# 文本记录缩略图用的「本机系统图标」：Mac → apple，Windows → windows
+SYSTEM_LOGO = "apple" if _C.NAME == "macos" else "windows"
 TITLEBAR_H = 0 if NATIVE_CHROME else 44
 BODY_TOP = _C.BODY_TOP
 FONT_FAMILIES = list(_P.font_families)
