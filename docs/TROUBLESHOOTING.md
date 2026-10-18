@@ -18,6 +18,26 @@ dualswitch doctor
 
 日志位置：`%APPDATA%\dualswitch\logs\dualswitch.log`（macOS：`~/Library/Application Support/dualswitch/logs/`）。
 
+### macOS 专用：先跑现场诊断
+
+```bash
+python tools/diag_macos_hotkey.py            # 实时看：按一次热键
+python tools/diag_macos_hotkey.py --simulate # 不用真按，自己发一个合成热键
+```
+
+结尾会打印 `收到事件 N 个 / 命中 M 次 / tap 被禁用 X 次 / 回调异常 Y 次`，按这个判断：
+
+| 现象 | 含义 | 处理 |
+|---|---|---|
+| 一个事件都没收到 | tap 没生效：没授权 / 被安全软件拦 / 进程挂起 | 系统设置 → 隐私与安全性 → 辅助功能，勾选「屏幕切换」（列表里显示 `dualswitch`） |
+| 收到事件但命中 0 次 | 修饰键不匹配 | 左 Option ≠ 右 Option：配置是 `ralt+space` 就只认右边；想两个都认改成 `alt+space` |
+| `tap 被禁用` 次数一直在涨 | 回调里有东西在拖慢（系统 1s 就判定卡住） | 现在会自动重开；看日志有没有别的异常 |
+| 进程是老的 | 改了代码但没重打包 | `build.sh` + `install-app.sh`，别只重启 |
+
+> 2026-10-18 修过一次「按一百次一次都不响、日志却很干净」：`CGEventGetIntegerValueField(event,
+> kCGKeyboardEventFlags)` 这个字段不存在（pyobjc 里连常量都没有），每次回调抛 `AttributeError`
+> 被兜底 `except` 吞掉。现在一律用 `CGEventGetFlags()`，回调异常也会记日志。
+
 ## 2. 日志显示「已发送切换指令」但屏幕没动
 
 1. **VCP 值不对**。`dualswitch probe` 看当前值，然后换一个值试：

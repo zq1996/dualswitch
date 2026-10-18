@@ -164,12 +164,18 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\install_autostart.ps1
 **macOS**
 
 ```bash
-./packaging/macos/build.sh          # 生成 dist/dualswitch.app
-# 推荐：把 .app 加入 系统设置 → 通用 → 登录项
-# 或者用 launchd：
-./packaging/macos/install.sh "$(which python3)"
+./packaging/macos/build.sh              # 打包装箱，生成 dist/dualswitch.app
+./packaging/macos/install-app.sh        # 装进 /Applications/屏幕切换.app
+./packaging/macos/install-app.sh --login-item   # 顺便加进登录项（开机自启）
 ```
 
+> `.app` 就是标准的 macOS 应用，拷到「应用程序」文件夹即可，和 App Store 下的应用
+> 在系统眼里没有区别（区别只在签名：本机用自签名证书 `dualswitch Self Signed`，
+> 没有 Apple 公证，**换一台 Mac 打开会被告警拦住**，需要右键 → 打开）。
+> 换路径不影响辅助功能授权（授权认的是「签名身份 + bundle id」，不是路径）。
+>
+> 从终端跑源码时用 launchd 那条路：`./packaging/macos/install.sh "$(which python3)"`。
+> launchd 拉起的是非交互进程，菜单栏图标可能不显示，日常用还是装 .app。
 > macOS 用 launchd 拉起时是非交互进程，菜单栏图标可能不显示；想要稳定图标和
 > 稳定的辅助功能授权身份，用 `.app` + 登录项。
 
@@ -179,7 +185,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\install_autostart.ps1
 
 | 验收项 | 状态 | 证据 |
 |---|---|---|
-| 1. 双端热键切屏，2 秒内出画面 | ✅ Windows→Mac 已真机验证（热键触发后 VCP 变 18，画面切到 Mac）；Mac→Windows 已验证 `set input 17` 有效；macOS 端热键待装 | `tools/e2e_hotkey.py` + 真机 |
+| 1. 双端热键切屏，2 秒内出画面 | ✅ 两端均已真机验证 | Windows→Mac：热键触发后 VCP 变 18；Mac→Windows：`⌥ Space` → `m1ddc set input 17`（用户实测确认） | `tools/e2e_hotkey.py` + 真机 |
 | 2. 触发到 Set 发出 ≤ 200ms | ✅ 实测 56–64ms（Set 调用本身），枚举 2ms | 真机日志 + `tools/bench_readonly.py` |
 | 3. 回读静默通过 / 不确认时只记日志、不崩溃 | 已覆盖 | `tests/test_app.py` |
 | 4. 快捷键可配置并生效 | 已满足 | `tests/test_config.py`、`tests/test_hotkey.py` |
@@ -201,11 +207,11 @@ dualswitch/
 │   ├── cli.py             命令行
 │   ├── ddc/               windows.py(dxva2) / macos.py(m1ddc) / command.py / mock.py
 │   └── hotkey/            windows.py(RegisterHotKey+低级钩子) / macos.py(CGEventTap)
-├── tests/                 60 个用例，无需硬件
-├── tools/                 bench_readonly.py / e2e_hotkey.py / verify_m1ddc.sh
+├── tests/                 96 个用例，无需硬件
+├── tools/                 bench_readonly.py / e2e_hotkey.py / diag_macos_hotkey.py / verify_m1ddc.sh
 ├── design/                windows/index.html（界面设计稿）+ icon/（透明母版 / PNG / ICO）
 ├── start-ui.bat           双击启动图形界面（无控制台）
-├── packaging/             windows + macos 打包与自启
+├── packaging/             windows + macos 打包与自启（macos/install-app.sh 装进「应用程序」）
 └── docs/                  RESEARCH / UI-DESIGN / VERIFY-M1DDC / TROUBLESHOOTING
 ```
 
@@ -218,6 +224,10 @@ dualswitch/
 - 部分全屏游戏 / 反作弊环境会屏蔽 `RegisterHotKey` 与键盘钩子。
 - Alt+Space 在少数应用里被窗口系统菜单占用，可能不触发；换 `ctrl+alt+space` 即可。
 - 只支持单显示器；多显示器不在 V1 范围。
+- macOS 包是自签名（`dualswitch Self Signed`）、未公证：**在别的 Mac 上首次打开要右键 → 打开**。
+  辅助功能授权认签名身份，重打包不会失效，但换成 ad-hoc 签名就会失效。
+- macOS 关窗口后程序坞图标消失、只留菜单栏图标（`NSApplicationActivationPolicy` 切换），
+  要找回来点菜单栏图标 →「打开主界面」。
 - CrossPaste 的 mDNS 发现依赖 UDP 5353，被路由器/防火墙拦截时改用手动 IP 连接（与本工具无关）。
 
 ---

@@ -1,13 +1,14 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-17 22:10
-> 一句话状态：**Windows 侧切屏 / 热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过，
-> 打包版诊断能力已增强（崩溃堆栈 / 线程 dump / `--console`）；macOS 侧界面（菜单栏 + 原生窗口 + 四页设置）
-> 已实现并跑在真机上，切换按钮实测可用，热键缺「辅助功能」授权的问题已补「去授权」链路 + .app 打包，
-> 默认键改为 ⌥ Space。`sources = {windows: 17, mac: 18}`。**
+> 最后更新：2026-10-18 13:20
+> 一句话状态：**两端都已落地可用。Windows 侧切屏 / 热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过；
+> macOS 侧界面（菜单栏 + 原生窗口 + 四页设置）跑在真机上，`⌥ Space` 全局热键已修复并通过用户实测
+> （根因是 CGEvent 字段取错、异常被静默吞掉），已打包并装进 `/Applications/屏幕切换.app`，
+> 关窗口后程序坞不留图标、只保留菜单栏图标。`sources = {windows: 17, mac: 18}`。**
 >
-> 👉 **下一步：macOS 真机切屏验收（T8）** —— 在 Mac 上按一次 `⌥ Space`，看画面是否切到 Windows。
-> Windows 端已可交付使用：双击 `dist\dualswitch\dualswitch.exe` 即进主界面（整个文件夹一起用），右键托盘可退出。
+> 👉 **下一步：mac 侧日常使用观察** —— 重点关注长时间运行后热键是否仍灵（tap 被系统禁用会自动重开，
+> 日志里有 `事件 tap 回调超时…已重新启用` 与 `激活策略 → Accessory` 可查）；Windows 侧无待办。
+> Windows 端双击 `dist\dualswitch\dualswitch.exe` 即进主界面（整个文件夹一起用），右键托盘可退出。
 > 界面/分层改动请看 `docs/UI-DESIGN-MAC.md` 与 `docs/PLATFORM-SPLIT.md`（后者是给另一端 AI 读的契约）。
 
 ---
@@ -25,14 +26,16 @@ PYTHONPATH=src "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/defaul
 # ── macOS ────────────────────────────────────────────────
 cd ~/work/workbuddy/dualswitch
 QT_QPA_PLATFORM=offscreen ~/.workbuddy/binaries/python/envs/default/bin/python \
-    -m pytest tests -q -s -p no:cacheprovider          # 83 passed
+    -m pytest tests -q -s -p no:cacheprovider --basetemp=.pytest-tmp   # 96 passed
 QT_QPA_PLATFORM=offscreen ~/.workbuddy/binaries/python/envs/default/bin/python \
     tools/check_mac_ui.py                               # 34 项核对
 ~/.workbuddy/binaries/python/envs/default/bin/python -m dualswitch doctor
+~/.workbuddy/binaries/python/envs/default/bin/python tools/diag_macos_hotkey.py   # 热键现场诊断
 ```
 
-> mac 上必须带 `-s`：受限环境里 pytest 的输出捕获要写临时文件，`/tmp` 不可写时整套用例直接 ERROR
-> （`tests/conftest.py` 已兜住 `tmp_path`，但捕获发生在 conftest 之前）。这是环境问题，不是代码问题。
+> mac 上必须带 `-s` **和 `--basetemp=.pytest-tmp`**：受限环境里 pytest 的输出捕获与 `tmp_path`
+> 都要写临时文件，`/tmp` 不可写时整套用例直接 ERROR（`tests/conftest.py` 已兜住 `tmp_path`，
+> 但捕获发生在 conftest 之前）。这是环境问题，不是代码问题。
 
 环境：Python 3.13.14（Windows：`C:\Users\Administrator\.workbuddy-ai\binaries\python\envs\default`；
 macOS：`~/.workbuddy/binaries/python/envs/default`），
@@ -68,7 +71,7 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 | 7 | 文档 | ✅ 完成 | README / RESEARCH / VERIFY / TROUBLESHOOTING / 本文件 |
 | 8 | 真机切屏验收 | ✅ **双向闭环** | `Set 18`→Mac（回读确认 64ms）；`Set 17`→Windows（回读确认 64ms）；热键真实触发也已验证 |
 | 9 | macOS 实机验证 | ✅ 切屏已验证 | `m1ddc set input 17` 成功；USB-C 真实值 = 18（需求文档的 27 是错的） |
-| 10 | macOS 端安装 dualswitch 本体 | ⏳ 待做 | 需 `pip install -e ".[tray,macos]"` + 辅助功能授权 |
+| 10 | macOS 端安装 dualswitch 本体 | ✅ 完成 | `pip install -e ".[tray,macos]"` + 辅助功能授权 + 打包成 `/Applications/屏幕切换.app` |
 | 11 | Windows 界面设计稿 + 应用图标 | ✅ 完成 | `design/windows/index.html`、`design/icon/`、`docs/UI-DESIGN.md` |
 | 12 | Windows 图形界面实现（PySide6） | ✅ 完成并跑通 | `src/dualswitch/ui/`，`dualswitch ui`；64 个用例全绿 |
 | 13 | macOS 界面设计 + 实现（菜单栏 + 原生窗口） | ✅ 完成 | `docs/UI-DESIGN-MAC.md`、`ui/chrome/mac.py`；`⌘,` / `⌥ Space` / 菜单栏右键菜单 |
@@ -77,6 +80,10 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 | 16 | macOS 打包（.app / .icns / 菜单栏模板图） | ✅ 脚本与资源就绪 | `packaging/macos/build.sh`、`design/icon/build_icns.py`、`build_menubar_icon.py`；未实跑 PyInstaller |
 | 17 | macOS 界面离屏验收（契约 / 窗口 / 设置 / DDC 解析） | ✅ 34 项全通过 | `tools/check_mac_ui.py`；`pytest -q -s` 83 passed |
 | 18 | macOS 热键可用性（⌥ 文案 / 左 Option 默认 / 辅助功能授权 / .app） | ✅ 代码与打包完成 | `hotkey/macos.py` 权限链路、`window.show_banner(..., "去授权")`、`dist/屏幕切换.app` |
+| 19 | **macOS 热键真机可用（根因修复）** | ✅ **用户实测确认「好用了」** | 根因：`CGEventGetIntegerValueField(event, kCGKeyboardEventFlags)` 字段不存在 → 每次回调抛 AttributeError 被静默吞掉。改 `CGEventGetFlags` + tap 被禁用自动重开；`tests/test_hotkey_mac_tap.py`（10 例）、`tools/diag_macos_hotkey.py` |
+| 20 | macOS 装机（/Applications + 登录项） | ✅ 已装并运行 | `packaging/macos/install-app.sh`（ditto + 清 quarantine + 验签 + `--login-item`）；`/Applications/屏幕切换.app`，换路径后辅助功能授权未失效 |
+| 21 | 关窗口只留菜单栏（程序坞不留图标） | ✅ 实现完成（待日常使用确认观感） | `chrome.DOCK_FOLLOWS_WINDOW` + `chrome.set_dock_visible()`（`NSApplicationActivationPolicy` 0↔1 实测）、`MainWindow.hiddenToBackground` 信号 |
+| 22 | 全量测试 | ✅ 96 passed | `QT_QPA_PLATFORM=offscreen pytest tests -q --basetemp=.pytest-tmp`（本机 /tmp 不可写） |
 
 ---
 
@@ -206,15 +213,28 @@ Mac → Windows : Set 0x60=17 → 回读确认 17，调用耗时 64.4ms
 | 27 = USB-C？ | ❌ 需求文档的假设是错的，27 被显示器直接拒绝 |
 | 合法输入值 | **15 = DP，17 = HDMI，18 = USB-C** |
 
-### T3（待做）macOS 端安装 dualswitch 本体
-切屏链路已通，但 Mac 上还没装这个应用本身：
+### T3 ✅ macOS 端安装 dualswitch 本体 —— 已完成（2026-10-18）
+
+源码方式（开发调试用）：
 1. 解压 `dualswitch-1.0.0-mac.zip`
 2. `python3 -m venv .venv && source .venv/bin/activate`
 3. `pip install -e ".[tray,macos]"`（macos extra = pyobjc，CGEventTap 需要）
 4. `dualswitch doctor` —— 应显示 `pyobjc/Quartz OK`、`辅助功能权限 OK`（首次要在
    系统设置 → 隐私与安全性 → 辅助功能 里勾选运行它的终端 / Python）
-5. `dualswitch run` —— 菜单栏出现图标，右 Option + Space 应能切回 Windows
-6. 验证：Mac 按右 Option + Space → 切到 Windows；Windows 按 Alt + Space → 切回 Mac
+5. `dualswitch run` —— 菜单栏出现图标，⌥ Space 应能切回 Windows
+6. 验证：Mac 按 ⌥ Space → 切到 Windows；Windows 按 Alt + Space → 切回 Mac
+
+日常使用（已落地）：
+1. `./packaging/macos/build.sh` 打包
+2. `./packaging/macos/install-app.sh`（或加 `--login-item` 开机自启）→ `/Applications/屏幕切换.app`
+3. 辅助功能授权跟着签名身份走，换路径不用重新勾选（已在真机确认）
+
+### T5（观察项）mac 热键长时间可用性
+
+修好字段取值后用户已实测可用。剩下的风险是系统在回调超时 / 安全输入时关掉 tap：
+现在收到 `kCGEventTapDisabledByTimeout|ByUserInput` 会自动 `CGEventTapEnable(tap, True)` 重开，
+日志里会留 `事件 tap 回调超时（第 N 次），已重新启用`。若哪天又不灵：
+先 `tools/diag_macos_hotkey.py` 看「收到事件数 / 命中数 / 被禁用次数」，再判断是权限、事件没进来、还是判定不匹配。
 
 ### T4 ✅ Windows 打包实测 —— 已通过（2026-10-17 20:30，采用 onedir）
 
@@ -368,6 +388,40 @@ dualswitch/
 ---
 
 ## 8. 变更日志
+
+- 2026-10-18 13:10 **装上「应用程序」+ 关窗口只留菜单栏（程序坞不留图标）**。
+  · 新增 `packaging/macos/install-app.sh`：`ditto` 复制到 `/Applications/屏幕切换.app`
+    （保留框架符号链接与签名）、清 `com.apple.quarantine`、校验签名、`--login-item` 加登录项。
+    坑：**别在 /Applications 里跑 `codesign --deep`** —— 受限环境下它会留下 `.BC.D_*` /
+    `.cstemp` 临时项，把封印搞坏（`unsealed contents present in the root directory`）。
+    签名一律在仓库里做好再复制。
+  · 新增外观契约 `chrome.DOCK_FOLLOWS_WINDOW` + `chrome.set_dock_visible()`：
+    mac 走 `NSApplicationActivationPolicy` —— 窗口收起切 `Accessory`（程序坞图标、⌘Tab、
+    应用菜单一起消失，菜单栏 NSStatusItem 不受影响），窗口打开切回 `Regular`。
+    Windows 是空实现。
+  · `MainWindow.hiddenToBackground` 信号（关闭窗口时发出）；runner 新增
+    `_enter_background / _leave_background / hide_window`，`⌘H` 改走 `hide_window`。
+  · 不用 `LSUIElement`：那是启动期一次性的，设 true 后窗口打开也不会有程序坞图标。
+  · 测试 +2（关窗口发信号 / DOCK_FOLLOWS_WINDOW 只在 mac 为真），全量 96 例通过。
+
+- 2026-10-18 12:40 **mac 热键彻底不响的根因：读了不存在的 CGEvent 字段，异常被静默吞掉**。
+  现象：按 `⌥ Space`「偶尔灵一次，之后怎么按都没反应」。
+  根因：`hotkey/macos.py` 取修饰键位图写成了
+  `CGEventGetIntegerValueField(event, kCGKeyboardEventFlags)` —— CGEvent 的字段枚举里
+  **没有**「键盘事件 flags」，pyobjc 的 `Quartz` 里连这个常量都不存在，于是**每个**按键
+  回调都抛 `AttributeError`；整段逻辑埋在闭包里又有 `except Exception: pass` 兜底，
+  结果就是热键 100% 失效而日志里一句错都没有（那唯一一次「好用」是用户点了菜单栏图标）。
+  修法：改用 `CGEventGetFlags(event)`（新增 `event_flags()` 收口）；
+  顺带补三处会让热键「用着用着就死」的坑：
+  · `kCGEventTapDisabledByTimeout` / `ByUserInput` 必须 `CGEventTapEnable(tap, True)`
+    重开，否则系统关掉一次就再也不回来；
+  · 回调异常改成「记前 3 次 + 计数」而不是静默 pass；
+  · 保留 `CFMachPortCreateRunLoopSource` 引用（被回收 tap 会哑），
+    右 Option 判定加 `NX_DEVICERALTKEYMASK(0x40)` 兜底，吞掉 keyDown 同时吞 keyUp。
+  验证：新增 `tests/test_hotkey_mac_tap.py`（10 例，假 Quartz 缺常量时抛 AttributeError，
+  复现旧 bug）+ `tools/diag_macos_hotkey.py`（实时看事件 / `--simulate` 合成热键）；
+  全量 93 例通过；用固定证书重签重打包（`dist/dualswitch.app`），旧包留
+  `dist/dualswitch.app.old-20261018`。
 
 - 2026-10-17 23:20 **mac 端交互对齐系统习惯：菜单栏单击出菜单、设置改为窗口内一页**。
   · 菜单栏：`MacStatusItem.on_status_clicked` 不再区分左右键，**单击/右键都弹菜单**，

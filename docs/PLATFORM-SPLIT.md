@@ -74,6 +74,7 @@ src/dualswitch/ui/
 | `SETTINGS_ROW_HINT` | str | `""` | `"⌘ ,"` | 设置行右侧提示 |
 | `CLICK_HINT` | str | `"双击图标切换"` | `"单击图标打开菜单"` | 常驻图标提示、菜单里的说明 |
 | `REOPEN_ON_ACTIVATE` | bool | `False` | `True` | 点 Dock / Cmd+Tab 回来时自动展开窗口 |
+| `DOCK_FOLLOWS_WINDOW` | bool | `False` | `True` | 窗口收起后程序坞图标是否消失（mac 用 `NSApplicationActivationPolicy` 切换，菜单栏图标不受影响） |
 | `STRICT_BACKEND` | str | `"hook"` | `"auto"` | 勾选「只认右 Alt/Option」时写入的 `hotkey_backend` |
 | `BACKEND_OPTIONS` | list[str] | auto/dxva2/command/mock | auto/m1ddc/command/mock | 高级页下拉 |
 | `MATCH_DESC` | str | 「按设备名或 device_id 的片段…」 | 「按 m1ddc 列出的显示器名…」 | 显示器页说明 |
@@ -88,6 +89,7 @@ src/dualswitch/ui/
 | `build_status_item(icon, on_click)` | 状态项对象 | Windows → `QtStatusItem`（双击触发）；mac → `MacStatusItem`（单击触发） |
 | `build_app_menu(runner)` | `QMenuBar \| None` | mac 返回全局菜单栏；Windows 返回 `None` |
 | `activate(window)` | None | 把窗口抢到前台（mac 必须显式 activate） |
+| `set_dock_visible(visible)` | None | 显示/隐藏程序坞图标（mac 切激活策略；Windows 空实现） |
 | `notify(status, title, message, icon)` | None | 系统通知；mac 暂只写日志（见第 6 节） |
 | `open_path(path)` | None | 用系统默认程序打开文件/目录 |
 | `accessibility_granted(prompt=False)` | bool | 是否已有「辅助功能」权限；Windows 恒 True |
