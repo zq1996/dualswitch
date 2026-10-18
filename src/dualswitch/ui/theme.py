@@ -47,7 +47,7 @@ OK = "#0F9D58"
 WIN_W, WIN_H = 440, 600
 SETTINGS_H = 484          # 设置页内容比主页面少，矮一截避免中部大片空白
 RADIUS_WIN = 14
-RADIUS_CARD = 13
+RADIUS_CARD = 12
 RADIUS_CTRL = 10
 
 # 平台外观（窗口外框 / 标题栏 / 字号 / 字体）
@@ -199,7 +199,7 @@ def qss() -> str:
     #devStateOff {{ color: #A0A9B8; font-size: 10.5px; }}
 
     /* ---------- 列表 ---------- */
-    #listWrap {{ border: 1px solid {LINE}; border-radius: 11px; background: #FFFFFF; }}
+    #listWrap {{ border: 1px solid {LINE}; border-radius: 12px; background: #FFFFFF; }}
     QPushButton#row {{
         background: #FFFFFF; border: 0; border-bottom: 1px solid {LINE_SOFT};
         color: {INK}; font-size: {BODY_FS}px; text-align: left; padding-left: 0;
@@ -220,7 +220,7 @@ def qss() -> str:
     #statusText {{ color: {INK3}; font-size: 11.5px; }}
 
     /* ---------- 设置页 ---------- */
-    #tabs {{ background: #F1F4FA; border-radius: 10px; }}
+    #tabs {{ background: #F1F4FA; border-radius: 12px; }}
     QPushButton#tab {{
         background: transparent; border: 0; border-radius: 8px;
         color: {INK2}; font-size: {BODY_FS}px; font-weight: 500;
@@ -236,7 +236,7 @@ def qss() -> str:
     #pageHint {{ color: {INK3}; font-size: 11px; padding: 0 2px 2px 2px; }}
     #gTitle {{ color: {INK}; font-size: {BODY_FS}px; font-weight: 600; }}
     #gDesc {{ color: {INK3}; font-size: 11px; }}
-    #group {{ background: {LINE_SOFT}; border: 1px solid {LINE}; border-radius: 11px; }}
+    #group {{ background: {LINE_SOFT}; border: 1px solid {LINE}; border-radius: 12px; }}
     #gRow {{ background: #FFFFFF; border-bottom: 1px solid {LINE_SOFT}; }}
     #gRowLast {{ background: #FFFFFF; }}
     QPushButton#ghost {{
@@ -275,17 +275,17 @@ def qss() -> str:
 
     /* 下拉框本体由 widgets.Combo 自绘（QSS 画不出三角箭头），这里只管弹层 */
     QComboBox QAbstractItemView {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 8px;
         color: {INK}; font-size: {BODY_FS}px; padding: 4px; outline: 0;
         selection-background-color: {ACCENT_SOFT}; selection-color: {INK};
     }}
     QLineEdit#num {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 8px;
         color: {INK}; font-size: {BODY_FS}px; font-weight: 600; padding: 4px 6px;
     }}
     QLineEdit#num:focus {{ border-color: {ACCENT}; }}
     QLineEdit#text {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 8px;
         color: {INK}; font-size: 12px; padding: 5px 8px;
     }}
     QLineEdit#text:focus {{ border-color: {ACCENT}; }}
@@ -304,17 +304,17 @@ def qss() -> str:
 
     /* ---------- 提示条 ---------- */
     #bannerWarn {{
-        background: #FFF8EC; border: 1px solid #F3E2C4; border-radius: 9px;
+        background: #FFF8EC; border: 1px solid #F3E2C4; border-radius: 8px;
         color: #7A4A05; font-size: 11.5px;
     }}
     #bannerErr {{
-        background: #FDF1F1; border: 1px solid #F4D6D6; border-radius: 9px;
+        background: #FDF1F1; border: 1px solid #F4D6D6; border-radius: 8px;
         color: #8C2222; font-size: 11.5px;
     }}
     /* 横幅里的动作（去授权 / 重试）：白底细边，压在浅色横幅上不抢眼但能点 */
     QPushButton#bannerAction {{
         background: rgba(255,255,255,0.92); border: 1px solid rgba(16,24,40,0.16);
-        border-radius: 7px; color: {INK}; font-size: 11.5px; font-weight: 600;
+        border-radius: 8px; color: {INK}; font-size: 11.5px; font-weight: 600;
         padding: 3px 10px;
     }}
     QPushButton#bannerAction:hover {{ background: #FFFFFF; border-color: {ACCENT}; color: {ACCENT}; }}
@@ -324,7 +324,7 @@ def qss() -> str:
     #clipHead {{ background: #FFFFFF; border-bottom: 1px solid {LINE_SOFT}; }}
     QPushButton#clipBack {{
         background: transparent; border: 0; color: {INK2};
-        font-size: 12px; text-align: left; padding: 4px 7px 4px 3px; border-radius: 6px;
+        font-size: 12px; text-align: left; padding: 4px 7px 4px 3px; border-radius: 8px;
     }}
     QPushButton#clipBack:hover {{ background: #F3F6FB; color: {ACCENT_DEEP}; }}
     #clipTitle {{ color: {INK}; font-size: 13.5px; font-weight: 600; }}
@@ -344,7 +344,7 @@ def qss() -> str:
     #ctitle {{ color: {INK}; font-size: 12.5px; }}
     #ctitleMono {{ color: {INK}; font-size: 11.8px; }}
     #cmeta {{ color: {INK3}; font-size: 10.5px; }}
-    #cthumb {{ background: #F4F6FA; border: 1px solid {LINE}; border-radius: 7px; }}
+    #cthumb {{ background: #F4F6FA; border: 1px solid {LINE}; border-radius: 8px; }}
 
     #stOk {{ color: #0E7C4A; background: #EDF8F1; font-size: 10px; font-weight: 600;
              border-radius: 5px; padding: 2px 6px; }}
@@ -359,9 +359,9 @@ def qss() -> str:
     #pvHead {{ color: {INK3}; font-size: 10.5px; }}
     #pvKind {{ color: {INK2}; font-size: 11px; font-weight: 600; }}
     #pvHint {{ color: #A0A9B8; font-size: 10.5px; }}
-    #pvImg {{ background: #FFFFFF; border: 1px solid #DCE2EC; border-radius: 7px; }}
+    #pvImg {{ background: #FFFFFF; border: 1px solid #DCE2EC; border-radius: 8px; }}
     #pvText {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 8px;
         color: {INK2}; font-size: 11.5px;
     }}
     #pvEmpty {{ color: #A0A9B8; font-size: 11.5px; }}
@@ -369,7 +369,7 @@ def qss() -> str:
     #clipBar {{ background: #FFFFFF; border-top: 1px solid {LINE}; }}
     QPushButton#clipPrimary {{
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {PRIMARY_TOP}, stop:1 {PRIMARY_BOTTOM});
-        color: #FFFFFF; border: 0; border-radius: 7px;
+        color: #FFFFFF; border: 0; border-radius: 8px;
         font-size: 12px; font-weight: 600; padding: 0 12px;
     }}
     QPushButton#clipPrimary:hover {{
@@ -377,13 +377,13 @@ def qss() -> str:
     }}
     QPushButton#clipPrimary:disabled {{ background: #B7C6E8; color: #FFFFFF; }}
     QPushButton#clipBtn {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 8px;
         color: {INK2}; font-size: 12px; font-weight: 600; padding: 0 11px;
     }}
     QPushButton#clipBtn:hover {{ background: #F7F9FC; border-color: #D6DDE9; }}
     QPushButton#clipBtn:disabled {{ color: #B6BFCD; border-color: {LINE_SOFT}; }}
     QPushButton#clipDanger {{
-        background: #FFFFFF; border: 1px solid #F0D6D6; border-radius: 7px;
+        background: #FFFFFF; border: 1px solid #F0D6D6; border-radius: 8px;
         color: {DANGER}; font-size: 12px; font-weight: 600; padding: 0 11px;
     }}
     QPushButton#clipDanger:hover {{ background: #FDEEEE; border-color: #E9BFBF; }}

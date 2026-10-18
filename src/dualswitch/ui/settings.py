@@ -362,9 +362,10 @@ class SettingsWindow(QWidget):
         root_lay.addWidget(self.statusbar)
 
     def _back_bar(self) -> QWidget:
-        """内嵌模式的头：与剪贴板页头同构 —— 返回在左、标题水平居中、两者同一水平线同字号。"""
+        """内嵌模式的头：与剪贴板页头同构 —— 40 高、垂直居中、标题水平居中。"""
         bar = QWidget()
         bar.setObjectName("backBar")
+        bar.setFixedHeight(40)      # 与剪贴板页头 HEADER_H 一致，别让内容贴着窗口顶
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(12, 0, 12, 0)
         lay.setSpacing(8)

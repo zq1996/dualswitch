@@ -122,7 +122,7 @@ class Thumb(QWidget):
         p.setRenderHint(QPainter.Antialiasing, True)
         rect = self.rect().adjusted(0, 0, -1, -1)
         path = QPainterPath()
-        path.addRoundedRect(rect, 7, 7)
+        path.addRoundedRect(rect, 8, 8)
         p.setClipPath(path)
         p.fillRect(rect, QColor("#F4F6FA"))
         if self._pix is not None:

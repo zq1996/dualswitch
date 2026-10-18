@@ -523,7 +523,7 @@ class Combo(QComboBox):
         active = self.underMouse() or self.hasFocus()
         p.setPen(QPen(QColor(theme.ACCENT if active else theme.LINE), 1))
         p.setBrush(QColor("#FFFFFF"))
-        p.drawRoundedRect(rect, 7, 7)
+        p.drawRoundedRect(rect, 8, 8)
 
         p.setPen(QColor(theme.INK))
         p.setFont(self.font())
