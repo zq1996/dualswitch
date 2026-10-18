@@ -72,13 +72,40 @@ Windows 切到 Mac 后，Windows 就看不到显示器了，所以：
 |---|---|---|
 | `图标为空=True` | `.ico` 没读出来（Qt 缺 `imageformats/qico` 插件，或 `assets/` 没打进包） | 现在会自动换「代码画的图标」并记 ERROR；重打包时确认 `--add-data ...assets;dualswitch\ui\assets` 生效 |
 | `可见=False` | 图标压根没注册给系统 | 程序 2.5 秒后会自动重注册一次；仍失败说明被安全软件/远程桌面拦了 |
+| `位置=未知` | **注册了但系统没给它留格子**（`is_visible()` 是 Qt 自己的标记，不可信 | 3 秒后自动重注册；仍为空见下面「缓存坏了」 |
 | `托盘可用=False` | 这台机器没有通知区域 | 程序会自动改成「关窗口 = 最小化」，不再隐藏（否则没有任何入口） |
-| 两行都正常，桌面上就是看不到 | **Windows 11 把图标收进了「隐藏的图标」溢出面板** | 点任务栏 `^` 找到它，或「设置 → 个性化 → 任务栏 → 其他系统托盘图标」把「屏幕切换」打开 |
+| 三项都正常但桌面上看不到 | 图标被系统关掉/收进「隐藏的图标」 | 见下面两节 |
 
-> Win11 对**没出现过的新 exe** 默认就把托盘图标藏进溢出面板 —— 这解释了为什么
-> `start-ui.bat`（跑的是 `pythonw.exe`，早就被允许显示）正常，而重新打包出来的
-> `dualswitch.exe` 第一次运行就「没有图标」。这属于系统按可执行文件路径记住的显示偏好，
-> 不是程序的 bug；把它拖出来一次之后就一直在了。
+> 判定口径：**只看 `位置`，不要看 `可见`**。Windows 打包版实测过
+> `可见=True 图标为空=False 尺寸齐全` 但托盘里什么都没有 —— Qt 的 `isVisible()`
+> 只表示「我调用过 show()」，注册失败照样 True；`geometry()` 取自系统的
+> `Shell_NotifyIconGetRect`，拿不到矩形就是通知区域里没有这一格。
+
+### 4.1 系统把这个 exe 的托盘图标关掉了
+
+设置 → 个性化 → 任务栏 → 通知区域 → **「选择哪些图标显示在任务栏上」** →
+找到 `dualswitch` / 「屏幕切换」，把开关打成 **开**。
+
+> 这一项是**按可执行文件路径**记的：`pythonw.exe`（`start-ui.bat` 那条路）早就被允许，
+> 所以源码方式正常；新打出来的 `dualswitch.exe` 是"新应用"，可能带着「关」的状态。
+
+### 4.2 通知区域缓存坏了（图标"消失"但注册成功）
+
+只清本程序的记录，不动别的应用的托盘偏好：
+
+```powershell
+Stop-Process -Name dualswitch -Force -ErrorAction SilentlyContinue
+Get-ChildItem "HKCU:\Control Panel\NotifyIconSettings" | ForEach-Object {
+    $p = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).ExecutablePath
+    if ($p -like "*dualswitch.exe") { Write-Host "删除缓存项：$p"; Remove-Item $_.PSPath -Recurse -Force }
+}
+Stop-Process -Name explorer -Force   # 任务栏会自动重启
+```
+
+然后重新启动程序。`NotifyIconSettings` 里存着每个 exe 的托盘图标快照与显示偏好，
+换构建后偶尔会留下一个空快照 —— 表现正是「进程在、注册说成功、托盘里没有」。
+
+> 另一种情况是图标被收进了 `^` 溢出面板（Win11 对新 exe 默认如此）：点 `^` 拖出来一次就固定了。
 
 卡在这个状态时的应急退出：
 

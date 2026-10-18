@@ -215,29 +215,59 @@ class UiRunner(QObject):
             "系统托盘不可用，关闭窗口后会最小化到任务栏（不会隐藏）。",
         )
 
-    def _verify_status_item(self) -> None:
-        """启动 2.5 秒后回头确认图标真的进了通知区域。
+    def _status_geometry(self) -> str:
+        """常驻图标在通知区域里的矩形；空串 = 系统没给它分配位置。"""
+        probe = getattr(self.status, "geometry", None)
+        if not callable(probe):
+            return ""
+        try:
+            return str(probe() or "")
+        except Exception:  # pragma: no cover
+            log.exception("读取常驻图标位置失败")
+            return ""
 
-        `QSystemTrayIcon.show()` 注册失败时既不抛异常也不返回错误。所以只能事后查：
-        可见 = False → 重新注册一次；可见 = True 但桌面上看不到，说明系统把图标收进了
-        「隐藏的图标」溢出面板（Win11 对没出现过的新 exe 默认如此），代码无能为力，
-        但这一行日志足以让排障有据可依。
+    def _verify_status_item(self) -> None:
+        """启动 2.5 秒后回头确认图标真的落进了通知区域。
+
+        **`is_visible()` 不可信**：那是 Qt 自己记的「我调用过 show()」，注册失败也照样 True
+        （Windows 打包版实测：可见=True、图标非空，但托盘里什么都没有）。
+        真正能证明系统给了位置的是 `geometry()` —— 它来自系统的 Shell_NotifyIconGetRect，
+        拿不到矩形就说明通知区域没有这个图标的位置。
         """
         if self._quitting:
             return
         try:
             visible = bool(self.status.is_visible())
-            log.info("常驻图标检查：可见=%s", visible)
-            if visible:
+            geometry = self._status_geometry()
+            log.info("常驻图标检查：可见=%s 位置=%s", visible, geometry or "未知")
+            if visible and geometry:
                 return
-            log.warning("常驻图标未注册成功，重新注册一次")
+
+            log.warning("通知区域没有给常驻图标留位置，重新注册一次")
             reassert = getattr(self.status, "reassert", None)
             if callable(reassert):
                 reassert()
             else:
                 self.status.show()
+            QTimer.singleShot(1500, self._confirm_status_item)
         except Exception:  # pragma: no cover
             log.exception("常驻图标自检失败")
+
+    def _confirm_status_item(self) -> None:
+        """重新注册之后再查一次；还是没有位置，就把「该去关哪个开关」说清楚。"""
+        if self._quitting:
+            return
+        geometry = self._status_geometry()
+        log.info("常驻图标复查：位置=%s", geometry or "未知")
+        if geometry:
+            return
+        log.error(
+            "托盘图标仍然没有位置：系统侧把它关掉了，或通知区域缓存坏了。"
+            "① 设置 → 个性化 → 任务栏 → 选择哪些图标显示在任务栏上，确认 %s 是「开」；"
+            "② 重启 explorer.exe 后再启动本程序。",
+            Path(sys.executable).name,
+        )
+        self.window.set_foot("托盘图标被系统隐藏了 · 见日志", ok=False)
 
     def _status_actions(self) -> dict:
         return {
