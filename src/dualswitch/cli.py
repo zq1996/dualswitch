@@ -17,6 +17,7 @@ import signal
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from . import __version__, config as config_mod, logging_setup
@@ -52,6 +53,21 @@ def _setup_logging(cfg: Config, console: bool = True) -> Path:
     path = config_mod.log_path()
     logging_setup.setup(cfg.log_level, path, console=console)
     return path
+
+
+def _exe_stamp() -> str:
+    """可执行文件的路径 + 时间戳 + 大小。
+
+    排查打包版时最费时间的一步就是「这份日志到底是谁写的」：同一个 `dualswitch.exe`
+    可能有好几个残留副本，只看版本号（永远是 1.0.0）分不出来。时间戳+大小能直接对上号。
+    """
+    exe = Path(sys.executable)
+    try:
+        st = exe.stat()
+    except OSError:
+        return str(exe)
+    when = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    return f"{exe}（{when}，{st.st_size // 1024} KB）"
 
 
 def _print_result(result) -> None:  # noqa: ANN001
@@ -401,7 +417,7 @@ def cmd_ui(args) -> int:
     # 「跑的是哪个 exe」必须一步可查：排查打包版时，日志和成品对不上号最费时间
     log.info(
         "可执行文件：%s（打包版=%s，资源目录=%s）",
-        sys.executable,
+        _exe_stamp(),
         bool(getattr(sys, "frozen", False)),
         getattr(sys, "_MEIPASS", "-"),
     )
