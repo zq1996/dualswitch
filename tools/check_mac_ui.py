@@ -87,7 +87,7 @@ check("设置无自绘标题栏", settings.titlebar is None)
 check("严格开关文案", settings.chrome.HOTKEY_COPY["strict_title"] == "只认右 Option")
 check("录制按钮显示 ⌥ Space", settings.recorder.text() == "⌥ Space", settings.recorder.text())
 check("后端下拉无 dxva2", "dxva2" not in settings.chrome.BACKEND_OPTIONS)
-check("四个页签", settings.stack.count() == 4, str(settings.stack.count()))
+check("五个页签（含剪贴板）", settings.stack.count() == 5, str(settings.stack.count()))
 
 print("\n== 设置是窗口内的一页（不另开窗口） ==")
 embedded = SettingsWindow(
@@ -105,7 +105,7 @@ check(
 )
 embedded.backRequested.emit()
 check("返回后是主页面", win.pages.currentWidget() is win.main_page)
-check("高度回到主页面", win.height() == theme.WIN_H, f"{win.height()}px")
+check("高度回到主页面", win.height() == win.win_h(), f"{win.height()}px")
 
 print("\n== 设置保存（真实文件） ==")
 cfg_file = OUT / "config.json"

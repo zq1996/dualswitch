@@ -1,309 +1,242 @@
-"""剪贴板页：主窗口里的一页（`QStackedWidget`），**不新开窗口**。
+"""剪贴板页：主窗口里的一页（不是新窗口）。
 
-规格见 `docs/UI-DESIGN-CLIPBOARD.md`，可交互稿 `design/clipboard/index.html`
-（`?page=clip` 直接进这一页，`?empty=1` 看空态）。
+规格见 `docs/UI-DESIGN-CLIPBOARD.md`。两端完全共用，**这里不出现 `sys.platform`**：
+入口放哪儿由 `chrome.INLINE_CLIPBOARD_ROW` 决定，本文件只管版面。
 
-页面只依赖一个「记录源」对象（将来是 `sync/engine.py` 的 `SyncEngine`），
-用的全是普通方法，不要求继承什么基类：
+版面（440 宽）：
 
-    records() -> list[ClipRecord]      # 最新的在前
-    status()  -> dict                  # {"peer": str, "connected": bool, "enabled": bool}
-    copy_to_local(id) -> bool          # 写回本机剪贴板
-    resend(id) -> None                 # 重发（没有对端时可以等同复制）
-    remove(id) -> None                 # 删一条记录
-    clear() -> None                    # 清空记录（不动系统剪贴板）
+    ┌──────────────────────────────────────┐
+    │ ‹ 返回    剪贴板            ● 对端名 │ 40  页头
+    ├──────────────────────────────────────┤
+    │ ▣  截图 2560×1440            已同步  │ 52  列表（可滚）
+    │ T  def switch_source(...)    仅本机  │ 52
+    ├──────────────────────────────────────┤
+    │ （预览区，固定高度，不随内容跳动）   │ 176
+    ├──────────────────────────────────────┤
+    │ [复制到本机] [重发]      [清空记录]  │ 48
+    ├──────────────────────────────────────┤
+    │ ● 仅内存保留 · 退出即清 · …          │ 34
+    └──────────────────────────────────────┘
 
-页面里**不出现任何平台判断**：入口在标题栏还是列表、窗口要不要加高，
-都由 `chrome` 的 `INLINE_CLIPBOARD_ROW` / `EXTRA_H` 决定。
-
-几个刻意的做法：
-
-* **刷新靠签名比对**：`refresh()` 每 300ms 调一次，但只有「记录集合 / 状态」真的变了
-  才重建行 —— 否则每次刷新都重建控件，滚动位置和 hover 态都会抖。
-* **列表高度随条数长**（52 × n，最多 252）：只有一条记录时留一大片空白比列表短一截更难看。
-* **不弹新窗口**：双击行 = 复制到本机，看原图这件事不做（那必然要第二个窗口）。
+**为什么预览和列表的高度都固定**：内容长度变化会让窗口"呼吸"，用户每次都要重新找
+眼睛落点。固定高度、内部滚动，是这类低频查看界面的稳妥做法。
 """
 
 from __future__ import annotations
 
-import logging
 import time
-from dataclasses import dataclass, field
 
-from PySide6.QtCore import QPoint, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QKeySequence, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from ..sync.engine import ClipRecord
 from . import theme
-from .widgets import StatusBar, label
+from .widgets import ElidedLabel, StatusBar
 
-log = logging.getLogger("dualswitch.ui.clipboard")
-
-#: 列表最大高度：4 行（52）可见 + 第 5 行露 20px，提示可滚
-LIST_MAX_H = 252
+HEADER_H = 40
 ROW_H = 52
-#: 超过这个大小的图不画缩略图：为画一个 36px 方块解码 8MB PNG 不值得
+LIST_H = 252
+PREVIEW_H = 176
+ACTION_H = 48
+
+STATE_TEXT = {"ok": "已同步", "pend": "传输中", "fail": "失败", "local": "仅本机"}
+STATE_COLOR = {
+    "ok": ("#0E7C4A", "#E9F7F0"),
+    "pend": ("#1E4FD8", "#EAF0FF"),
+    "fail": ("#A82B2B", "#FDECEC"),
+    "local": ("#7C8698", "#F1F3F7"),
+}
 THUMB_MAX_BYTES = 8 * 1024 * 1024
 
-_MONO_FAMILIES = ["Cascadia Mono", "Consolas", "SF Mono", "Menlo", "DejaVu Sans Mono", "Courier New"]
 
-
-@dataclass(frozen=True)
-class ClipRecord:
-    """面板要的一条记录（`engine.records()` 就返回这个）。"""
-
-    id: str                     # = ClipItem.digest
-    kind: str                   # text | image
-    text: str | None = None
-    png: bytes | None = None
-    width: int = 0
-    height: int = 0
-    source: str = "local"       # local | remote
-    peer_name: str = ""
-    ts: float = field(default_factory=time.time)
-    state: str = "local"        # ok | pend | fail | local
-    progress: float = 0.0
-    size: int = 0
-
-
-# --------------------------------------------------------------------------- #
-# 小工具
-# --------------------------------------------------------------------------- #
-def _mono_font(px: float) -> QFont:
-    """等宽字体：代码要能看出缩进，但两端都没有同名等宽字体，得按可用性挑。"""
-    font = QFont()
-    font.setFamilies(_MONO_FAMILIES)
-    font.setPixelSize(max(9, int(round(px))))
-    return font
-
-
-def _available_mono() -> str:
-    families = set(QFontDatabase.families())
-    for name in _MONO_FAMILIES:
-        if name in families:
-            return name
-    return "monospace"
+def _human_size(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / 1048576:.1f} MB"
 
 
 def _ago(ts: float) -> str:
-    delta = max(0.0, time.time() - ts)
-    if delta < 45:
+    gap = max(0.0, time.time() - ts)
+    if gap < 60:
         return "刚刚"
-    if delta < 3600:
-        return f"{int(delta // 60)} 分钟前"
-    if delta < 86400:
-        return f"{int(delta // 3600)} 小时前"
-    return time.strftime("%m-%d %H:%M", time.localtime(ts))
+    if gap < 3600:
+        return f"{int(gap // 60)} 分钟前"
+    if gap < 86400:
+        return f"{int(gap // 3600)} 小时前"
+    return f"{int(gap // 86400)} 天前"
 
 
-def _human_size(size: int) -> str:
-    if size < 1024:
-        return f"{size} B"
-    if size < 1024 * 1024:
-        return f"{size / 1024:.1f} KB"
-    return f"{size / 1048576:.1f} MB"
+def _source_text(rec: ClipRecord) -> str:
+    if rec.source == "remote":
+        return rec.peer_name or "对端"
+    return "本机"
 
 
-def _first_line(text: str, limit: int = 160) -> str:
-    line = (text or "").strip().splitlines()[0].strip() if (text or "").strip() else ""
-    return line[:limit]
-
-
-def record_title(record: ClipRecord) -> str:
-    if record.kind == "image":
-        return f"图片 {record.width} × {record.height}"
-    title = _first_line(record.text or "")
-    return title or "（空白文本）"
-
-
-def record_meta(record: ClipRecord) -> str:
-    if record.kind == "image":
-        return "PNG"
-    text = (record.text or "").strip()
-    if text.startswith(("http://", "https://")):
-        return "链接"
-    return "纯文本"
-
-
-_STATE_TEXT = {
-    "ok": ("已同步", "stOk"),
-    "pend": ("传输中", "stPend"),
-    "fail": ("失败 · 重试", "stFail"),
-    "local": ("仅本机", "stLocal"),
-}
-
-
-def _state_pill(record: ClipRecord) -> tuple[str, str]:
-    text, name = _STATE_TEXT.get(record.state, _STATE_TEXT["local"])
-    if record.state == "pend" and record.progress > 0:
-        text = f"传输中 {int(record.progress * 100)}%"
-    return text, name
-
-
-class _ElideRight(QLabel):
-    """右省略标签：`QLabel` 自己没有 ellipsis，长代码行会顶掉右侧状态药丸。"""
-
-    def __init__(self, text: str = "", name: str = "", parent=None):
-        super().__init__(parent)
-        if name:
-            self.setObjectName(name)
-        self._full = text
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self._apply()
-
-    def setText(self, text: str) -> None:  # noqa: N802
-        self._full = text
-        self._apply()
-
-    def _apply(self) -> None:
-        width = max(0, self.width() - 1)
-        shown = self._full if width < 16 else self.fontMetrics().elidedText(self._full, Qt.ElideRight, width)
-        if shown != super().text():
-            super().setText(shown)
-
-    def resizeEvent(self, event):  # noqa: N802
-        super().resizeEvent(event)
-        self._apply()
-
-
-class _Thumb(QWidget):
-    """36×36 缩略图：图片按 cover 裁切，文本画一个等宽 T。"""
+class Thumb(QWidget):
+    """36×36 缩略图：图片画缩放后的图，文本画等宽 `T`。"""
 
     def __init__(self, record: ClipRecord, parent=None):
         super().__init__(parent)
         self.setFixedSize(36, 36)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self._pixmap = self._decode(record)
-
-    @staticmethod
-    def _decode(record: ClipRecord) -> QPixmap | None:
-        if record.kind != "image" or not record.png or len(record.png) > THUMB_MAX_BYTES:
-            return None
-        image = QPixmap()
-        if not image.loadFromData(record.png, "PNG"):
-            return None
-        return image
+        self._kind = record.kind
+        self._pix: QPixmap | None = None
+        if record.png is not None and len(record.png) <= THUMB_MAX_BYTES:
+            image = QImage()
+            if image.loadFromData(record.png, "PNG"):
+                self._pix = QPixmap.fromImage(
+                    image.scaled(36, 36, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                )
 
     def paintEvent(self, event):  # noqa: N802
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        rect = QRectF(0.5, 0.5, 35, 35)
-        path_radius = 7
-        p.setPen(QPen(QColor(theme.LINE), 1))
-        p.setBrush(QColor("#F4F6FA"))
-        p.drawRoundedRect(rect, path_radius, path_radius)
-
-        if self._pixmap is not None:
-            p.save()
-            p.setClipRect(rect)
-            scaled = self._pixmap.scaled(36, 36, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            p.drawPixmap(int((36 - scaled.width()) / 2), int((36 - scaled.height()) / 2), scaled)
-            p.restore()
-            p.setPen(QPen(QColor(theme.LINE), 1))
-            p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(rect, path_radius, path_radius)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 7, 7)
+        p.setClipPath(path)
+        if self._pix is not None:
+            p.drawPixmap(rect, self._pix)
         else:
-            p.setPen(QColor("#7A869A"))
-            p.setFont(_mono_font(15))
+            p.fillRect(rect, QColor("#EEF1F7"))
+            f = QFont(theme.FONT_FAMILIES[0])
+            f.setPixelSize(15)
+            f.setBold(True)
+            p.setFont(f)
+            p.setPen(QColor("#7C8698"))
             p.drawText(rect, Qt.AlignCenter, "T")
         p.end()
 
 
-class _Pill(QLabel):
-    """状态药丸。失败 / 仅本机态本身就是重试按钮（别让人去底部找按钮）。"""
+class StatePill(QLabel):
+    def __init__(self, state: str, progress: float = 0.0, parent=None):
+        super().__init__(parent)
+        self.set_state(state, progress)
 
-    clicked = Signal()
-
-    def __init__(self, text: str, name: str, clickable: bool, parent=None):
-        super().__init__(text, parent)
-        self.setObjectName(name)
-        self.setAlignment(Qt.AlignCenter)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self._clickable = clickable
-        if clickable:
-            self.setCursor(Qt.PointingHandCursor)
-            self.setToolTip("点击重试")
-
-    def mouseReleaseEvent(self, event):  # noqa: N802
-        if self._clickable and event.button() == Qt.LeftButton:
-            self.clicked.emit()
-        super().mouseReleaseEvent(event)
+    def set_state(self, state: str, progress: float = 0.0) -> None:
+        fg, bg = STATE_COLOR.get(state, STATE_COLOR["local"])
+        text = STATE_TEXT.get(state, state)
+        if state == "pend" and progress:
+            text = f"{text} {int(progress * 100)}%"
+        self.setText(text)
+        self.setStyleSheet(
+            f"color:{fg};background:{bg};border-radius:5px;"
+            f"padding:2px 6px;font-size:10px;"
+        )
 
 
 class ClipRow(QFrame):
-    """一条记录：缩略图 + 两行文字 + 状态药丸。"""
+    """一条记录：缩略图 + 主行 + 副行 + 状态药丸。"""
 
     clicked = Signal(str)
-    activated = Signal(str)             # 双击 = 复制到本机
-    pillClicked = Signal(str)
-    menuRequested = Signal(str, QPoint)
+    activated = Signal(str)      # 双击
+    deleteRequested = Signal(str)
+    retryRequested = Signal(str)
 
     def __init__(self, record: ClipRecord, parent=None):
         super().__init__(parent)
         self.record = record
-        self.setObjectName("citem")
+        self.setObjectName("clipRow")
         self.setFixedHeight(ROW_H)
         self.setCursor(Qt.PointingHandCursor)
-        self.setProperty("rid", record.id)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self._selected = False
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(13, 8, 13, 8)
+        lay.setContentsMargins(12, 8, 10, 8)
         lay.setSpacing(10)
+        lay.addWidget(Thumb(record), 0, Qt.AlignTop)
 
-        lay.addWidget(_Thumb(record), 0, Qt.AlignVCenter)
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 1, 0, 0)
+        text_col.setSpacing(2)
 
-        col = QVBoxLayout()
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(2)
-        is_text = record.kind == "text"
-        self.title = _ElideRight(record_title(record), "ctitleMono" if is_text else "ctitle")
-        if is_text:
-            self.title.setFont(_mono_font(11.8))
-        self.meta = QLabel()
-        self.meta.setObjectName("cmeta")
-        self.meta.setText(self._meta_html(record))
-        col.addWidget(self.title)
-        col.addWidget(self.meta)
-        lay.addLayout(col, 1)
+        title = ElidedLabel(self._title(record), mode=Qt.ElideRight)
+        title.setMinimumWidth(60)
+        title.setStyleSheet(
+            f"color:{theme.INK};font-size:12.5px;"
+            + ("font-family:'SF Mono','Menlo',monospace;" if record.kind != "image" else "")
+        )
+        title.setAttribute(Qt.WA_TransparentForMouseEvents)
+        text_col.addWidget(title)
 
-        text, name = _state_pill(record)
-        self.pill = _Pill(text, name, clickable=record.state in ("fail", "local"))
-        self.pill.clicked.connect(lambda: self.pillClicked.emit(record.id))
-        lay.addWidget(self.pill, 0, Qt.AlignVCenter)
+        sub = QLabel(self._subtitle(record))
+        sub.setStyleSheet("color:#818B9C;font-size:10.5px;")
+        sub.setAttribute(Qt.WA_TransparentForMouseEvents)
+        text_col.addWidget(sub)
+        lay.addLayout(text_col, 1)
 
-        for child in self.findChildren(QLabel):
-            child.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.pill = StatePill(record.state, record.progress)
+        self.pill.setAttribute(Qt.WA_TransparentForMouseEvents)
+        lay.addWidget(self.pill, 0, Qt.AlignTop)
+
+        self._del = QPushButton("\u00d7")
+        self._del.setCursor(Qt.PointingHandCursor)
+        self._del.setFixedSize(16, 16)
+        self._del.setStyleSheet(
+            "QPushButton{border:none;color:#A9B2C1;font-size:13px;background:transparent;}"
+            "QPushButton:hover{color:#A82B2B;}"
+        )
+        self._del.setVisible(False)
+        self._del.clicked.connect(lambda: self.deleteRequested.emit(self.record.id))
+        lay.addWidget(self._del, 0, Qt.AlignTop)
+
+        self._apply_style()
 
     @staticmethod
-    def _meta_html(record: ClipRecord) -> str:
-        """`来源 · 时间 · 大小 · 类型`，来源加粗 —— 它是最容易看错的一列。"""
-        source = "本机" if record.source == "local" else (record.peer_name or "对端")
-        dot = '<span style="color:#C6CDDA"> · </span>'
-        return (
-            f'<b style="color:{theme.INK2}">{source}</b>{dot}'
-            f"{_ago(record.ts)}{dot}{_human_size(record.size)}{dot}{record_meta(record)}"
-        )
+    def _title(rec: ClipRecord) -> str:
+        if rec.kind == "image":
+            return f"截图 {rec.width} × {rec.height}"
+        text = (rec.text or "").replace("\n", " ").replace("\t", " ").strip()
+        return text[:46] + ("…" if len(text) > 46 else "")
 
+    @staticmethod
+    def _subtitle(rec: ClipRecord) -> str:
+        kind = {"text": "纯文本", "image": "PNG", "mixed": "图文"}.get(rec.kind, rec.kind)
+        parts = [_source_text(rec), _ago(rec.ts), _human_size(rec.size), kind]
+        return " · ".join(parts)
+
+    # ---- 交互 ----
     def set_selected(self, selected: bool) -> None:
-        name = "citemSel" if selected else "citem"
-        if self.objectName() != name:
-            self.setObjectName(name)
-            self.style().unpolish(self)
-            self.style().polish(self)
+        self._selected = selected
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        if self._selected:
+            self.setStyleSheet(
+                "QFrame#clipRow{background:#F3F7FF;border-left:2.5px solid "
+                f"{theme.ACCENT};}}"
+            )
+        else:
+            self.setStyleSheet("QFrame#clipRow{background:transparent;}")
+
+    def enterEvent(self, event):  # noqa: N802
+        self._del.setVisible(True)
+        if not self._selected:
+            self.setStyleSheet("QFrame#clipRow{background:#F8FAFD;}")
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._del.setVisible(False)
+        self._apply_style()
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event):  # noqa: N802
         if event.button() == Qt.LeftButton:
+            if self.record.state in ("fail", "local"):
+                # 药丸本身就是重试入口（设计第 4 节）
+                self.retryRequested.emit(self.record.id)
             self.clicked.emit(self.record.id)
         super().mousePressEvent(event)
 
@@ -312,454 +245,329 @@ class ClipRow(QFrame):
             self.activated.emit(self.record.id)
         super().mouseDoubleClickEvent(event)
 
-    def contextMenuEvent(self, event):  # noqa: N802
-        self.menuRequested.emit(self.record.id, event.globalPos())
-        event.accept()
 
-
-class _EmptyIcon(QWidget):
-    """空态图标：52×52 圆角块 + 三行文字 + 放大镜（和设计稿同一套线条）。"""
+class PreviewPane(QFrame):
+    """固定高度的预览区：图片等比缩放，文本可选中。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(52, 52)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setObjectName("previewPane")
+        self.setFixedHeight(PREVIEW_H)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "QFrame#previewPane{background:#FBFCFE;border-top:1px solid #EEF1F6;"
+            "border-bottom:1px solid #EEF1F6;}"
+        )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 6, 12, 8)
+        lay.setSpacing(4)
 
-    def paintEvent(self, event):  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor(theme.LINE), 1))
-        p.setBrush(QColor("#F4F7FC"))
-        p.drawRoundedRect(QRectF(0.5, 0.5, 51, 51), 14, 14)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        self.caption = QLabel("预览")
+        self.caption.setStyleSheet("color:#818B9C;font-size:10.5px;")
+        self.hint = QLabel("")
+        self.hint.setStyleSheet("color:#A9B2C1;font-size:10.5px;")
+        head.addWidget(self.caption, 0)
+        head.addStretch(1)
+        head.addWidget(self.hint, 0)
+        lay.addLayout(head)
 
-        pen = QPen(QColor("#8E98A8"), 1.6)
-        pen.setCapStyle(Qt.RoundCap)
-        pen.setJoinStyle(Qt.RoundJoin)
-        p.setPen(pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawLine(11, 17, 27, 17)
-        p.drawLine(11, 24, 24, 24)
-        p.drawLine(11, 31, 20, 31)
-        p.drawEllipse(QRectF(25.5, 28.5, 9.5, 9.5))
-        p.drawLine(33.6, 36.6, 39, 42)
-        p.end()
+        self.image = QLabel()
+        self.image.setAlignment(Qt.AlignCenter)
+        self.image.setStyleSheet("background:transparent;")
+        self.text = QPlainTextEdit()
+        self.text.setReadOnly(True)
+        self.text.setStyleSheet(
+            "QPlainTextEdit{background:#FFFFFF;border:1px solid #E5E9F1;border-radius:9px;"
+            f"padding:6px;color:{theme.INK};font-size:11.5px;"
+            "font-family:'SF Mono','Menlo',monospace;}"
+        )
+        self.text.setVisible(False)
+        lay.addWidget(self.image, 1)
+        lay.addWidget(self.text, 1)
+
+    def show_record(self, rec: ClipRecord | None) -> None:
+        if rec is None:
+            self.caption.setText("预览")
+            self.hint.setText("选中一条看内容")
+            self.image.clear()
+            self.image.setVisible(True)
+            self.text.setVisible(False)
+            return
+        if rec.png is not None:
+            image = QImage()
+            if image.loadFromData(rec.png, "PNG"):
+                pix = QPixmap.fromImage(
+                    image.scaled(414, PREVIEW_H - 34, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+                self.image.setPixmap(pix)
+                self.image.setVisible(True)
+                self.text.setVisible(False)
+                self.caption.setText(f"预览  图片 · {_human_size(rec.size)}")
+                self.hint.setText("双击查看原图")
+                return
+        self.image.setVisible(False)
+        self.text.setVisible(True)
+        self.text.setPlainText(rec.text or "")
+        self.caption.setText(f"预览  文本 · {_human_size(rec.size)}")
+        self.hint.setText("可直接选中文本")
 
 
-# --------------------------------------------------------------------------- #
-# 页面
-# --------------------------------------------------------------------------- #
 class ClipboardPage(QWidget):
-    """剪贴板页。`source` 见模块说明；传 None 时永远显示空态（方便单测）。"""
+    """剪贴板页。`refresh()` 由外部定时器驱动（页面不可见时不要调）。"""
 
     backRequested = Signal()
+    retryRequested = Signal(str)
+    copyRequested = Signal(str)
+    cleared = Signal()
 
-    def __init__(self, source=None, parent=None):
+    def __init__(self, engine=None, parent=None):
         super().__init__(parent)
-        self.source = source
+        self.engine = engine
         self._records: list[ClipRecord] = []
         self._rows: dict[str, ClipRow] = {}
         self._selected: str | None = None
-        self._signature: tuple | None = None
-        self._pv_png: bytes | None = None
+        self._last_sig: str | None = None
+        self._conn_sig = ""
+        self._build()
 
-        self.setFocusPolicy(Qt.StrongFocus)
+    # ------------------------------------------------------------------ 版面
+    def _build(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        root.addWidget(self._build_header())
+        # 页头
+        head = QWidget()
+        head.setFixedHeight(HEADER_H)
+        head.setAttribute(Qt.WA_StyledBackground, True)
+        head.setStyleSheet("background:transparent;")
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(12, 0, 14, 0)
+        hl.setSpacing(8)
 
+        self.back = QPushButton("‹ 返回")
+        self.back.setCursor(Qt.PointingHandCursor)
+        self.back.setStyleSheet(
+            f"QPushButton{{border:none;background:transparent;color:{theme.ACCENT_DEEP};"
+            "font-size:12px;padding:0 4px;}"
+            "QPushButton:hover{color:#0B3BB0;}"
+        )
+        self.back.clicked.connect(self.backRequested)
+        hl.addWidget(self.back, 0)
+
+        title = QLabel("剪贴板")
+        title.setStyleSheet(f"color:{theme.INK};font-size:13px;font-weight:600;")
+        hl.addStretch(1)
+        hl.addWidget(title, 0)
+        hl.addStretch(1)
+
+        self.conn = QLabel("●  未连接")
+        self.conn.setStyleSheet("color:#A9B2C1;font-size:10.5px;")
+        hl.addWidget(self.conn, 0)
+        outer.addWidget(head)
+
+        # 列表
         self.scroll = QScrollArea()
-        self.scroll.setObjectName("clipScroll")
         self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll.setFocusPolicy(Qt.NoFocus)
-        self.scroll.setFixedHeight(LIST_MAX_H)
-        self.list_wrap = QWidget()
-        self.list_wrap.setObjectName("clipList")
-        self.list_lay = QVBoxLayout(self.list_wrap)
+        self.scroll.setFixedHeight(LIST_H)
+        self.scroll.setStyleSheet(
+            "QScrollArea{border:none;background:transparent;}"
+            "QScrollBar:vertical{width:6px;background:transparent;}"
+            "QScrollBar::handle:vertical{background:#D9DFE9;border-radius:3px;min-height:20px;}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
+        )
+        self.list_host = QWidget()
+        self.list_host.setStyleSheet("background:transparent;")
+        self.list_lay = QVBoxLayout(self.list_host)
         self.list_lay.setContentsMargins(0, 0, 0, 0)
         self.list_lay.setSpacing(0)
         self.list_lay.addStretch(1)
-        self.scroll.setWidget(self.list_wrap)
-        root.addWidget(self.scroll)
+        self.scroll.setWidget(self.list_host)
+        outer.addWidget(self.scroll)
 
-        self.preview = self._build_preview()
-        root.addWidget(self.preview, 1)
-
-        self.empty = self._build_empty()
+        # 空态
+        self.empty = QWidget()
+        el = QVBoxLayout(self.empty)
+        el.setContentsMargins(28, 0, 28, 0)
+        el.setSpacing(10)
+        self.empty_title = QLabel("还没有内容")
+        self.empty_title.setAlignment(Qt.AlignCenter)
+        self.empty_title.setStyleSheet(f"color:{theme.INK};font-size:13px;")
+        self.empty_sub = QLabel("复制点什么，然后按热键切一次屏")
+        self.empty_sub.setAlignment(Qt.AlignCenter)
+        self.empty_sub.setWordWrap(True)
+        self.empty_sub.setStyleSheet("color:#818B9C;font-size:11.5px;")
+        el.addStretch(1)
+        el.addWidget(self.empty_title)
+        el.addWidget(self.empty_sub)
+        self.empty_actions = QHBoxLayout()
+        self.empty_actions.setSpacing(8)
+        self.pair_btn = QPushButton("显示配对码")
+        self.pair_btn.setCursor(Qt.PointingHandCursor)
+        self.pair_btn.setObjectName("ghost")
+        self.empty_actions.addStretch(1)
+        self.empty_actions.addWidget(self.pair_btn)
+        self.empty_actions.addStretch(1)
+        el.addLayout(self.empty_actions)
+        el.addStretch(1)
         self.empty.setVisible(False)
-        root.addWidget(self.empty, 1)
+        outer.addWidget(self.empty, 1)
 
-        self.bar = self._build_bar()
-        root.addWidget(self.bar)
+        # 预览
+        self.preview = PreviewPane()
+        outer.addWidget(self.preview)
+
+        # 操作栏
+        bar = QWidget()
+        bar.setFixedHeight(ACTION_H)
+        bar.setAttribute(Qt.WA_StyledBackground, True)
+        bar.setStyleSheet("background:#FFFFFF;border-top:1px solid #EEF1F6;")
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(12, 8, 12, 8)
+        bl.setSpacing(8)
+        self.btn_copy = QPushButton("复制到本机")
+        self.btn_retry = QPushButton("重发")
+        for btn in (self.btn_copy, self.btn_retry):
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setObjectName("ghost")
+        self.btn_clear = QPushButton("清空记录")
+        self.btn_clear.setCursor(Qt.PointingHandCursor)
+        self.btn_clear.setStyleSheet(
+            "QPushButton{border:none;background:transparent;color:#A82B2B;"
+            "font-size:11.5px;padding:0 6px;}"
+            "QPushButton:hover{text-decoration:underline;}"
+        )
+        self.btn_copy.clicked.connect(self._copy_selected)
+        self.btn_retry.clicked.connect(self._retry_selected)
+        self.btn_clear.clicked.connect(self._clear)
+        bl.addWidget(self.btn_copy)
+        bl.addWidget(self.btn_retry)
+        bl.addStretch(1)
+        bl.addWidget(self.btn_clear)
+        outer.addWidget(bar)
 
         self.statusbar = StatusBar()
         self.statusbar.text.setText("仅内存保留 · 退出即清 · 敏感内容不记录")
-        self.statusbar.ver.setText("最近 10 条")
-        root.addWidget(self.statusbar)
+        self.statusbar.ver.setText("")
+        outer.addWidget(self.statusbar)
 
-        self._timer = QTimer(self)
-        self._timer.setInterval(300)
-        self._timer.timeout.connect(self.refresh)
-
-        self._render_empty(True)
-
-    # ------------------------------------------------------------------ 组装
-    def _build_header(self) -> QWidget:
-        bar = QFrame()
-        bar.setObjectName("clipHead")
-        bar.setFixedHeight(40)
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(14, 0, 14, 0)
-        lay.setSpacing(8)
-
-        self.btn_back = QPushButton("\u2039  返回")
-        self.btn_back.setObjectName("clipBack")
-        self.btn_back.setCursor(Qt.PointingHandCursor)
-        self.btn_back.setFixedHeight(26)
-        self.btn_back.clicked.connect(self.backRequested)
-        lay.addWidget(self.btn_back, 0, Qt.AlignVCenter)
-
-        lay.addWidget(label("剪贴板", "clipTitle"), 0, Qt.AlignVCenter)
-        lay.addStretch(1)
-
-        self.conn_dot = QLabel()
-        self.conn_dot.setFixedSize(6, 6)
-        self.conn_text = label("未连接", "clipConn")
-        lay.addWidget(self.conn_dot, 0, Qt.AlignVCenter)
-        lay.addWidget(self.conn_text, 0, Qt.AlignVCenter)
-        self._set_connected(False, "")
-        return bar
-
-    def _build_preview(self) -> QWidget:
-        box = QFrame()
-        box.setObjectName("clipPreview")
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(13, 9, 13, 11)
-        lay.setSpacing(6)
-
-        head = QHBoxLayout()
-        head.setContentsMargins(0, 0, 0, 0)
-        head.setSpacing(7)
-        self.pv_label = label("预览", "pvHead")
-        self.pv_kind = label("", "pvKind")
-        self.pv_hint = label("", "pvHint")
-        head.addWidget(self.pv_label, 0, Qt.AlignVCenter)
-        head.addWidget(self.pv_kind, 0, Qt.AlignVCenter)
-        head.addStretch(1)
-        head.addWidget(self.pv_hint, 0, Qt.AlignVCenter)
-        lay.addLayout(head)
-
-        self.pv_body = QWidget()
-        body_lay = QVBoxLayout(self.pv_body)
-        body_lay.setContentsMargins(0, 0, 0, 0)
-        body_lay.setSpacing(0)
-
-        self.pv_image = QLabel()
-        self.pv_image.setObjectName("pvImg")
-        self.pv_image.setAlignment(Qt.AlignCenter)
-        self.pv_image.setMinimumHeight(60)
-        self.pv_image.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-
-        self.pv_text = QPlainTextEdit()
-        self.pv_text.setObjectName("pvText")
-        self.pv_text.setReadOnly(True)
-        self.pv_text.setFrameShape(QFrame.NoFrame)
-        self.pv_text.setFont(_mono_font(11.5))
-        self.pv_text.document().setDocumentMargin(7)
-        self.pv_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        self.pv_none = label("选中一条查看预览", "pvEmpty")
-        self.pv_none.setAlignment(Qt.AlignCenter)
-
-        body_lay.addWidget(self.pv_image)
-        body_lay.addWidget(self.pv_text)
-        body_lay.addWidget(self.pv_none)
-        lay.addWidget(self.pv_body, 1)
-        return box
-
-    def _build_empty(self) -> QWidget:
-        box = QWidget()
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(34, 0, 34, 0)
-        lay.setSpacing(0)
-        lay.addStretch(1)
-        icon = _EmptyIcon()
-        row = QHBoxLayout()
-        row.addStretch(1)
-        row.addWidget(icon)
-        row.addStretch(1)
-        lay.addLayout(row)
-        lay.addSpacing(14)
-        self.empty_title = label("还没有内容", "clipEmptyTitle")
-        self.empty_title.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.empty_title)
-        lay.addSpacing(7)
-        self.empty_text = label(
-            "复制点什么，然后按热键切一次屏。\n文字和图片会自动带过去，并记在这里。",
-            "clipEmptyText",
-        )
-        self.empty_text.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.empty_text)
-        lay.addStretch(1)
-        return box
-
-    def _build_bar(self) -> QWidget:
-        bar = QFrame()
-        bar.setObjectName("clipBar")
-        bar.setFixedHeight(48)
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(13, 0, 13, 0)
-        lay.setSpacing(7)
-
-        self.btn_copy = QPushButton("复制到本机")
-        self.btn_copy.setObjectName("clipPrimary")
-        self.btn_copy.setFixedHeight(30)
-        self.btn_copy.setCursor(Qt.PointingHandCursor)
-        self.btn_copy.clicked.connect(self._copy_selected)
-
-        self.btn_resend = QPushButton("重发")
-        self.btn_resend.setObjectName("clipBtn")
-        self.btn_resend.setFixedHeight(30)
-        self.btn_resend.setCursor(Qt.PointingHandCursor)
-        self.btn_resend.clicked.connect(self._resend_selected)
-
-        self.btn_clear = QPushButton("清空记录")
-        self.btn_clear.setObjectName("clipDanger")
-        self.btn_clear.setFixedHeight(30)
-        self.btn_clear.setCursor(Qt.PointingHandCursor)
-        self.btn_clear.clicked.connect(self._clear)
-
-        lay.addWidget(self.btn_copy, 0, Qt.AlignVCenter)
-        lay.addWidget(self.btn_resend, 0, Qt.AlignVCenter)
-        lay.addStretch(1)
-        lay.addWidget(self.btn_clear, 0, Qt.AlignVCenter)
-        return bar
+        self.setFocusPolicy(Qt.StrongFocus)
 
     # ------------------------------------------------------------------ 数据
     def refresh(self) -> None:
-        """拉一次记录。300ms 定时器 / 进入页面 / 动作之后都会调它。"""
-        records = self._fetch_records()
-        signature = tuple((r.id, r.state, round(r.progress, 3)) for r in records)
-        if signature == self._signature:
+        """按引擎记录重画。内容没变就什么都不做（300ms 定时器会一直调）。"""
+        if self.engine is None:
             return
-        self._signature = signature
+        records = self.engine.records()
+        sig = "|".join(f"{r.id}:{r.state}" for r in records)
+        connected = self.engine.status().get("authenticated") == "yes"
+        peer = self.engine.status().get("peer_device", "-")
+        conn_sig = f"{connected}:{peer}"
+        if sig == self._last_sig and conn_sig == self._conn_sig:
+            return
+        self._last_sig = sig
+        self._conn_sig = conn_sig
+
         self._records = records
-        self._rebuild()
+        self._rebuild_rows()
+        self._update_conn(connected)
+        self._update_empty(records)
+        self.statusbar.ver.setText(f"{len(records)} 条")
 
-    def _fetch_records(self) -> list[ClipRecord]:
-        if self.source is None:
-            return []
-        getter = getattr(self.source, "records", None)
-        if not callable(getter):
-            return []
-        try:
-            return list(getter())
-        except Exception:  # noqa: BLE001 - 数据源坏了不能把界面打挂
-            log.warning("读取剪贴板记录失败", exc_info=True)
-            return []
+    def _update_conn(self, connected: bool) -> None:
+        if connected:
+            self.conn.setText("●  已连接")
+            self.conn.setStyleSheet("color:#0E9C6A;font-size:10.5px;")
+        else:
+            self.conn.setText("●  未连接")
+            self.conn.setStyleSheet("color:#A9B2C1;font-size:10.5px;")
 
-    def _rebuild(self) -> None:
-        for row in self._rows.values():
-            row.setParent(None)
-            row.deleteLater()
-        self._rows.clear()
+    def _update_empty(self, records: list[ClipRecord]) -> None:
+        paired = bool(getattr(self.engine.cfg, "psk", "")) if self.engine else False
+        show_empty = not records
+        self.empty.setVisible(show_empty)
+        self.scroll.setVisible(not show_empty)
+        self.preview.setVisible(not show_empty)
+        if show_empty:
+            if paired:
+                self.empty_title.setText("还没有内容")
+                self.empty_sub.setText("复制点什么，然后按热键切一次屏")
+                self.pair_btn.setVisible(False)
+            else:
+                self.empty_title.setText("两台机器连上才能互通")
+                self.empty_sub.setText("点下面的按钮生成配对码，再到另一台机器上输入同一个码")
+                self.pair_btn.setVisible(True)
 
-        # 清掉 layout 里的行（末尾那个 stretch 保留）
+    def _rebuild_rows(self) -> None:
+        # 只重建变化的行；简单起见整表重建（最多 10 行，代价可忽略）
         while self.list_lay.count() > 1:
             item = self.list_lay.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
                 widget.deleteLater()
-
-        if not self._records:
-            self._selected = None
-            self._render_empty(True)
-            self._set_actions_enabled(False)
-            self._update_connection()
-            return
-
-        for index, record in enumerate(self._records):
-            row = ClipRow(record)
+        self._rows.clear()
+        if self._selected not in [r.id for r in self._records]:
+            self._selected = self._records[0].id if self._records else None
+        for rec in self._records:
+            row = ClipRow(rec)
+            row.set_selected(rec.id == self._selected)
             row.clicked.connect(self._select)
-            row.activated.connect(self._copy_record)
-            row.pillClicked.connect(self._retry_record)
-            row.menuRequested.connect(self._show_row_menu)
-            self.list_lay.insertWidget(index, row)
-            self._rows[record.id] = row
+            row.activated.connect(self._copy)
+            row.deleteRequested.connect(self._drop)
+            row.retryRequested.connect(self._retry)
+            self.list_lay.insertWidget(self.list_lay.count() - 1, row)
+            self._rows[rec.id] = row
+        current = next((r for r in self._records if r.id == self._selected), None)
+        self.preview.show_record(current)
 
-        self.scroll.setFixedHeight(min(LIST_MAX_H, ROW_H * len(self._records)))
-        self._render_empty(False)
-        self._set_actions_enabled(True)
-
-        keep = self._selected if self._selected in self._rows else self._records[0].id
-        self._select(keep)
-        self._update_connection()
-
-    def _render_empty(self, empty: bool) -> None:
-        """空态：收起列表、预览和操作栏，内容在整页垂直居中（设计稿第 7 节）。"""
-        self.scroll.setVisible(not empty)
-        self.preview.setVisible(not empty)
-        self.bar.setVisible(not empty)
-        self.empty.setVisible(empty)
-
-    def _set_actions_enabled(self, enabled: bool) -> None:
-        self.btn_copy.setEnabled(enabled)
-        self.btn_resend.setEnabled(enabled)
-        self.btn_clear.setEnabled(enabled)
-
-    def _update_connection(self) -> None:
-        status = {}
-        getter = getattr(self.source, "status", None)
-        if callable(getter):
-            try:
-                status = getter() or {}
-            except Exception:  # noqa: BLE001
-                status = {}
-        self._set_connected(bool(status.get("connected")), str(status.get("peer") or ""))
-
-    def _set_connected(self, connected: bool, peer: str) -> None:
-        color = "#34C759" if connected else "#C6CDDA"
-        self.conn_dot.setStyleSheet(f"background:{color};border-radius:3px;")
-        self.conn_text.setText(peer if connected and peer else ("已连接" if connected else "未连接"))
-
-    # ------------------------------------------------------------------ 选择
-    def selected_id(self) -> str | None:
-        return self._selected
-
-    def select(self, rid: str | None) -> None:
-        self._select(rid)
-
-    def _select(self, rid: str | None) -> None:
-        if rid is not None and rid not in self._rows:
+    def _select(self, record_id: str) -> None:
+        if record_id == self._selected:
             return
-        self._selected = rid
-        for key, row in self._rows.items():
-            row.set_selected(key == rid)
-        self._render_preview(self._records_by_id().get(rid) if rid else None)
-        self._set_actions_enabled(rid is not None)
-
-    def _records_by_id(self) -> dict[str, ClipRecord]:
-        return {r.id: r for r in self._records}
-
-    def _move(self, step: int) -> None:
-        if not self._records:
-            return
-        ids = [r.id for r in self._records]
-        try:
-            index = ids.index(self._selected) if self._selected in ids else 0
-        except ValueError:
-            index = 0
-        index = max(0, min(len(ids) - 1, index + step))
-        self._select(ids[index])
-        row = self._rows.get(ids[index])
+        old = self._rows.get(self._selected or "")
+        if old is not None:
+            old.set_selected(False)
+        self._selected = record_id
+        row = self._rows.get(record_id)
         if row is not None:
-            self.scroll.ensureWidgetVisible(row, 0, 8)
-
-    # ------------------------------------------------------------------ 预览
-    def _render_preview(self, record: ClipRecord | None) -> None:
-        has = record is not None
-        self.pv_none.setVisible(not has)
-        self.pv_image.setVisible(False)
-        self.pv_text.setVisible(False)
-        self.pv_kind.setText("")
-        self.pv_hint.setText("")
-
-        if record is None:
-            return
-
-        if record.kind == "image" and record.png:
-            self.pv_kind.setText(f"图片 · {_human_size(record.size)}")
-            self.pv_hint.setText("双击行复制到本机")
-            self._pv_png = record.png
-            self.pv_image.setVisible(True)
-            self._render_image()
-            return
-
-        self.pv_kind.setText(f"文本 · {_human_size(record.size)}")
-        self.pv_hint.setText("可直接选中文本")
-        self._pv_png = None
-        self.pv_text.setPlainText(record.text or "")
-        self.pv_text.setVisible(True)
-
-    def _render_image(self) -> None:
-        if not self._pv_png:
-            return
-        image = QPixmap()
-        if not image.loadFromData(self._pv_png, "PNG"):
-            self.pv_image.setText("图片解码失败")
-            return
-        width = max(80, self.pv_body.width() - 2)
-        height = max(40, self.pv_body.height() - 2)
-        self.pv_image.setPixmap(
-            image.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        )
-
-    def resizeEvent(self, event):  # noqa: N802
-        super().resizeEvent(event)
-        if self._pv_png and self.pv_image.isVisible():
-            self._render_image()
+            row.set_selected(True)
+        current = next((r for r in self._records if r.id == record_id), None)
+        self.preview.show_record(current)
 
     # ------------------------------------------------------------------ 动作
-    def _copy_record(self, rid: str) -> None:
-        if not self._call("copy_to_local", rid):
-            return
-        original = self.btn_copy.text()
-        self.btn_copy.setText("已复制")
-        QTimer.singleShot(1100, lambda: self.btn_copy.setText(original))
-
     def _copy_selected(self) -> None:
         if self._selected:
-            self._copy_record(self._selected)
+            self._copy(self._selected)
 
-    def _resend_selected(self) -> None:
-        if not self._selected:
-            return
-        self._call("resend", self._selected)
-        self.refresh()
+    def _copy(self, record_id: str) -> None:
+        if self.engine is not None and self.engine.copy_to_local(record_id):
+            self.copyRequested.emit(record_id)
 
-    def _retry_record(self, rid: str) -> None:
-        record = self._records_by_id().get(rid)
-        if record is None or record.state not in ("fail", "local"):
-            return
-        self._call("resend", rid)
-        self.refresh()
+    def _retry_selected(self) -> None:
+        if self._selected:
+            self._retry(self._selected)
 
-    def _remove_record(self, rid: str) -> None:
-        self._call("remove", rid)
-        if self._selected == rid:
-            self._selected = None
-        self._signature = None      # 强制下一次 refresh 重建
-        self.refresh()
+    def _retry(self, record_id: str) -> None:
+        if self.engine is not None:
+            self.engine.repush(record_id)
+            self.retryRequested.emit(record_id)
+            self._last_sig = None      # 强制下次刷新，让状态立刻变成「传输中」
+            self.refresh()
+
+    def _drop(self, record_id: str) -> None:
+        if self.engine is not None:
+            self.engine.drop_record(record_id)
+            self._last_sig = None
+            self.refresh()
 
     def _clear(self) -> None:
-        self._call("clear")
-        self._selected = None
-        self._signature = None
-        self.refresh()
-
-    def _call(self, method: str, *args) -> bool:
-        func = getattr(self.source, method, None)
-        if not callable(func):
-            return False
-        try:
-            result = func(*args)
-        except Exception:  # noqa: BLE001 - 数据源异常不该弹栈到界面
-            log.warning("剪贴板动作 %s 失败", method, exc_info=True)
-            return False
-        return True if result is None else bool(result)
-
-    def _show_row_menu(self, rid: str, pos: QPoint) -> None:
-        menu = QMenu(self)
-        menu.addAction("复制到本机", lambda: self._copy_record(rid))
-        menu.addAction("删除这条记录", lambda: self._remove_record(rid))
-        if callable(getattr(self.source, "clear_system_clipboard", None)):
-            menu.addSeparator()
-            menu.addAction("清空本机剪贴板", lambda: self._call("clear_system_clipboard"))
-        menu.exec(pos)
+        if self.engine is not None:
+            self.engine.clear_records()
+            self._last_sig = None
+            self.refresh()
+            self.cleared.emit()
 
     # ------------------------------------------------------------------ 键盘
     def keyPressEvent(self, event):  # noqa: N802
@@ -767,29 +575,31 @@ class ClipboardPage(QWidget):
         if key == Qt.Key_Escape:
             self.backRequested.emit()
             return
-        if key in (Qt.Key_Down, Qt.Key_Up):
-            self._move(1 if key == Qt.Key_Down else -1)
+        if key in (Qt.Key_Up, Qt.Key_Down):
+            self._move(key == Qt.Key_Down)
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
             self._copy_selected()
             return
-        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+        if key in (Qt.Key_Backspace, Qt.Key_Delete):
             if self._selected:
-                self._remove_record(self._selected)
+                self._drop(self._selected)
             return
-        if event.matches(QKeySequence.Copy):
+        if event.modifiers() & (Qt.ControlModifier | Qt.MetaModifier) and key == Qt.Key_C:
             self._copy_selected()
             return
         super().keyPressEvent(event)
 
-    # ------------------------------------------------------------------ 生命周期
-    def showEvent(self, event):  # noqa: N802
-        super().showEvent(event)
-        self._signature = None          # 重新进页面一定拉一次
-        self.refresh()
-        self.setFocus(Qt.OtherFocusReason)
-        self._timer.start()
-
-    def hideEvent(self, event):  # noqa: N802
-        super().hideEvent(event)
-        self._timer.stop()              # 页面不可见就不刷新，低频页面别在后台空转
+    def _move(self, down: bool) -> None:
+        if not self._records:
+            return
+        ids = [r.id for r in self._records]
+        try:
+            index = ids.index(self._selected or ids[0])
+        except ValueError:
+            index = 0
+        index = min(len(ids) - 1, index + 1) if down else max(0, index - 1)
+        self._select(ids[index])
+        row = self._rows.get(ids[index])
+        if row is not None:
+            self.scroll.ensureWidgetVisible(row, 0, 8)

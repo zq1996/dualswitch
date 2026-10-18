@@ -33,6 +33,9 @@
 | `STRICT_BACKEND` | str | 勾选「只认右 Alt/Option」时写进配置的 hotkey_backend |
 | `MATCH_DESC` | str | 显示器页「匹配关键字」的说明 |
 | `SETTINGS_ROW_HINT` | str | 主窗口设置行的右侧提示（`⌘ ,` / 空） |
+| `INLINE_CLIPBOARD_ROW` | bool | 剪贴板入口是否放主页面列表（mac 是，Windows 放标题栏） |
+| `CLIPBOARD_ROW_HINT` | str | 剪贴板行的右侧提示（`⌘⇧V` / 空） |
+| `EXTRA_H` | int | 主窗口额外高度（mac 多一行列表 = 20，Windows = 0） |
 
 以及下列函数：
 

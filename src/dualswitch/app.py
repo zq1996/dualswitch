@@ -74,6 +74,10 @@ class SwitchController:
         self._current_source = cfg.effective_host()
         self.history: list[SwitchResult] = []
 
+        # 切屏前的钩子：剪贴板同步在这里把"本机当前剪贴板"入队（必须极快返回）。
+        # 放在 _execute 开头而不是 trigger() 里，是为了让托盘菜单 / CLI 的切换也带上同步。
+        self.on_before_switch: list[Callable[..., None]] = []
+
         # 外部切换（例如在 Mac 上执行 CLI）不会经过本进程，
         # 只能靠「显示器还在不在本机」反推画面归属，见 detect_source()
         self.detect_interval_s = 2.0   # 轮询间隔
@@ -82,6 +86,21 @@ class SwitchController:
     def set_notifier(self, notifier: Notifier) -> None:
         """托盘就绪后再挂上通知通道。"""
         self._notify = notifier
+
+    def add_before_switch(self, hook: Callable[[str, str], None]) -> None:
+        """挂一个切屏前钩子，签名 `(source, target)`。
+
+        钩子里**绝对不能阻塞**：剪贴板同步的实现只是 set 一个事件就返回。
+        钩子抛异常只记日志，绝不影响切屏本身。
+        """
+        self.on_before_switch.append(hook)
+
+    def _run_before_switch(self, source: str, target: str) -> None:
+        for hook in list(self.on_before_switch):
+            try:
+                hook(source, target)
+            except Exception:  # noqa: BLE001 - 同步坏了不能连累切屏
+                log.exception("切屏前钩子执行失败")
 
     # ------------------------------------------------------------------ 生命周期
     def start(self) -> None:
@@ -218,6 +237,9 @@ class SwitchController:
             log.info("[dry-run] 本应发送 Set VCP 0x%02X = %d（目标 %s）", self.cfg.vcp_code, value, target)
             self._record(result)
             return result
+
+        # 先读剪贴板再切屏（契约 2）：钩子只入队，实测 <1ms，不影响 200ms 目标
+        self._run_before_switch(source, target)
 
         try:
             self.backend.set_input(value)

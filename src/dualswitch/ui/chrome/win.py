@@ -19,14 +19,15 @@ PLATFORM_LABEL = "Windows"
 NATIVE_CHROME = False
 BODY_TOP = 16
 INLINE_SETTINGS_ROW = False
-INLINE_CLIPBOARD_ROW = False     # 剪贴板入口在标题栏（齿轮左边），主页面列表一点没动
-EXTRA_H = 0                      # 列表没加行，窗口高度不用变
 SETTINGS_IN_WINDOW = False       # Windows 保持独立设置窗口（自绘标题栏，嵌进来会有两层标题）
 CLICK_HINT = "双击图标切换"
 REOPEN_ON_ACTIVATE = False
 DOCK_FOLLOWS_WINDOW = False      # Windows 没有程序坞，任务栏按钮跟着窗口走，无需处理
 STRICT_BACKEND = "hook"
 SETTINGS_ROW_HINT = ""
+INLINE_CLIPBOARD_ROW = False     # 剪贴板入口在标题栏（齿轮左边）
+CLIPBOARD_ROW_HINT = ""
+EXTRA_H = 0                      # 列表没变长，窗口高度不变
 
 BACKEND_OPTIONS = ["auto", "dxva2", "command", "mock"]
 

@@ -28,6 +28,23 @@
     "notify_on_unconfirmed": false
   },
 
+  "clipboard": {
+    "enabled": true,
+    "image_enabled": true,
+    "mode": "on_switch",
+    "port": 47823,
+    "peer_port": 0,
+    "discover_port": 47824,
+    "peer": "",
+    "device_id": "",
+    "peer_device": "",
+    "peer_name": "",
+    "psk": "",
+    "max_image_mb": 32,
+    "record_limit": 10,
+    "debug_plain": false
+  },
+
   "tray": true,
   "notify": true,
   "log_level": "INFO"

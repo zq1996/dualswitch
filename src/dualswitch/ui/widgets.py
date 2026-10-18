@@ -63,10 +63,12 @@ def label(text: str, name: str = "", size: float | None = None, weight=None) -> 
 class ElidedLabel(QLabel):
     """超长文本自动中间省略（状态栏路径、长配置值）。setText 仍收完整文本。"""
 
-    def __init__(self, text: str = "", name: str = "", parent=None):
+    def __init__(self, text: str = "", name: str = "", parent=None, mode=None):
         super().__init__(parent)
         if name:
             self.setObjectName(name)
+        # 路径类文本用中间省略（看得出结尾），内容类文本用尾部省略（看得出开头）
+        self._mode = Qt.ElideMiddle if mode is None else mode
         self._full = text
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self._apply()
@@ -81,7 +83,7 @@ class ElidedLabel(QLabel):
     def _apply(self) -> None:
         fm = self.fontMetrics()
         width = self.width() - 1
-        shown = self._full if width <= 12 else fm.elidedText(self._full, Qt.ElideMiddle, width)
+        shown = self._full if width <= 12 else fm.elidedText(self._full, self._mode, width)
         if shown != super().text():
             super().setText(shown)
 
@@ -435,9 +437,9 @@ class Glyph(QWidget):
         elif self.kind == "gear":
             paint_gear(p, QPointF(w / 2, w / 2), self.color, scale=0.78)
         elif self.kind == "clip":
-            # 剪贴板：板身 + 顶部夹子（与标题栏按钮同一套线条）
-            p.drawRoundedRect(QRectF(3.7, 3.0, 7.6, 9.4), 1.5, 1.5)
-            p.drawRoundedRect(QRectF(5.9, 1.5, 3.2, 2.5), 0.8, 0.8)
+            # 剪贴板：板身 + 顶部夹子（比 Unicode ✂/📋 稳定，且与其它行同一线宽）
+            p.drawRoundedRect(QRectF(3.0, 3.0, 9.0, 10.2), 1.4, 1.4)
+            p.drawRoundedRect(QRectF(5.4, 1.4, 4.2, 3.0), 1.0, 1.0)
         else:  # pulse
             path = QPainterPath()
             path.moveTo(1.6, 7.5)
