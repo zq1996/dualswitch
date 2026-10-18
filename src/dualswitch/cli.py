@@ -137,6 +137,7 @@ def cmd_run(args) -> int:
         hotkey = None
 
     controller.start()
+    clip_engine = _start_clip_engine(cfg, cfg_file, controller)
 
     from . import tray as tray_mod
 
@@ -175,6 +176,8 @@ def cmd_run(args) -> int:
             pass
 
     controller.stop()
+    if clip_engine is not None:
+        clip_engine.stop()
     if hotkey:
         hotkey.stop()
     backend.close()
@@ -400,8 +403,195 @@ def cmd_config(args) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# clip（剪贴板同步）
+# --------------------------------------------------------------------------- #
+def _wait_true(predicate, timeout: float) -> bool:  # noqa: ANN001
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return bool(predicate())
+
+
+def _clip_engine(cfg, cfg_file):  # noqa: ANN001
+    """按配置起一个引擎（CLI 用，跑完就 stop）。"""
+    from .sync.engine import SyncEngine
+
+    config_mod.ensure_device_id_persisted(cfg, cfg_file)
+    engine = SyncEngine(cfg.clipboard, host_label=cfg.effective_host())
+    engine.start()
+    return engine
+
+
+def cmd_clip(args) -> int:
+    cfg, cfg_file = _load_config(args, create=True)
+    _setup_logging(cfg, console=False)
+    cb = cfg.clipboard
+    action = args.action
+
+    # ---- probe：只看本机剪贴板里有什么类型 ----
+    if action == "probe":
+        from .clipboard import create_backend as create_clip_backend
+
+        backend = create_clip_backend("auto")
+        try:
+            info = backend.probe()
+        finally:
+            backend.close()
+        if args.json:
+            print(json.dumps(info, ensure_ascii=False, indent=2))
+            return 0
+        print("本机剪贴板：")
+        for key, value in info.items():
+            print(f"  {key:<14}: {value}")
+        return 0
+
+    # ---- get：打印当前剪贴板内容（校验用） ----
+    if action == "get":
+        from .clipboard import create_backend as create_clip_backend
+
+        backend = create_clip_backend("auto")
+        try:
+            read_now = getattr(backend, "read_now", None)
+            item = read_now() if callable(read_now) else backend.poll()
+        finally:
+            backend.close()
+        if item is None:
+            print("（剪贴板为空，或只有不支持的类型 / 敏感内容）")
+            return 1
+        print(f"类型：{item.kind}")
+        print(f"指纹：{item.digest[:16]}")
+        print(f"大小：{item.wire_size()} 字节")
+        if item.text:
+            print(f"文本：{item.text[:500]!r}{'…' if len(item.text) > 500 else ''}")
+        if item.html:
+            print(f"HTML：{item.html[:120]!r}…")
+        if item.image is not None:
+            print(f"图片：{item.image.width}×{item.image.height}，PNG {item.image.size} 字节")
+        return 0
+
+    # ---- pair：两端输入同一个 PIN ----
+    if action == "pair":
+        from .sync import protocol as proto
+
+        pin = str(args.pin or proto.random_pin()).strip()
+        if not (pin.isdigit() and len(pin) == 6):
+            print("[FAIL] PIN 必须是 6 位数字")
+            return 2
+        cb.psk = proto.derive_key(pin).hex()
+        config_mod.save(cfg, cfg_file)
+        print(f"配对码：{pin}")
+        print("已写入共享密钥。请在**另一台机器**上执行：")
+        print(f"    dualswitch clip pair --pin {pin}")
+        print(f"（配置文件：{cfg_file}）")
+        print("两端密钥一致后重新启动程序即可互通。")
+        return 0
+
+    # ---- send：手工推一条 ----
+    if action == "send":
+        from .clipboard import make_image, make_text
+
+        if args.image:
+            path = Path(args.image).expanduser()
+            if not path.exists():
+                print(f"[FAIL] 文件不存在：{path}")
+                return 2
+            png = path.read_bytes()
+            if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+                print("[FAIL] 只支持 PNG（先用预览导出成 PNG，或截图直接传原始文件）")
+                return 2
+            item = make_image(png)
+            if item is None:
+                print("[FAIL] 图片超过 32MB 上限")
+                return 2
+        else:
+            text = args.text if args.text is not None else sys.stdin.read()
+            if not text.strip():
+                print("[FAIL] 没有内容可发送（给个文本参数，或用 --image）")
+                return 2
+            item = make_text(text)
+
+        engine = _clip_engine(cfg, cfg_file)
+        try:
+            if not _wait_true(lambda: engine.status()["authenticated"] == "yes", 6.0):
+                print(f"[FAIL] 没有连上已配对的对端：{engine.status()['peer']}")
+                print("       先在两端执行 dualswitch clip pair --pin <同一个6位码>")
+                return 1
+            engine.push_item(item)
+            ok = _wait_true(
+                lambda: engine.records() and engine.records()[0].state in ("ok", "fail"), 8.0
+            )
+            rec = engine.records()[0] if engine.records() else None
+            if ok and rec is not None and rec.state == "ok":
+                print(f"已送达对端：{item.describe()}（{rec.id[:8]}）")
+                return 0
+            print(f"[FAIL] 未确认送达：{rec.state if rec else '无记录'} {rec.detail if rec else ''}")
+            return 1
+        finally:
+            engine.stop()
+
+    # ---- selftest：本机格式矩阵 ----
+    if action == "selftest":
+        from .clipboard.selfcheck import run_matrix
+
+        results = run_matrix(include_big=not args.fast)
+        for result in results:
+            print(result.line())
+        failed = [r for r in results if r.status == "FAIL"]
+        print("-" * 62)
+        print(f"{len(results) - len(failed)}/{len(results)} 通过" + (f"，{len(failed)} 项失败" if failed else ""))
+        return 1 if failed else 0
+
+    # ---- status（默认） ----
+    engine = _clip_engine(cfg, cfg_file)
+    try:
+        _wait_true(
+            lambda: engine.status()["authenticated"] == "yes" or engine.state == "unpaired",
+            3.0,
+        )
+        info = engine.status()
+    finally:
+        engine.stop()
+    if args.json:
+        print(json.dumps(info, ensure_ascii=False, indent=2))
+        return 0
+    print("剪贴板同步：")
+    labels = {
+        "enabled": "已启用", "engine": "引擎状态", "backend": "后端", "device": "设备 ID",
+        "psk": "已配对", "peer": "对端连接", "peer_device": "对端设备", "authenticated": "认证通过",
+        "port": "监听端口", "records": "记录条数", "last_sync": "上次同步",
+        "sent": "已发送", "received": "已接收", "dropped": "已丢弃", "error": "错误",
+    }
+    for key, label in labels.items():
+        if key in info:
+            print(f"  {label:<8}: {info[key]}")
+    if not cb.psk:
+        print("\n提示：还没配对。两端执行 dualswitch clip pair --pin <同一个6位码>")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
+def _start_clip_engine(cfg, cfg_file, controller):  # noqa: ANN001
+    """把剪贴板引擎挂到切屏链路上。失败只降级，绝不影响切屏。"""
+    if not cfg.clipboard.enabled:
+        return None
+    try:
+        from .sync.engine import SyncEngine
+
+        config_mod.ensure_device_id_persisted(cfg, cfg_file)
+        engine = SyncEngine(cfg.clipboard, host_label=cfg.effective_host())
+        engine.start()
+        controller.add_before_switch(lambda source, target: engine.push_now(f"switch:{source}"))
+        log.info("剪贴板同步已挂载（设备 %s，端口 %s）", cfg.clipboard.device_id, cfg.clipboard.port)
+        return engine
+    except Exception as exc:  # noqa: BLE001 - 剪贴板坏了不能连累切屏
+        log.error("剪贴板同步启动失败（切屏不受影响）：%s", exc)
+        return None
+
+
 def cmd_ui(args) -> int:
     """带图形界面的常驻模式（主窗口 + 托盘 + 热键）。"""
     from .ui import available as ui_available
@@ -456,11 +646,16 @@ def cmd_ui(args) -> int:
 
     controller.start()
 
+    clip_engine = _start_clip_engine(cfg, cfg_file, controller)
+
     from .ui.runner import run_ui
 
     try:
-        return run_ui(cfg, cfg_file, log_file, backend, controller, hotkey, warning)
+        return run_ui(cfg, cfg_file, log_file, backend, controller, hotkey, warning,
+                      clip_engine=clip_engine)
     finally:
+        if clip_engine is not None:
+            clip_engine.stop()
         controller.stop()
         if hotkey is not None:
             try:
@@ -512,6 +707,38 @@ def build_parser() -> argparse.ArgumentParser:
     cf_p.add_argument("action", choices=["path", "init", "show"])
     cf_p.add_argument("--force", action="store_true")
     cf_p.set_defaults(func=cmd_config)
+
+    clip_p = sub.add_parser("clip", help="剪贴板同步（状态 / 配对 / 发送 / 自检）", parents=[common])
+    clip_sub = clip_p.add_subparsers(dest="action")
+
+    clip_status = clip_p
+    clip_status.add_argument("--json", action="store_true", help="JSON 输出")
+    clip_status.set_defaults(func=cmd_clip, action="status")
+
+    # 显式注册 status：加到 subparsers 之后，`clip status` 会被当成"未注册的子命令"报错
+    clip_sub.add_parser("status", help="连接状态（默认）", parents=[common]).set_defaults(
+        func=cmd_clip, action="status", json=False
+    )
+
+    clip_probe = clip_sub.add_parser("probe", help="打印本机剪贴板里的全部类型", parents=[common])
+    clip_probe.add_argument("--json", action="store_true")
+    clip_probe.set_defaults(func=cmd_clip, action="probe")
+
+    clip_get = clip_sub.add_parser("get", help="打印当前剪贴板内容", parents=[common])
+    clip_get.set_defaults(func=cmd_clip, action="get")
+
+    clip_pair = clip_sub.add_parser("pair", help="配对（两端输入同一个 6 位码）", parents=[common])
+    clip_pair.add_argument("--pin", default=None, help="6 位配对码；不给则随机生成一个")
+    clip_pair.set_defaults(func=cmd_clip, action="pair")
+
+    clip_send = clip_sub.add_parser("send", help="手工推一条到对端", parents=[common])
+    clip_send.add_argument("text", nargs="?", default=None, help="要发送的文本")
+    clip_send.add_argument("--image", default=None, help="要发送的 PNG 文件")
+    clip_send.set_defaults(func=cmd_clip, action="send")
+
+    clip_self = clip_sub.add_parser("selftest", help="本机格式矩阵自检", parents=[common])
+    clip_self.add_argument("--fast", action="store_true", help="跳过 4K 大图（省时间）")
+    clip_self.set_defaults(func=cmd_clip, action="selftest")
 
     return parser
 
