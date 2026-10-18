@@ -60,3 +60,36 @@ def test_switch_accepts_targets():
     parser = build_parser()
     for target in ("other", "windows", "mac", "toggle"):
         assert parser.parse_args(["switch", "--to", target]).to == target
+
+
+def test_logging_falls_back_when_default_log_unwritable(tmp_path, monkeypatch):
+    """默认日志路径写不了时必须改写到临时目录。
+
+    打包版（--windowed）没有控制台，`setup()` 里如果只是
+    `root.warning(...)` 就完事，那行警告没有任何 handler 接，
+    程序会变成「有界面、零日志」—— 排查时连"启动过没"都看不出来。
+    """
+    import dualswitch.logging_setup as logging_setup
+
+    blocked = tmp_path / "logs"
+    blocked.mkdir()                      # 路径本身是个目录 → 打开文件必失败
+    fallback_dir = tmp_path / "fb"
+    fallback_dir.mkdir()
+
+    monkeypatch.setattr(logging_setup, "_configured", False)
+    monkeypatch.setattr(logging_setup.tempfile, "gettempdir", lambda: str(fallback_dir))
+
+    root = logging_setup.setup("INFO", blocked, console=False)
+    try:
+        logging_setup.get("t").info("兜底日志可见")
+        for handler in root.handlers:
+            handler.flush()
+        written = list(fallback_dir.glob("*.log"))
+        assert written, "默认日志不可写时必须落到临时目录"
+        text = "".join(p.read_text(encoding="utf-8") for p in written)
+        assert "兜底日志可见" in text
+        assert "默认日志不可写" in text        # 为什么换了地方，也要留在日志里
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()

@@ -5,11 +5,21 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import sys
+import tempfile
 from pathlib import Path
 
 _FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-7s [%(name)s] %(message)s"
 _DATEFMT = "%Y-%m-%d %H:%M:%S"
 _configured = False
+
+
+def _file_handler(path: Path, formatter: logging.Formatter) -> logging.Handler:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        path, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+    )
+    handler.setFormatter(formatter)
+    return handler
 
 
 def setup(level: str = "INFO", path: str | Path | None = None, console: bool = True) -> logging.Logger:
@@ -36,14 +46,20 @@ def setup(level: str = "INFO", path: str | Path | None = None, console: bool = T
     if path is not None:
         log_file = Path(path)
         try:
-            log_file.parent.mkdir(parents=True, exist_ok=True)
-            file_handler = logging.handlers.RotatingFileHandler(
-                log_file, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
-            )
-            file_handler.setFormatter(formatter)
-            root.addHandler(file_handler)
-        except OSError as exc:  # 日志不可写不应导致程序起不来
-            root.warning("日志文件不可写（%s）：%s", log_file, exc)
+            root.addHandler(_file_handler(log_file, formatter))
+        except OSError as exc:
+            # 打包版没有控制台：这里一旦静默，程序就变成「有界面、零日志」，
+            # 事后排查完全瞎（2026-10-18 在 Windows 打包版上正是栽在这）。
+            # 所以退回临时目录再开一份，并把「原路径为什么写不了」记在兜底文件里。
+            fallback = Path(tempfile.gettempdir()) / "dualswitch.log"
+            try:
+                root.addHandler(_file_handler(fallback, formatter))
+            except OSError:
+                root.warning("日志文件不可写（%s）：%s，兜底也失败", log_file, exc)
+            else:
+                root.warning(
+                    "默认日志不可写（%s）：%s —— 本次已改写到 %s", log_file, exc, fallback
+                )
 
     root.propagate = False
     _configured = True
