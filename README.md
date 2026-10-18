@@ -53,6 +53,12 @@ py -3 -m venv .venv
 # 或者直接双击 start-ui.bat
 ```
 
+> **别直接敲 `python`**：本机 PATH 里第一个 `python` 是 `C:\Python27\python.exe`（Python 2.7），
+> 会报 `No module named dualswitch`。项目装在 venv 里，两条路走：
+> 用 `\.venv\Scripts\dualswitch`（没有 `.venv` 时见下），或者用仓库根的两个包装脚本 ——
+> `start-ui.bat`（开界面）、`clip.bat status|probe|get|send|pair|selftest`（剪贴板命令），
+> 它们会自动找到装好依赖的那个解释器。
+
 ### macOS
 
 ```bash
@@ -146,6 +152,11 @@ dualswitch run                        # 常驻：菜单栏 + 右 Option + Space
 | `dualswitch probe [--json]` | **只读**探测：显示器列表 + 当前 VCP 值 |
 | `dualswitch doctor [--json]` | 环境自检：热键可注册性、DDC、权限、日志目录 |
 | `dualswitch config init/show/path` | 配置管理 |
+| `dualswitch clip pair --pin 123456` | **跨端剪贴板配对**：两端输入同一个 6 位码（写入配置，终身有效） |
+| `dualswitch clip status` | 看配对/连接状态：`已配对`、`认证通过`、`对端设备` |
+| `dualswitch clip probe` | 本机剪贴板格式（排查「另一端收不到」时先看这个） |
+| `dualswitch clip get` / `send "文字"` | 手工读一次 / 推一条（联调时定位「哪一环断了」） |
+| `dualswitch clip selftest` | 本机格式矩阵自测 |
 
 ---
 
