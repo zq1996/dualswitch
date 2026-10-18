@@ -434,6 +434,10 @@ class Glyph(QWidget):
             p.drawLine(QPointF(5.6, 10.8), QPointF(8.2, 10.8))
         elif self.kind == "gear":
             paint_gear(p, QPointF(w / 2, w / 2), self.color, scale=0.78)
+        elif self.kind == "clip":
+            # 剪贴板：板身 + 顶部夹子（与标题栏按钮同一套线条）
+            p.drawRoundedRect(QRectF(3.7, 3.0, 7.6, 9.4), 1.5, 1.5)
+            p.drawRoundedRect(QRectF(5.9, 1.5, 3.2, 2.5), 0.8, 0.8)
         else:  # pulse
             path = QPainterPath()
             path.moveTo(1.6, 7.5)

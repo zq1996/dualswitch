@@ -45,6 +45,7 @@ def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> l
         MenuEntry("item", f"强制切到 {self_title}（{PORT[current]}）", actions.get("force")),
         MenuEntry("sep"),
         MenuEntry("item", "探测显示器 / 读取输入源", actions.get("probe")),
+        MenuEntry("item", "剪贴板…", actions.get("clipboard"), key="v", modifier="cmd_shift"),
         MenuEntry("item", "打开配置目录", actions.get("config_dir")),
         MenuEntry("item", "查看日志", actions.get("log")),
         MenuEntry("item", "设置…", actions.get("settings"), key=",", modifier="cmd"),

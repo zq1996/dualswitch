@@ -36,6 +36,8 @@ FIELDS = {
     "QSS_EXTRA": str,
     "BODY_TOP": int,
     "INLINE_SETTINGS_ROW": bool,
+    "INLINE_CLIPBOARD_ROW": bool,
+    "EXTRA_H": int,
     "SETTINGS_IN_WINDOW": bool,
     "SETTINGS_ROW_HINT": str,
     "CLICK_HINT": str,

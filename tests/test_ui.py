@@ -345,3 +345,169 @@ def test_pystray_menu_from_entries(app):
     switch = next(i for i in items if i.default)
     switch(None)
     assert calls == ["switch"]
+
+
+# --------------------------------------------------------------------------- #
+# 剪贴板页（主窗口里的一页，不新开窗口）
+# --------------------------------------------------------------------------- #
+class _FakeSource:
+    """记录源替身：页面只按属性/方法取数据，不需要真的碰剪贴板。"""
+
+    def __init__(self, records):
+        self._records = list(records)
+        self.copied: list[str] = []
+        self.resent: list[str] = []
+        self.cleared = 0
+
+    def records(self):
+        return list(self._records)
+
+    def status(self):
+        return {"peer": "", "connected": False, "enabled": True}
+
+    def copy_to_local(self, rid):
+        self.copied.append(rid)
+        return True
+
+    def resend(self, rid):
+        self.resent.append(rid)
+
+    def remove(self, rid):
+        self._records = [r for r in self._records if r.id != rid]
+
+    def clear(self):
+        self.cleared += 1
+        self._records = []
+
+
+def _two_records():
+    from dualswitch.ui.clipboard_page import ClipRecord
+
+    return [
+        ClipRecord(id="a1", kind="text", text="第一行\n第二行", size=12),
+        ClipRecord(id="a2", kind="text", text="https://example.com", size=19, ts=1.0),
+    ]
+
+
+def test_main_window_has_clipboard_entry(app):
+    """两端入口不同，但都要能触发 openClipboardRequested。"""
+    from dualswitch.ui.chrome import current as chrome
+
+    C = chrome()
+    win = MainWindow(Config(), "Alt+Space", "v1.0.0")
+    fired: list[int] = []
+    win.openClipboardRequested.connect(lambda: fired.append(1))
+
+    if C.INLINE_CLIPBOARD_ROW:
+        assert win.row_clipboard is not None, "mac 主窗口应有「剪贴板」行"
+        win.row_clipboard.click()
+    else:
+        assert win.titlebar is not None, "Windows 主窗口应有自绘标题栏"
+        assert win.titlebar.btn_clipboard.isVisibleTo(win.titlebar), "标题栏应有剪贴板按钮"
+        win.titlebar.btn_clipboard.click()
+    assert fired == [1]
+
+
+def test_clipboard_page_lists_and_selects(app):
+    from dualswitch.ui.clipboard_page import ClipboardPage
+
+    page = ClipboardPage(_FakeSource(_two_records()))
+    page.refresh()
+
+    assert len(page._rows) == 2
+    assert page.selected_id() == "a1", "默认选中第一条"
+    assert page.pv_text.toPlainText() == "第一行\n第二行"
+    assert page.scroll.height() == 52 * 2, "列表高度跟着条数走"
+    assert not page.empty.isVisibleTo(page)
+
+
+def test_clipboard_page_empty_state(app):
+    from dualswitch.ui.clipboard_page import ClipboardPage
+
+    page = ClipboardPage(_FakeSource([]))
+    page.refresh()
+
+    assert page._rows == {}
+    assert page.empty.isVisibleTo(page)
+    assert not page.scroll.isVisibleTo(page)
+    assert not page.bar.isVisibleTo(page), "空态要收起操作栏"
+
+
+def test_clipboard_page_copy_and_clear(app):
+    from dualswitch.ui.clipboard_page import ClipboardPage
+
+    source = _FakeSource(_two_records())
+    page = ClipboardPage(source)
+    page.refresh()
+
+    page.btn_copy.click()
+    assert source.copied == ["a1"]
+
+    page.btn_clear.click()
+    assert source.cleared == 1
+    assert page.selected_id() is None
+    assert page.empty.isVisibleTo(page)
+
+
+def test_clipboard_page_keyboard(app):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    from dualswitch.ui.clipboard_page import ClipboardPage
+
+    source = _FakeSource(_two_records())
+    page = ClipboardPage(source)
+    page.refresh()
+
+    def key(code, mods=Qt.NoModifier):
+        page.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, code, mods))
+
+    key(Qt.Key_Down)
+    assert page.selected_id() == "a2", "↓ 应切到下一条"
+    key(Qt.Key_Up)
+    assert page.selected_id() == "a1"
+
+    key(Qt.Key_Return)
+    assert source.copied == ["a1"], "Enter = 复制选中项"
+
+    fired: list[int] = []
+    page.backRequested.connect(lambda: fired.append(1))
+    key(Qt.Key_Escape)
+    assert fired == [1], "Esc 等于「‹ 返回」"
+
+
+def test_clipboard_page_mounted_in_window(app):
+    from dualswitch.ui.clipboard_page import ClipboardPage
+
+    win = MainWindow(Config(), "Alt+Space", "v1.0.0")
+    page = ClipboardPage(_FakeSource(_two_records()))
+    win.attach_clipboard(page)
+    win.show_clipboard_page()
+
+    assert win.pages.currentWidget() is page
+    assert win.on_clipboard_page() is True
+    assert win.windowTitle() == "屏幕切换 · 剪贴板"
+    assert win.height() == win.win_h, "剪贴板页占满主窗口高度（预览区要吃掉剩余空间）"
+
+    win.show_main_page()
+    assert win.on_clipboard_page() is False
+    assert win.windowTitle() == "屏幕切换"
+
+
+def test_clipboard_feed_ring_buffer():
+    """只留最近 10 条，最新的在前，超出的旧记录连原图一起丢掉。"""
+    from dualswitch.clipboard import make_text
+    from dualswitch.clipboard.mock import MockBackend
+    from dualswitch.ui.clipboard_feed import LocalClipFeed
+
+    backend = MockBackend()
+    feed = LocalClipFeed(backend, capacity=10)
+    for i in range(12):
+        backend.feed(make_text(f"第 {i} 条"))
+        feed.poll()
+
+    records = feed.records()
+    assert len(records) == 10
+    assert records[0].text == "第 11 条"
+    assert records[-1].text == "第 2 条"
+    assert records[0].state == "local", "没有对端时状态是「仅本机」"

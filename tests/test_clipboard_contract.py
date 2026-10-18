@@ -67,17 +67,11 @@ def _snapshot() -> str | None:
 
             return NSPasteboard.generalPasteboard().stringForType_(NSPasteboardTypeString)
         if sys.platform == "win32":
-            import ctypes
+            # 用后端自己的读取助手：直接 ctypes.c_wchar_p(GetClipboardData(13)) 在 64 位下
+            # 会因为句柄被截断而访问违例（Windows 端接入后实测崩过）。
+            from dualswitch.clipboard import windows as _win
 
-            if not ctypes.windll.user32.OpenClipboard(None):
-                return None
-            try:
-                if not ctypes.windll.user32.IsClipboardFormatAvailable(13):  # CF_UNICODETEXT
-                    return None
-                h = ctypes.windll.user32.GetClipboardData(13)
-                return ctypes.c_wchar_p(h).value if h else None
-            finally:
-                ctypes.windll.user32.CloseClipboard()
+            return _win.snapshot_text()
     except Exception:  # noqa: BLE001 - 快照失败不影响用例本身
         return None
     return None
@@ -94,16 +88,10 @@ def _restore(text: str | None) -> None:
             pb.clearContents()
             pb.setString_forType_(text, NSPasteboardTypeString)
         elif sys.platform == "win32":
-            import ctypes
+            # 必须走 GlobalAlloc + SetClipboardData；直接塞 Python 缓冲区指针会失败
+            from dualswitch.clipboard import windows as _win
 
-            if not ctypes.windll.user32.OpenClipboard(None):
-                return
-            try:
-                ctypes.windll.user32.EmptyClipboard()
-                buf = ctypes.create_unicode_buffer(text)
-                ctypes.windll.user32.SetClipboardData(13, ctypes.cast(buf, ctypes.c_void_p))
-            finally:
-                ctypes.windll.user32.CloseClipboard()
+            _win.restore_text(text)
     except Exception:  # noqa: BLE001
         pass
 

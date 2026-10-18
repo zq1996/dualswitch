@@ -30,6 +30,8 @@ PLATFORM_LABEL = "macOS"
 NATIVE_CHROME = True
 BODY_TOP = 14
 INLINE_SETTINGS_ROW = True
+INLINE_CLIPBOARD_ROW = True      # 剪贴板入口在列表里（mac 没有自绘标题栏可放按钮）
+EXTRA_H = 20                     # 列表多一行，窗口加高 20（真机再微调）
 SETTINGS_IN_WINDOW = True        # 设置是主窗口内的一页（点返回回主页面），不另开窗口
 CLICK_HINT = "单击图标打开菜单"
 REOPEN_ON_ACTIVATE = True
@@ -88,7 +90,11 @@ QSS_EXTRA = ""
 # --------------------------------------------------------------------------- #
 # 窗口：mac 用系统标题栏，不返回自绘控件
 # --------------------------------------------------------------------------- #
-def titlebar(title: str, show_settings: bool = True):  # noqa: ANN201
+def titlebar(title: str, show_settings: bool = True, show_clipboard: bool = False):  # noqa: ANN201
+    """macOS 用系统标题栏，这里恒返回 None。
+
+    `show_clipboard` 只是为了让共享代码用同一套调用签名（剪贴板入口在列表里）。
+    """
     return None
 
 

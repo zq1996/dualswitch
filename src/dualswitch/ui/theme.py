@@ -317,5 +317,78 @@ def qss() -> str:
     }}
     QPushButton#bannerAction:hover {{ background: #FFFFFF; border-color: {ACCENT}; color: {ACCENT}; }}
     QPushButton#bannerAction:pressed {{ background: {ACCENT_SOFT}; }}
+
+    /* ---------- 剪贴板页（docs/UI-DESIGN-CLIPBOARD.md） ---------- */
+    #clipHead {{ background: #FFFFFF; border-bottom: 1px solid {LINE_SOFT}; }}
+    QPushButton#clipBack {{
+        background: transparent; border: 0; color: {INK2};
+        font-size: 12px; text-align: left; padding: 4px 7px 4px 3px; border-radius: 6px;
+    }}
+    QPushButton#clipBack:hover {{ background: #F3F6FB; color: {ACCENT_DEEP}; }}
+    #clipTitle {{ color: {INK}; font-size: 13.5px; font-weight: 600; }}
+    #clipConn {{ color: {INK3}; font-size: 11px; }}
+
+    /* 行：选中靠左侧主色条 + 浅蓝底，不加边框（会和 hover 混） */
+    #clipList {{ background: #FFFFFF; }}
+    #citem {{
+        background: #FFFFFF; border: 0; border-bottom: 1px solid {LINE_SOFT};
+        border-left: 2.5px solid transparent;
+    }}
+    #citem:hover {{ background: #FAFBFE; }}
+    #citemSel {{
+        background: #F3F7FF; border: 0; border-bottom: 1px solid {LINE_SOFT};
+        border-left: 2.5px solid {ACCENT};
+    }}
+    #ctitle {{ color: {INK}; font-size: 12.5px; }}
+    #ctitleMono {{ color: {INK}; font-size: 11.8px; }}
+    #cmeta {{ color: {INK3}; font-size: 10.5px; }}
+    #cthumb {{ background: #F4F6FA; border: 1px solid {LINE}; border-radius: 7px; }}
+
+    #stOk {{ color: #0E7C4A; background: #EDF8F1; font-size: 10px; font-weight: 600;
+             border-radius: 5px; padding: 2px 6px; }}
+    #stPend {{ color: #1E4FD8; background: #EEF4FF; font-size: 10px; font-weight: 600;
+               border-radius: 5px; padding: 2px 6px; }}
+    #stFail {{ color: #A82B2B; background: #FDEEEE; font-size: 10px; font-weight: 600;
+               border-radius: 5px; padding: 2px 6px; }}
+    #stLocal {{ color: #7C8698; background: #F3F5F9; font-size: 10px; font-weight: 600;
+                border-radius: 5px; padding: 2px 6px; }}
+
+    #clipPreview {{ background: #FAFBFD; border-top: 1px solid {LINE}; }}
+    #pvHead {{ color: {INK3}; font-size: 10.5px; }}
+    #pvKind {{ color: {INK2}; font-size: 11px; font-weight: 600; }}
+    #pvHint {{ color: #A0A9B8; font-size: 10.5px; }}
+    #pvImg {{ background: #FFFFFF; border: 1px solid #DCE2EC; border-radius: 7px; }}
+    #pvText {{
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        color: {INK2}; font-size: 11.5px;
+    }}
+    #pvEmpty {{ color: #A0A9B8; font-size: 11.5px; }}
+
+    #clipBar {{ background: #FFFFFF; border-top: 1px solid {LINE}; }}
+    QPushButton#clipPrimary {{
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {PRIMARY_TOP}, stop:1 {PRIMARY_BOTTOM});
+        color: #FFFFFF; border: 0; border-radius: 7px;
+        font-size: 12px; font-weight: 600; padding: 0 12px;
+    }}
+    QPushButton#clipPrimary:hover {{
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {PRIMARY_TOP_HOVER}, stop:1 {PRIMARY_BOTTOM_HOVER});
+    }}
+    QPushButton#clipPrimary:disabled {{ background: #B7C6E8; color: #FFFFFF; }}
+    QPushButton#clipBtn {{
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        color: {INK2}; font-size: 12px; font-weight: 600; padding: 0 11px;
+    }}
+    QPushButton#clipBtn:hover {{ background: #F7F9FC; border-color: #D6DDE9; }}
+    QPushButton#clipBtn:disabled {{ color: #B6BFCD; border-color: {LINE_SOFT}; }}
+    QPushButton#clipDanger {{
+        background: #FFFFFF; border: 1px solid #F0D6D6; border-radius: 7px;
+        color: {DANGER}; font-size: 12px; font-weight: 600; padding: 0 11px;
+    }}
+    QPushButton#clipDanger:hover {{ background: #FDEEEE; border-color: #E9BFBF; }}
+    QPushButton#clipDanger:disabled {{ color: #D9AFAF; border-color: {LINE_SOFT}; }}
+
+    #clipEmptyIcon {{ background: #F4F7FC; border: 1px solid {LINE}; border-radius: 14px; }}
+    #clipEmptyTitle {{ color: {INK}; font-size: 13.5px; font-weight: 600; }}
+    #clipEmptyText {{ color: {INK3}; font-size: 11.5px; }}
     {_C.QSS_EXTRA}
     """

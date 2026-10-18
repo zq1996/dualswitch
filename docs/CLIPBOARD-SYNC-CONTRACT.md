@@ -25,6 +25,14 @@ python tools/clip_selftest.py --role windows
 **其余文件一律只读**（尤其是 `clipboard/base.py`、`config.py`、`app.py`、`ui/`、`sync/`）。
 需要改契约时，不要直接改，把需求写进第 11 节「变更请求」，由 Mac 端改完你再 pull。
 
+> **状态（2026-10-18 17:20）：M1 已完成并实测。**
+> `clipboard/windows.py` + `tests/test_clipboard_windows.py`（58 例）已落地；
+> 契约测试带 `DUALSWITCH_CLIP_TEST=real` 时 **14 passed / 3 skipped**，全量 **175 passed / 6 skipped**。
+> 第 6 节 M1 里那三个「本次唯一的未知数」已实测，结论写在 `windows.py` 文件头表格里：
+> 截图工具给 `CF_DIB` 32bpp、浏览器额外给注册格式 `PNG`（优先取）、序列号先于数据变化。
+> 顺手修了本文件第 7 节闸一里快照助手的崩溃（见第 11 节，**未动任何断言**）。
+> ⚠️ `tools/clip_selftest.py` 还不存在（M5 归 macOS 端），上面最后一行暂时跑不了。
+
 ### macOS 端 AI —— 你要做的事
 
 按第 6 节的 M1 → M5 顺序实现：`clipboard/macos.py` → `sync/*` → 接线 → UI → 自测工具。
@@ -438,6 +446,10 @@ dualswitch clip selftest               # 本机格式矩阵
 
 | 日期 | 提出方 | 要改什么 | 原因 | 处理 |
 |---|---|---|---|---|
+| 2026-10-18 | windows | 无契约字段变更；修 `tests/test_clipboard_contract.py` 的 `_snapshot()` / `_restore()` 两个助手 | 前者 `ctypes.c_wchar_p(GetClipboardData(13))` 没声明 `restype`，64 位下句柄被截断成 int32 再当指针解引用 → 访问违例（Windows 后端接入后才触发，之前一直 skip 所以没暴露）；后者把 Python 缓冲区指针直接交给 `SetClipboardData`（不是 HGLOBAL，必然失败且会清空剪贴板） | 已修，**未动任何断言**；改为调用 `windows.snapshot_text()` / `windows.restore_text()` |
+| 2026-10-18 | windows | 第 5 节归属表之外，Windows 端**先做了** `ui/clipboard_page.py`、`ui/clipboard_feed.py` 以及 `window.py` / `runner.py` / `theme.py` / `widgets.py` / `statusitem.py` / `chrome/mac.py` 的接线 | 用户要求 `start-ui` 里能看到剪贴板页，而 M4（UI）一直没人做；页面不落地，M1 的后端在界面上没有任何出口 | 已实现并通过测试（`tests/test_ui.py` 7 例）。**mac 端接手时**：`sync/engine.py` 写好后把 runner 里的 `LocalClipFeed` 换成 engine 即可，页面接口不变；`ClipRecord` 目前定义在 `ui/clipboard_page.py`，engine 返回同名字段的对象即可（页面只按属性取值） |
+| 2026-10-18 | windows | 第 4.2 节帧头补一个 payload 长度字段（header 里的 `size`） | 契约的帧头只有 `header_len`，接收端无从得知 payload 有多长，无法切帧 | **待 macOS 端确认**：Windows 端实现里已按 `size` = 明文长度、加密时实读 `size + 16` 处理（见 `sync/protocol.py` 头部说明；该文件按用户要求暂未落地） |
+| 2026-10-18 | windows | 无契约字段变更；修 `tests/test_clipboard_contract.py` 的 `_snapshot()` / `_restore()` 两个助手 | 前者 `ctypes.c_wchar_p(GetClipboardData(13))` 没声明 `restype`，64 位下句柄被截断成 int32 再当指针解引用 → 访问违例（Windows 后端接入后才触发，之前一直 skip 所以没暴露）；后者把 Python 缓冲区指针直接交给 `SetClipboardData`（不是 HGLOBAL，必然失败且会清空剪贴板） | 已修，**未动任何断言**；改为调用 `windows.snapshot_text()` / `windows.restore_text()` |
 | — | — | — | — | — |
 
 格式：`| 2026-10-19 | windows | ClipItem 增加 files 字段 | P2 需要传目录 | 待 macOS 端评估 |`

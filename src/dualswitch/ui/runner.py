@@ -23,6 +23,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from .. import logging_setup, winenv
 from . import theme
 from .chrome import current as chrome
+from .clipboard_feed import LocalClipFeed
+from .clipboard_page import ClipboardPage
 from .settings import SettingsWindow
 from .window import MainWindow
 
@@ -147,6 +149,19 @@ class UiRunner(QObject):
             self.window.attach_settings(self.settings)
             self.settings.backRequested.connect(self.close_settings)
 
+        # 剪贴板：主窗口里的一页（不新开窗口）+ 记录源。
+        # 记录源目前是本机后端（`LocalClipFeed`），同步引擎落地后换成 engine 即可，
+        # 页面只认 records/status/copy_to_local 这几个方法。
+        self.clip_feed = LocalClipFeed()
+        self.clipboard = ClipboardPage(self.clip_feed)
+        self.window.attach_clipboard(self.clipboard)
+        self.clipboard.backRequested.connect(self.close_clipboard)
+        # 采集和页面无关：页面没打开时也要记，否则进去看是一片空白
+        self.clip_timer = QTimer(self)
+        self.clip_timer.setInterval(500)
+        self.clip_timer.timeout.connect(self.clip_feed.poll)
+        self.clip_timer.start()
+
         self._busy = False
         self._hotkey_suspended = False
         self._quitting = False
@@ -209,6 +224,7 @@ class UiRunner(QObject):
         self.window.doctorRequested.connect(self.do_doctor)
         self.window.openLogRequested.connect(lambda: self.chrome.open_path(self.log_file))
         self.window.openSettingsRequested.connect(self.show_settings)
+        self.window.openClipboardRequested.connect(self.show_clipboard)
         # 窗口收起 → mac 上顺手把程序坞图标也收掉（菜单栏图标不受影响）
         self.window.hiddenToBackground.connect(self._enter_background)
         self.settings.saved.connect(self.on_config_saved)
@@ -397,6 +413,7 @@ class UiRunner(QObject):
             "probe": self.do_probe,
             "config_dir": lambda: self.chrome.open_path(self.cfg_file.parent),
             "log": lambda: self.chrome.open_path(self.log_file),
+            "clipboard": self.show_clipboard,
             "settings": self.show_settings,
             "quit": self.quit,
         }
@@ -466,6 +483,19 @@ class UiRunner(QObject):
             self.window.show_main_page()
         else:
             self.settings.hide()
+
+    def show_clipboard(self) -> None:
+        """翻到剪贴板页（标题栏图标 / 列表行 / 托盘菜单都走这里）。"""
+        self._leave_background()
+        self.window.show_clipboard_page()
+        self.window.showNormal()
+        self.window.raise_()
+        self.window.activateWindow()
+        self.chrome.activate(self.window)
+
+    def close_clipboard(self) -> None:
+        """「‹ 返回」：回主页面，窗口不关。"""
+        self.window.show_main_page()
 
     def _on_status_click(self) -> None:
         # macOS 菜单栏左键直接切换；Windows 侧 QtStatusItem 已过滤成只认双击
@@ -733,6 +763,11 @@ class UiRunner(QObject):
     def quit(self) -> None:
         log.info("用户从界面退出")
         self._quitting = True
+        try:
+            self.clip_timer.stop()
+            self.clip_feed.close()
+        except Exception:  # pragma: no cover
+            log.debug("停止剪贴板采集失败", exc_info=True)
         try:
             self.controller.stop()
         finally:

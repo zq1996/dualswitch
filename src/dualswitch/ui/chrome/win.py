@@ -19,6 +19,8 @@ PLATFORM_LABEL = "Windows"
 NATIVE_CHROME = False
 BODY_TOP = 16
 INLINE_SETTINGS_ROW = False
+INLINE_CLIPBOARD_ROW = False     # 剪贴板入口在标题栏（齿轮左边），主页面列表一点没动
+EXTRA_H = 0                      # 列表没加行，窗口高度不用变
 SETTINGS_IN_WINDOW = False       # Windows 保持独立设置窗口（自绘标题栏，嵌进来会有两层标题）
 CLICK_HINT = "双击图标切换"
 REOPEN_ON_ACTIVATE = False
@@ -66,8 +68,11 @@ QSS_EXTRA = ""
 # --------------------------------------------------------------------------- #
 # 自绘标题栏（Windows 无边框窗口）
 # --------------------------------------------------------------------------- #
-def titlebar(title: str, show_settings: bool = True):  # noqa: ANN201
-    """返回自绘标题栏控件（最小化 / 关闭 / 设置齿轮 + 拖动）。"""
+def titlebar(title: str, show_settings: bool = True, show_clipboard: bool = False):  # noqa: ANN201
+    """返回自绘标题栏控件（最小化 / 关闭 / 剪贴板 / 设置齿轮 + 拖动）。
+
+    `show_clipboard` 只有主窗口传 True：设置窗口是独立窗口，那里放剪贴板入口没有意义。
+    """
     from PySide6.QtCore import QPointF, QRectF, QSize, Qt
     from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QTransform
     from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QLabel, QWidget
@@ -84,7 +89,7 @@ def titlebar(title: str, show_settings: bool = True):  # noqa: ANN201
             self.setFixedSize(30 if kind == "gear" else 34, 26)
             self.setCursor(Qt.PointingHandCursor)
             self.setFocusPolicy(Qt.NoFocus)
-            self.setToolTip("设置" if kind == "gear" else "")
+            self.setToolTip({"gear": "设置", "clip": "剪贴板"}.get(kind, ""))
 
         def enterEvent(self, event):  # noqa: N802
             self.update()
@@ -112,6 +117,15 @@ def titlebar(title: str, show_settings: bool = True):  # noqa: ANN201
                 from ..widgets import paint_gear
 
                 paint_gear(p, c, color)
+            elif self.kind == "clip":
+                # 剪贴板：板身 + 顶部夹子（和设计稿同一套 1.15px 线条）
+                pen = QPen(color, 1.15)
+                pen.setCapStyle(Qt.RoundCap)
+                pen.setJoinStyle(Qt.RoundJoin)
+                p.setPen(pen)
+                p.setBrush(Qt.NoBrush)
+                p.drawRoundedRect(QRectF(c.x() - 4.3, c.y() - 4.4, 8.6, 9.6), 1.7, 1.7)
+                p.drawRoundedRect(QRectF(c.x() - 1.9, c.y() - 6.1, 3.8, 2.6), 0.9, 0.9)
             else:
                 pen = QPen(color, 1.3)
                 pen.setCapStyle(Qt.RoundCap)
@@ -131,8 +145,10 @@ def titlebar(title: str, show_settings: bool = True):  # noqa: ANN201
         minimizeClicked = Signal()
         closeClicked = Signal()
         settingsClicked = Signal()
+        clipboardClicked = Signal()
 
-        def __init__(self, title: str, show_settings: bool = True, parent=None):
+        def __init__(self, title: str, show_settings: bool = True,
+                     show_clipboard: bool = False, parent=None):
             super().__init__(parent)
             self.setObjectName("titlebar")
             # QWidget 子类默认不画 QSS 背景，必须显式打开
@@ -149,19 +165,28 @@ def titlebar(title: str, show_settings: bool = True):  # noqa: ANN201
             icon.setPixmap(pm)
             icon.setFixedSize(18, 18)
             lay.addWidget(icon)
-            lay.addWidget(label(title, "tbTitle"))
+            self.title_label = label(title, "tbTitle")
+            lay.addWidget(self.title_label)
             lay.addStretch(1)
 
+            # 剪贴板在齿轮左边：标题栏本来就是工具条，两者同级
+            self.btn_clipboard = CaptionButton("clip")
+            self.btn_clipboard.setVisible(show_clipboard)
             self.btn_settings = CaptionButton("gear")
             self.btn_settings.setVisible(show_settings)
             self.btn_min = CaptionButton("min")
             self.btn_close = CaptionButton("close")
-            for btn in (self.btn_settings, self.btn_min, self.btn_close):
+            for btn in (self.btn_clipboard, self.btn_settings, self.btn_min, self.btn_close):
                 lay.addWidget(btn, 0, Qt.AlignVCenter)
 
+            self.btn_clipboard.clicked.connect(self.clipboardClicked)
             self.btn_settings.clicked.connect(self.settingsClicked)
             self.btn_min.clicked.connect(self.minimizeClicked)
             self.btn_close.clicked.connect(self.closeClicked)
+
+        def set_title(self, text: str) -> None:
+            """标题栏文字跟着页面变（`屏幕切换` / `屏幕切换 · 剪贴板`）。"""
+            self.title_label.setText(text)
 
         # 无边框窗口的拖动
         def mousePressEvent(self, event):  # noqa: N802
@@ -179,7 +204,7 @@ def titlebar(title: str, show_settings: bool = True):  # noqa: ANN201
             self._drag_pos = None
             super().mouseReleaseEvent(event)
 
-    return TitleBar(title, show_settings)
+    return TitleBar(title, show_settings, show_clipboard)
 
 
 # --------------------------------------------------------------------------- #

@@ -22,8 +22,27 @@
 > `build.ps1` 现在会在打包后把产物标签抬到 High，重新打包的 `dist\dualswitch\` 已实测：图标出现、
 > 关窗口后图标仍在、进程常驻。旧产物留在 `dist\dualswitch.old-20261018\`（可删）。
 >
-> 👉 **下一步（Windows 侧）**：按 `docs/CLIPBOARD-SYNC-CONTRACT.md` 第 0 节实现
-> `src/dualswitch/clipboard/windows.py`（只写这一个文件 + 它的测试）；托盘问题已闭环，无待办。
+> 👉 **2026-10-18 17:2x 补记（Windows 剪贴板后端已完成）**：`clipboard/windows.py` 按契约 M1 落地，
+> 只用了 `ctypes`（不依赖 Qt / Pillow 也能读，写 DIB 时借用它们的 C 解码器）。
+> 三个未知数已实测：截图工具给 **`CF_DIB` 32bpp**、浏览器额外给注册格式 **`PNG`**（优先取后者，
+> 字节级原样往返）；资源管理器复制文件时 `probe()` 能看到 **`CF_HDROP`**（P2 备料，`poll()` 返回 None）；
+> 序列号确实**先于数据**变化 → 读空时 `sleep(10ms)` 重读一次。
+> 4K 图实测：PNG→DIB 373ms、DIB→PNG 241ms（都在后台线程，不挡切屏）。
+> 测试：`tests/test_clipboard_windows.py` 58 例；契约测试带 `DUALSWITCH_CLIP_TEST=real` 时
+> **14 passed / 3 skipped**（含真实后端参数），全量 **175 passed / 6 skipped**。
+>
+> 👉 **下一步（Windows 侧）**：M1 与剪贴板页都已闭环，剩下的**只有 macOS 端能做的** ——
+> ① `sync/*`（M2：protocol / transport / engine）与 `app.py` 的 `on_before_switch` 钩子（M3）。
+> 这一层是"双端能不能取到值"的唯一通道，目前仓库里**一行都没有**，所以现在无法联调；
+> ② `tools/clip_selftest.py`（M5）尚不存在，验收表里那条 `--role windows` 暂时跑不了；
+> ③ `cli.py` 的 `dualswitch clip ...` 子命令（契约第 8 节）也还没写。
+>
+> 👉 **2026-10-18 17:35 补记（剪贴板页已落地）**：`ui/clipboard_page.py` + `ui/clipboard_feed.py`
+> 已实现并接进主窗口（Windows 走标题栏图标、mac 走列表行，都不新开窗口），
+> 版式按 `design/clipboard/index.html` 还原（440×600、页头 40、行 52、预览吃剩余、操作栏 48）。
+> ⚠️ 这两个文件按契约归 macOS 端，这次是**越界先做**（用户要求 start-ui 里能看到页面）；
+> `sync/engine.py` 交付后，把 runner 里的 `LocalClipFeed` 换成 engine 即可，页面不用改。
+> 联调代码（`sync/*`）按用户要求**没有写**，已撤回。
 >
 > 👉 **下一步（mac 侧）**：日常使用观察 —— 重点关注长时间运行后热键是否仍灵（tap 被系统禁用会自动重开，
 > 日志里有 `事件 tap 回调超时…已重新启用` 与 `激活策略 → Accessory` 可查）。
@@ -104,6 +123,9 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 | 20 | macOS 装机（/Applications + 登录项） | ✅ 已装并运行 | `packaging/macos/install-app.sh`（ditto + 清 quarantine + 验签 + `--login-item`）；`/Applications/屏幕切换.app`，换路径后辅助功能授权未失效 |
 | 21 | 关窗口只留菜单栏（程序坞不留图标） | ✅ 实现完成（待日常使用确认观感） | `chrome.DOCK_FOLLOWS_WINDOW` + `chrome.set_dock_visible()`（`NSApplicationActivationPolicy` 0↔1 实测）、`MainWindow.hiddenToBackground` 信号 |
 | 22 | 全量测试 | ✅ 96 passed | `QT_QPA_PLATFORM=offscreen pytest tests -q --basetemp=.pytest-tmp`（本机 /tmp 不可写） |
+| 23 | 跨端剪贴板 · Windows 后端（M1） | ✅ 完成 | `clipboard/windows.py` + `tests/test_clipboard_windows.py`（58 例）；契约 real 14 passed / 3 skipped；全量 175 passed |
+| 24 | 跨端剪贴板 · 面板页 | ✅ 完成（越界先做） | `ui/clipboard_page.py` + `ui/clipboard_feed.py` + 两端入口；`tests/test_ui.py` 新增 7 例 |
+| 25 | 跨端剪贴板 · 传输层（M2） | ⬜ 未写 | `sync/{protocol,transport,engine}.py` 归 macOS 端；没有它无法双端联调 |
 
 ---
 
@@ -408,6 +430,56 @@ dualswitch/
 ---
 
 ## 8. 变更日志
+
+- 2026-10-18 17:35 **[clip-win] 剪贴板页落地（主窗口内一页，不新开窗口）**。
+  `start-ui` 里终于能点进去了：Windows 标题栏齿轮左边的剪贴板图标、mac 列表里的「剪贴板」行。
+  · 新增 `ui/clipboard_page.py`（按 `design/clipboard/index.html` 还原：页头 40 / 行 52 /
+    列表最多 252 / 预览吃剩余高度 / 操作栏 48 / 状态栏 34，440×600 正好不触发窗口加高）；
+    图片缩略图 36×36 按 cover 裁切、>8MB 不画；预览区图片等比缩放、文本可选中；
+    ↑↓ 切换、Enter/双击复制、Delete 删除、Esc 返回；刷新靠「记录签名」比对，避免每 300ms 重建控件。
+  · 新增 `ui/clipboard_feed.py`：**同步引擎落地前的本机记录源**（接口与 `SyncEngine` 对齐：
+    `records/status/copy_to_local/resend/remove/clear`），环形缓冲 10 条，退出即清。
+    runner 里换成 engine 即可，页面一行不用改。
+  · `chrome/win.py`：标题栏加剪贴板按钮（`CaptionButton("clip")` 自绘板身+夹子）+
+    `INLINE_CLIPBOARD_ROW=False` / `EXTRA_H=0`；`chrome/mac.py` 补 `True` / `20`（窗口加高 20）。
+  · `window.py`：`attach_clipboard/show_clipboard_page/on_clipboard_page`（与设置页同构）、
+    标题栏文字跟着页面变、窗口基准高度改用 `theme.WIN_H + chrome.EXTRA_H`。
+  · `theme.py` 补剪贴板页 QSS；`widgets.Glyph` 加 `clip` 图标；托盘菜单加「剪贴板…」。
+  · 测试：`tests/test_ui.py` 新增 7 例（两端入口、列表/选中/空态、复制与清空、键盘、挂载、
+    环形缓冲）。全量 **175 passed / 6 skipped**。
+  · ⚠️ 这些文件按契约归 macOS 端，属于越界先做；`sync/*` 未写（用户要求撤回）。
+
+- 2026-10-18 17:20 **[clip-win] Windows 剪贴板后端（M1）落地：纯 ctypes，DIB↔PNG 自己转**。
+  按 `docs/CLIPBOARD-SYNC-CONTRACT.md` 只写了 `clipboard/windows.py` 与它的测试。
+  · **读**：`GetClipboardSequenceNumber` 做变更检测 + 去重；图片优先取注册格式 `PNG`
+    （零转换、字节级原样，跨端 digest 才对得上），没有才 `CF_DIB`/`CF_DIBV5` → PNG。
+    DIB 解码支持 1/4/8（调色板）/24/32bpp、top-down（负高度）、行填充、`BI_PNG` 直通；
+    32/24bpp 全程走切片（`data[2::3]` 这类，C 速度），4K 图 241ms。
+  · **写**：`CF_UNICODETEXT` + `HTML Format`（10 位定宽字节偏移，中文片段按字符算会错位）
+    + `PNG` + `CF_DIB`（32bpp `BI_RGB`）。PNG→DIB 需要解码器，优先 PySide6、其次 Pillow，
+    都没有就只写 PNG 并记 info —— 纯 Python 解 4K PNG 要十几秒，宁可少一个格式也不卡同步线程。
+    另加一条独立验证用例：给 DIB 补 14 字节 BMP 文件头，**Pillow 能解出同样的像素**，
+    证明写进剪贴板的 `CF_DIB` 对 Word / Chrome 合法（不是自己验自己）。
+  · **环抑制第一道闸**：`write()` 后记序列号，`poll()` 只吞**一次**（吞完不更新 `_last_seq`）。
+    这两条同时满足契约测试的两条互相拉扯的用例：`test_write_then_poll_swallows_echo`
+    （写后第一次必须 None）与 `test_text_roundtrip_unicode`（第二次必须读得到）。
+  · **敏感内容**：`ExcludeClipboardContentFromMonitorProcessing` 出现即跳过；
+    `CanIncludeInClipboardHistory` / `CanUploadToCloudClipboard` 只在值为 `0` 时跳过
+    （写 `1` 是应用明确表示"可以传"，不该误杀）。
+  · **竞态**：序列号变了但数据没落地 → `sleep(10ms)` 重读一次；仍为空才记序号。
+    `OpenClipboard` 被占（Office 存盘、复制大文件）时重试 0/5/10/20/40ms，合计 ~75ms。
+  · **`_BUSY` 与 `None` 必须分开**：打不开剪贴板时 poll 返回 None 但**不记序号** ——
+    混为一谈会把那一次复制永久丢掉（有回归用例 `test_busy_poll_returns_none_without_losing_content`）。
+  · **修了契约测试里一个只在 Windows 后端存在后才会触发的崩溃**：
+    `_snapshot()` 里 `ctypes.c_wchar_p(GetClipboardData(13))` 没声明 `restype`，
+    64 位下句柄被截断成 int32 再当指针解引用 → **访问违例**（实测把 pytest 直接打崩）；
+    `_restore()` 则是把 Python 缓冲区指针直接丢给 `SetClipboardData`（不是 HGLOBAL，必然失败，
+    剪贴板反被清空）。改为调用 `windows.py` 新增的 `snapshot_text()` / `restore_text()`，
+    **没有动任何断言**（该文件仍是两端共用，只修了助手）。
+  · 新增 `tests/test_clipboard_windows.py`（58 例）：纯函数层 30 例（DIB 各位深/行序/填充、
+    PNG 编解码、`HTML Format` 字节偏移、敏感标记判定）+ 真实剪贴板层 28 例
+    （文本/图片/mixed 往返、自写吞掉、digest 去重、`CF_HDROP` 只列不传、被占用时抛错）。
+    全量 **175 passed / 6 skipped**（带 `DUALSWITCH_CLIP_TEST=real`）。
 
 - 2026-10-18 16:10 **Windows 打包版「关窗口后托盘没图标」根因定位并修掉：exe 带了 Low 完整性标签**。
   真凶不在代码里：`D:\work` 这个目录带 `Low Mandatory Level` 标签且是 `(OI)(CI)` 继承的，
