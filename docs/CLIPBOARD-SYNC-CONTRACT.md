@@ -192,10 +192,10 @@ A 端同法算 key，校验通过 → HELLO_OK，双方把 key 存进 config（c
 | `src/dualswitch/clipboard/macos.py` | **macOS** | — |
 | `src/dualswitch/clipboard/windows.py` | **Windows** | **你唯一要写的源码** |
 | `src/dualswitch/sync/*.py` | **macOS** | 网络/协议/引擎，平台无关 |
-| `src/dualswitch/ui/clipboard_panel.py` | **macOS** | 剪贴板面板主体（共享代码，用 `chrome()` 取外壳） |
-| `src/dualswitch/ui/settings.py` `runner.py` `widgets.py` | **macOS** | 含新增的「剪贴板」设置页 |
-| `src/dualswitch/ui/chrome/win.py` | **Windows** | 只需加一项托盘菜单「剪贴板…」（约 5 行） |
-| `src/dualswitch/ui/chrome/mac.py` | **macOS** | 菜单栏菜单加一项 + 主窗口「剪贴板」行 |
+| `src/dualswitch/ui/clipboard_page.py` | **macOS** | 剪贴板页主体（共享代码，用 `chrome()` 取外壳） |
+| `src/dualswitch/ui/settings.py` `runner.py` `window.py` `widgets.py` | **macOS** | 含新增的「剪贴板」设置页与页面栈接线 |
+| `src/dualswitch/ui/chrome/win.py` | **Windows** | 标题栏加剪贴板图标 + 两个新字段（约 12 行） |
+| `src/dualswitch/ui/chrome/mac.py` | **macOS** | 列表加「剪贴板」行 + 两个新字段 |
 | `src/dualswitch/config.py` | macOS 加完字段后冻结 | Windows 端只读 |
 | `src/dualswitch/app.py` | macOS 加完 hook 后冻结 | Windows 端只读 |
 | `tests/test_clipboard_contract.py` | **共用** | 两端都要跑通，谁都不许改断言 |
@@ -267,19 +267,31 @@ class SyncEngine:
 | `app.py` | `SwitchController` 增加可选的 `on_before_switch` 回调列表；`trigger()` 里遍历调用（try/except 包住，异常不能影响切屏） |
 | `settings.py` | 页签列表加 `"剪贴板"`，`stack.addWidget(self._page_clipboard())`，新方法放在**文件末尾**（减少与将来改动的重叠） |
 
-### M4 · UI（面板共享 / 菜单各归各）
+### M4 · UI（页面共享 / 入口各归各的）
 
 设计稿与规格见 [`docs/UI-DESIGN-CLIPBOARD.md`](UI-DESIGN-CLIPBOARD.md)，
-可交互稿 `design/clipboard/index.html`（`?sel=a2` 文字预览态，`?empty=1` 空态）。
+可交互稿 `design/clipboard/index.html`（`?page=clip` 剪贴板页，`?empty=1` 空态）。
 
-新增 `ui/clipboard_panel.py`（共享，Mac 端写）：独立窗口 520×620，
-列表（最近 10 条）+ 预览区 + 操作栏。依赖 `engine.records()` 返回的 `ClipRecord` 列表。
+**硬规则：不新增窗口。** 剪贴板是 `MainWindow.pages`（`QStackedWidget`）里的一页，
+和设置页同级，翻进去再返回 —— 与现有 `attach_settings / show_settings_page` 那套完全对称。
 
-| 平台 | 入口 | 归属 |
-|---|---|---|
-| Windows | `chrome/win.py` 托盘右键菜单加「剪贴板…」 | **Windows 端**（5 行） |
-| macOS | `chrome/mac.py` 菜单栏菜单加「剪贴板…」`⌘⇧V` + 主窗口一行 | macOS 端 |
-| 两端 | 设置 → 剪贴板页签 → 「查看记录…」 | macOS 端 |
+新增 `ui/clipboard_page.py`（共享，Mac 端写）：`ClipboardPage(QWidget)`，
+`backRequested` 信号 + `refresh()`，依赖 `engine.records()` 返回的 `ClipRecord` 列表。
+
+入口按平台习惯分开，**不要强行统一**：
+
+| 平台 | 剪贴板入口 | 归属 | 改动 |
+|---|---|---|---|
+| Windows | 标题栏图标（齿轮左边） | **Windows 端** | `chrome/win.py` 约 12 行 |
+| macOS | 列表里「剪贴板」行（设置行上方） | macOS 端 | `chrome/mac.py` |
+| 两端 | 设置 → 剪贴板页签 → 「查看记录…」 | macOS 端 | `settings.py` |
+
+界面契约新增两个字段（`chrome/base.py`，两端同时加）：
+
+| 字段 | Windows | macOS | 用途 |
+|---|---|---|---|
+| `INLINE_CLIPBOARD_ROW` | `False` | `True` | 入口放列表还是标题栏 |
+| `EXTRA_H` | `0` | `20` | 主窗口额外高度（mac 多一行列表） |
 
 设置页内容：同步开关（文字 / 图片）、配对状态、图片上限、`debug_plain`（藏在高级页）、查看记录入口。
 
