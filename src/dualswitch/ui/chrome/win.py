@@ -263,6 +263,37 @@ class QtStatusItem:
             return
         self._log_state("重新注册")
 
+    def recreate(self) -> None:
+        """整只重建 QSystemTrayIcon。
+
+        `hide()` / `show()` 只是在同一个已注册的图标上改状态；如果第一次
+        `Shell_NotifyIcon(NIM_ADD)` 就没成功（系统里连条目都没有），
+        再怎么 show 也不会出现，只能扔掉重来。
+        """
+        from PySide6.QtGui import QIcon
+
+        icon = self._tray.icon()
+        tooltip = self._tray.toolTip()
+        menu = self._menu
+
+        try:
+            self._tray.activated.disconnect(self._activated)
+        except Exception:  # pragma: no cover - 没连上也无所谓
+            pass
+        try:
+            self._tray.hide()
+            self._tray.deleteLater()
+        except Exception:  # pragma: no cover
+            log.exception("销毁旧的托盘图标失败")
+
+        self._tray = self._QSystemTrayIcon(QIcon(icon))
+        self._tray.activated.connect(self._activated)
+        if menu is not None:
+            self._tray.setContextMenu(menu)
+        self._tray.setToolTip(tooltip)
+        self._tray.show()
+        self._log_state("重建")
+
     def set_tooltip(self, text: str) -> None:
         self._tray.setToolTip(text)
 

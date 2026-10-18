@@ -11,6 +11,7 @@ UI 线程只做绘制，不碰 DDC。
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 from pathlib import Path
@@ -26,6 +27,31 @@ from .settings import SettingsWindow
 from .window import MainWindow
 
 log = logging_setup.get("ui")
+
+
+def _qt_message_handler(mode, context, message) -> None:  # noqa: ANN001
+    """把 Qt 自己的告警接进我们的日志。
+
+    `--windowed` 打包版没有 stderr，`Shell_NotifyIcon` 失败时 Qt 只会往 stderr 打一句
+    警告，然后就没了 —— 托盘没图标的真正原因（系统拒绝注册）就这么被吞掉。
+    装了这个 handler，Qt 的话会跟我们的日志写在一起。
+    """
+    from PySide6.QtCore import QtMsgType
+
+    levels = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.ERROR,
+        QtMsgType.QtFatalMsg: logging.CRITICAL,
+    }
+    log.log(levels.get(mode, logging.INFO), "[Qt] %s", message)
+
+
+def _install_qt_log_handler() -> None:
+    from PySide6.QtCore import qInstallMessageHandler
+
+    qInstallMessageHandler(_qt_message_handler)
 
 
 def _status_tip(hotkey_label: str) -> str:
@@ -76,6 +102,9 @@ def load_app_icon() -> QIcon:
 class UiRunner(QObject):
     def __init__(self, cfg, cfg_file: Path, log_file: Path, backend, controller, hotkey, warning=None):
         super().__init__()
+        # 第一件事：把 Qt 的告警接到我们的日志上（windowed 打包版没有 stderr，
+        # 否则 Shell_NotifyIcon 之类的失败信息会彻底消失）
+        _install_qt_log_handler()
         self.cfg = cfg
         self.cfg_file = Path(cfg_file)
         self.log_file = Path(log_file)
@@ -127,7 +156,6 @@ class UiRunner(QObject):
         self._seen_source = controller.current_source
 
         self.menubar = None
-        self._build_status(hotkey_label)
         self._build_app_menu()
         self._shown_hotkey = hotkey_label      # 启动时界面已经是这个值
         self._wire()
@@ -140,6 +168,10 @@ class UiRunner(QObject):
         self._center(self.window)
         self._center(self.settings)
         self.window.show()
+        # 常驻图标放在「主窗口已显示」之后创建：Windows 打包版实测过
+        # 「先建图标、后显示窗口」时 Shell_NotifyIcon 静默失败（图标可见=True 但没有位置），
+        # 把顺序调过来是最省事的一刀。创建后的自检逻辑见 _verify_status_item。
+        self._build_status(hotkey_label)
         if warning:
             self._show_hotkey_problem(warning)
 
@@ -232,7 +264,7 @@ class UiRunner(QObject):
         **`is_visible()` 不可信**：那是 Qt 自己记的「我调用过 show()」，注册失败也照样 True
         （Windows 打包版实测：可见=True、图标非空，但托盘里什么都没有）。
         真正能证明系统给了位置的是 `geometry()` —— 它来自系统的 Shell_NotifyIconGetRect，
-        拿不到矩形就说明通知区域没有这个图标的位置。
+        拿不到矩形就说明通知区域里没有这一格。
         """
         if self._quitting:
             return
@@ -242,32 +274,47 @@ class UiRunner(QObject):
             log.info("常驻图标检查：可见=%s 位置=%s", visible, geometry or "未知")
             if visible and geometry:
                 return
-
-            log.warning("通知区域没有给常驻图标留位置，重新注册一次")
-            reassert = getattr(self.status, "reassert", None)
-            if callable(reassert):
-                reassert()
-            else:
-                self.status.show()
-            QTimer.singleShot(1500, self._confirm_status_item)
+            self._retry_status_item(1)
         except Exception:  # pragma: no cover
             log.exception("常驻图标自检失败")
 
-    def _confirm_status_item(self) -> None:
-        """重新注册之后再查一次；还是没有位置，就把「该去关哪个开关」说清楚。"""
+    def _rebuild_status_item(self, attempt: int) -> None:
+        """第一次整只重建（NIM_ADD 没成功时只有重建有用），之后退回 hide/show。"""
+        names = ("recreate", "reassert", "show") if attempt == 1 else ("reassert", "recreate", "show")
+        for name in names:
+            method = getattr(self.status, name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:  # pragma: no cover
+                    log.exception("重建常驻图标失败（%s）", name)
+                return
+
+    def _retry_status_item(self, attempt: int) -> None:
+        log.warning("通知区域没有给常驻图标留位置，第 %d 次重试", attempt)
+        self._rebuild_status_item(attempt)
+        QTimer.singleShot(1500, lambda: self._confirm_status_item(attempt))
+
+    def _confirm_status_item(self, attempt: int = 1) -> None:
+        """重建之后再查；几次都不行，就把「该去动哪里」说清楚。"""
         if self._quitting:
             return
         geometry = self._status_geometry()
-        log.info("常驻图标复查：位置=%s", geometry or "未知")
+        log.info("常驻图标复查（第 %d 次）：位置=%s", attempt, geometry or "未知")
         if geometry:
+            log.info("常驻图标已回到通知区域")
+            return
+        if attempt < 2:
+            self._retry_status_item(attempt + 1)
             return
         log.error(
-            "托盘图标仍然没有位置：系统侧把它关掉了，或通知区域缓存坏了。"
-            "① 设置 → 个性化 → 任务栏 → 选择哪些图标显示在任务栏上，确认 %s 是「开」；"
-            "② 重启 explorer.exe 后再启动本程序。",
+            "托盘图标仍然没有位置：系统侧没有接受这个 exe 的托盘注册。"
+            "① 设置 → 个性化 → 任务栏 → 通知区域 →「选择哪些图标显示在任务栏上」，"
+            "确认有 %s 且是「开」；② 清 HKCU\\Control Panel\\NotifyIconSettings 里本程序的项后重启 explorer；"
+            "③ 若列表里根本没有它，把日志里 [Qt] 开头的行发出来。",
             Path(sys.executable).name,
         )
-        self.window.set_foot("托盘图标被系统隐藏了 · 见日志", ok=False)
+        self.window.set_foot("托盘图标没被系统接受 · 见日志", ok=False)
 
     def _status_actions(self) -> dict:
         return {
