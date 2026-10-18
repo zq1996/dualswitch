@@ -474,7 +474,26 @@ class PystrayStatusItem:
 
 
 def build_fallback_status_item(on_click: Callable[[], None]):  # noqa: ANN001
-    """Qt 托盘失灵时的备选实现；没有 pystray/Pillow 就返回 None。"""
+    """Qt 托盘失灵时的备选实现，按「离系统越近越优先」的顺序试：
+
+    1. 自己调 `Shell_NotifyIconW`（`win32tray`）—— 每次调用都返回错误码，能说清原因；
+    2. pystray（`dualswitch run` 那条老路），最后一道。
+    """
+    try:
+        from .. import theme
+
+        icon_path = theme.app_icon()
+    except Exception:
+        icon_path = None
+
+    if icon_path is not None:
+        from . import win32tray
+
+        item = win32tray.try_create(icon_path, on_click)
+        if item is not None:
+            return item
+        log.warning("自己的 Win32 托盘没成功，改试 pystray")
+
     try:
         import PIL  # noqa: F401
         import pystray  # noqa: F401

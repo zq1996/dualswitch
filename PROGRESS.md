@@ -1,6 +1,16 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-18 16:15
+> 最后更新：2026-10-18 16:45
+>
+> **并行开发中：跨端剪贴板同步（P0 文字 + P1 图片）**
+> 分工与契约见 [`docs/CLIPBOARD-SYNC-CONTRACT.md`](docs/CLIPBOARD-SYNC-CONTRACT.md)。
+> 界面设计与可交互稿见 [`docs/UI-DESIGN-CLIPBOARD.md`](docs/UI-DESIGN-CLIPBOARD.md) 与
+> `design/clipboard/index.html`（浏览器直接打开）。
+> **Windows 端 AI 先读该文档第 0 节**：只写 `src/dualswitch/clipboard/windows.py` 与
+> `tests/test_clipboard_windows.py`，其余文件一律只读。共用契约 `clipboard/base.py`
+> （`ClipItem` + 后端 `poll/write/probe/close` 语义）已冻结，契约测试
+> `tests/test_clipboard_contract.py` 已就绪（11 passed / 2 skipped，真实后端用
+> `DUALSWITCH_CLIP_TEST=real` 跑）。
 > 一句话状态：**两端都已落地可用。Windows 侧切屏 / 热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过；
 > macOS 侧界面（菜单栏 + 原生窗口 + 四页设置）跑在真机上，`⌥ Space` 全局热键已修复并通过用户实测
 > （根因是 CGEvent 字段取错、异常被静默吞掉），已打包并装进 `/Applications/屏幕切换.app`，
@@ -12,8 +22,11 @@
 > `build.ps1` 现在会在打包后把产物标签抬到 High，重新打包的 `dist\dualswitch\` 已实测：图标出现、
 > 关窗口后图标仍在、进程常驻。旧产物留在 `dist\dualswitch.old-20261018\`（可删）。
 >
-> 👉 **下一步：mac 侧日常使用观察** —— 重点关注长时间运行后热键是否仍灵（tap 被系统禁用会自动重开，
-> 日志里有 `事件 tap 回调超时…已重新启用` 与 `激活策略 → Accessory` 可查）；Windows 侧无待办。
+> 👉 **下一步（Windows 侧）**：按 `docs/CLIPBOARD-SYNC-CONTRACT.md` 第 0 节实现
+> `src/dualswitch/clipboard/windows.py`（只写这一个文件 + 它的测试）；托盘问题已闭环，无待办。
+>
+> 👉 **下一步（mac 侧）**：日常使用观察 —— 重点关注长时间运行后热键是否仍灵（tap 被系统禁用会自动重开，
+> 日志里有 `事件 tap 回调超时…已重新启用` 与 `激活策略 → Accessory` 可查）。
 > Windows 端双击 `dist\dualswitch\dualswitch.exe` 即进主界面（整个文件夹一起用），右键托盘可退出。
 > 界面/分层改动请看 `docs/UI-DESIGN-MAC.md` 与 `docs/PLATFORM-SPLIT.md`（后者是给另一端 AI 读的契约）。
 
