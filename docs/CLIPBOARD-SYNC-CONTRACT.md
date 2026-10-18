@@ -25,6 +25,11 @@ python tools/clip_selftest.py --role windows
 **其余文件一律只读**（尤其是 `clipboard/base.py`、`config.py`、`app.py`、`ui/`、`sync/`）。
 需要改契约时，不要直接改，把需求写进第 11 节「变更请求」，由 Mac 端改完你再 pull。
 
+**macOS 端的网络层 / 引擎 / UI / 自测工具已经全部落地**。你拿到最新代码后，
+`python tools/clip_sync_selftest.py` 可以直接在 Windows 上跑（网络层平台无关，7/7 就绪）。
+**联调的完整流程、已踩过的坑、需要用户做的事**，见
+[`docs/CLIPBOARD-SYNC-HANDOFF.md`](CLIPBOARD-SYNC-HANDOFF.md)（联调前必读）。
+
 ### macOS 端 AI —— 你要做的事
 
 按第 6 节的 M1 → M5 顺序实现：`clipboard/macos.py` → `sync/*` → 接线 → UI → 自测工具。
