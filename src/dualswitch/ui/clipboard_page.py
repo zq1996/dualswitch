@@ -109,8 +109,13 @@ class Thumb(QWidget):
                     image.scaled(36, 36, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
                 )
         elif record.kind == "text":
-            # 文本记录没有图：画一个浅底 + 本机系统 logo（Mac→，Windows→）
-            self._pix = logo_pixmap(theme.SYSTEM_LOGO, 22)
+            # 文本记录没有图：按**来源**画系统 logo —— 本机复制用本机图标，
+            # 对端传来的就是对端系统的图标（mac 上的 remote 必然来自 Windows，反之亦然）
+            if record.source == "remote":
+                logo = "windows" if theme.SYSTEM_LOGO == "apple" else "apple"
+            else:
+                logo = theme.SYSTEM_LOGO
+            self._pix = logo_pixmap(logo, 22)
 
     def paintEvent(self, event):  # noqa: N802
         p = QPainter(self)
@@ -134,8 +139,13 @@ class Thumb(QWidget):
 
 
 class StatePill(QLabel):
+    """状态药丸：固定高度 + 文字垂直居中（高度随字体撑会导致各行基线不齐）。"""
+
     def __init__(self, state: str, progress: float = 0.0, parent=None):
         super().__init__(parent)
+        self.setFixedHeight(18)
+        self.setAlignment(Qt.AlignCenter)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.set_state(state, progress)
 
     def set_state(self, state: str, progress: float = 0.0) -> None:
@@ -146,7 +156,7 @@ class StatePill(QLabel):
         self.setText(text)
         self.setStyleSheet(
             f"color:{fg};background:{bg};border-radius:5px;"
-            f"padding:2px 6px;font-size:10px;"
+            f"padding:0 6px;font-size:10px;font-weight:600;"
         )
 
 
@@ -178,10 +188,10 @@ class ClipRow(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 8, 10, 8)
         lay.setSpacing(10)
-        lay.addWidget(Thumb(record), 0, Qt.AlignTop)
+        lay.addWidget(Thumb(record), 0, Qt.AlignVCenter)
 
         text_col = QVBoxLayout()
-        text_col.setContentsMargins(0, 1, 0, 0)
+        text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(2)
 
         title = ElidedLabel(self._title(record), mode=Qt.ElideRight)
@@ -200,8 +210,7 @@ class ClipRow(QFrame):
         lay.addLayout(text_col, 1)
 
         self.pill = StatePill(record.state, record.progress)
-        self.pill.setAttribute(Qt.WA_TransparentForMouseEvents)
-        lay.addWidget(self.pill, 0, Qt.AlignTop)
+        lay.addWidget(self.pill, 0, Qt.AlignVCenter)
 
         self._del = QPushButton("\u00d7")
         self._del.setCursor(Qt.PointingHandCursor)
@@ -212,7 +221,7 @@ class ClipRow(QFrame):
         )
         self._del.setVisible(False)
         self._del.clicked.connect(lambda: self.deleteRequested.emit(self.record.id))
-        lay.addWidget(self._del, 0, Qt.AlignTop)
+        lay.addWidget(self._del, 0, Qt.AlignVCenter)
 
     # hover 动画属性（QPropertyAnimation 驱动）
     def _get_hover(self) -> float:
@@ -498,7 +507,7 @@ class ClipboardPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # 页头
+        # 页头：三个元素统一垂直居中、字号成体系（返回 12.5 / 标题 13.5 / 状态 11）
         head = QWidget()
         head.setFixedHeight(HEADER_H)
         head.setAttribute(Qt.WA_StyledBackground, True)
@@ -507,25 +516,36 @@ class ClipboardPage(QWidget):
         hl.setContentsMargins(12, 0, 14, 0)
         hl.setSpacing(8)
 
-        self.back = QPushButton("‹ 返回")
+        self.back = QPushButton("\u2039 返回")
         self.back.setCursor(Qt.PointingHandCursor)
+        self.back.setFixedHeight(26)
         self.back.setStyleSheet(
             f"QPushButton{{border:none;background:transparent;color:{theme.ACCENT_DEEP};"
-            "font-size:12px;padding:0 4px;}"
+            "font-size:12.5px;padding:0 4px;}"
             "QPushButton:hover{color:#0B3BB0;}"
         )
         self.back.clicked.connect(self.backRequested)
-        hl.addWidget(self.back, 0)
+        hl.addWidget(self.back, 0, Qt.AlignVCenter)
 
         title = QLabel("剪贴板")
-        title.setStyleSheet(f"color:{theme.INK};font-size:13px;font-weight:600;")
+        title.setStyleSheet(f"color:{theme.INK};font-size:13.5px;font-weight:600;")
         hl.addStretch(1)
-        hl.addWidget(title, 0)
+        hl.addWidget(title, 0, Qt.AlignVCenter)
         hl.addStretch(1)
 
-        self.conn = QLabel("●  未连接")
-        self.conn.setStyleSheet("color:#A9B2C1;font-size:10.5px;")
-        hl.addWidget(self.conn, 0)
+        # 连接状态：圆点用小色块画（● 字符的基线天生和文字对不齐）
+        self.conn_dot = QLabel()
+        self.conn_dot.setFixedSize(7, 7)
+        self.conn_text = QLabel("未连接")
+        self.conn_text.setStyleSheet("color:#A9B2C1;font-size:11px;")
+        conn_box = QWidget()
+        conn_lay = QHBoxLayout(conn_box)
+        conn_lay.setContentsMargins(0, 0, 0, 0)
+        conn_lay.setSpacing(5)
+        conn_lay.addWidget(self.conn_dot, 0, Qt.AlignVCenter)
+        conn_lay.addWidget(self.conn_text, 0, Qt.AlignVCenter)
+        self.conn_box = conn_box
+        hl.addWidget(conn_box, 0, Qt.AlignVCenter)
         outer.addWidget(head)
 
         # 列表
@@ -645,11 +665,13 @@ class ClipboardPage(QWidget):
 
     def _update_conn(self, connected: bool) -> None:
         if connected:
-            self.conn.setText("●  已连接")
-            self.conn.setStyleSheet("color:#0E9C6A;font-size:10.5px;")
+            self.conn_dot.setStyleSheet("background:#0E9C6A;border-radius:3.5px;")
+            self.conn_text.setText("已连接")
+            self.conn_text.setStyleSheet("color:#0E9C6A;font-size:11px;")
         else:
-            self.conn.setText("●  未连接")
-            self.conn.setStyleSheet("color:#A9B2C1;font-size:10.5px;")
+            self.conn_dot.setStyleSheet("background:#C3CCDB;border-radius:3.5px;")
+            self.conn_text.setText("未连接")
+            self.conn_text.setStyleSheet("color:#A9B2C1;font-size:11px;")
 
     def _update_empty(self, records: list[ClipRecord]) -> None:
         paired = bool(getattr(self.engine.cfg, "psk", "")) if self.engine else False
