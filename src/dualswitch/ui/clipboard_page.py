@@ -513,7 +513,7 @@ class ClipboardPage(QWidget):
         head.setAttribute(Qt.WA_StyledBackground, True)
         head.setStyleSheet("background:transparent;")
         hl = QHBoxLayout(head)
-        hl.setContentsMargins(12, 0, 14, 0)
+        hl.setContentsMargins(12, 0, 12, 0)
         hl.setSpacing(8)
 
         self.back = QPushButton("\u2039 返回")

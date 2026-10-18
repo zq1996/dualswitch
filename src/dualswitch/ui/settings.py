@@ -362,24 +362,38 @@ class SettingsWindow(QWidget):
         root_lay.addWidget(self.statusbar)
 
     def _back_bar(self) -> QWidget:
-        """内嵌模式的头：左边「‹ 返回」，右边标题。"""
+        """内嵌模式的头：与剪贴板页头同构 —— 返回在左、标题水平居中、两者同一水平线同字号。"""
         bar = QWidget()
         bar.setObjectName("backBar")
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(10, 8, 10, 2)
+        lay.setContentsMargins(12, 0, 12, 0)
         lay.setSpacing(8)
 
         btn = QPushButton("\u2039 返回")
-        btn.setObjectName("ghost")
         btn.setFixedHeight(26)
+        btn.setFixedWidth(52)     # 与右侧占位等宽 → 标题几何上精确居中
         btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            f"QPushButton{{border:none;background:transparent;color:{theme.ACCENT_DEEP};"
+            "font-size:12.5px;padding:0 4px;}"
+            "QPushButton:hover{color:#0B3BB0;}"
+        )
         btn.clicked.connect(self.backRequested)
 
         title = QLabel("设置")
-        title.setStyleSheet("font-size:13px;font-weight:600;color:%s;background:transparent;" % theme.INK)
+        title.setStyleSheet(
+            "font-size:13.5px;font-weight:600;color:%s;background:transparent;" % theme.INK
+        )
+
+        # 右侧补一个与返回按钮等宽的占位，让标题真正水平居中（而不是偏左）
+        spacer = QWidget()
+        spacer.setFixedWidth(52)
 
         lay.addWidget(btn, 0, Qt.AlignVCenter)
-        lay.addWidget(title, 1, Qt.AlignVCenter)
+        lay.addStretch(1)
+        lay.addWidget(title, 0, Qt.AlignVCenter)
+        lay.addStretch(1)
+        lay.addWidget(spacer, 0, Qt.AlignVCenter)
         return bar
 
     # ------------------------------------------------------------------ 页面
