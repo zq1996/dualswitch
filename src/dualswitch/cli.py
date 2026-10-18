@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, config as config_mod, logging_setup
+from . import __version__, config as config_mod, logging_setup, winenv
 from .app import SwitchController
 from .config import Config, ConfigError
 from .ddc import create_backend
@@ -430,6 +430,9 @@ def cmd_ui(args) -> int:
         len(logging.getLogger("dualswitch").handlers),
         os.environ.get("DUALSWITCH_LOG") or "未设置",
     )
+    # 托盘图标能不能注册，先看完整性级别：低于 explorer 时 Shell_NotifyIcon 会被
+    # UIPI 挡掉，而 Qt 对此不抛异常 —— 这一行日志是「没图标」最快的判据
+    winenv.log_environment(log)
 
     try:
         backend = create_backend(cfg)

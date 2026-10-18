@@ -15,6 +15,9 @@ import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="只在 macOS 上导入")
 
+if sys.platform != "darwin":       # 模块级跳过：否则 import 阶段就先炸，整套用例收集不起来
+    pytest.skip("只在 macOS 上导入", allow_module_level=True)
+
 from dualswitch.hotkey.base import Hotkey  # noqa: E402
 from dualswitch.hotkey import macos as hk  # noqa: E402
 

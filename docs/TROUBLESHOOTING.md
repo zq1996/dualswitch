@@ -56,7 +56,52 @@ Windows 切到 Mac 后，Windows 就看不到显示器了，所以：
 
 ## 4. 关窗口后托盘里没有图标，但任务管理器里进程还在
 
-这不是「程序崩了」，而是**托盘图标没进通知区域**。先把日志翻到这两行（每次启动都会写）：
+这不是「程序崩了」，而是**托盘图标没进通知区域**。按下面顺序看，两步就能定位。
+
+### 4.1 第一步：看「完整性级别」（最常见的真凶）
+
+每次启动都会写这一行（`dualswitch ui`）：
+
+```
+[INFO] 完整性级别：本进程=Low(0x1000) 资源管理器=High(0x3000)（exe=...）
+```
+
+**本进程级别低于资源管理器 → 图标 100% 不会出现，跟代码无关。**
+Windows 的 UIPI 不允许低完整性级别的进程向更高级别的窗口发消息，而托盘图标正是
+靠给 explorer 发 `Shell_NotifyIcon` 实现的。explorer 在本机是提权运行的（High），
+所以程序也必须是 High 才能注册图标。
+
+| 日志表现 | 含义 | 处理 |
+|---|---|---|
+| `本进程=Low` / `Medium`，`资源管理器=High` | exe 带了低完整性标签，或从低级别进程启动 | 见下面的修复命令 |
+| 两者相同（都是 High / 都是 Medium） | 级别没问题，往下看 §4.2 | — |
+
+修复（把 exe 所在目录的标签抬到 High，需要管理员）：
+
+```powershell
+icacls "D:\work\workbuddy\dualswitch\dist\dualswitch" /setintegritylevel (OI)(CI)High /T /C
+```
+
+或直接跑仓库里的工具：
+
+```powershell
+python tools\fix_integrity.py --self                          # 看两个级别
+python tools\fix_integrity.py --path dist\dualswitch --set High
+```
+
+> **为什么会这样**：本仓库位于 `D:\work`，该目录带 `Low Mandatory Level` 标签并且是
+> `(OI)(CI)` 继承的 —— 在它里面**新建**的文件（包括 PyInstaller 打出来的 exe）都会继承
+> Low。带 Low 标签的 exe 被启动时，Windows 会把进程的完整性级别压到 Low。于是
+> `Shell_NotifyIcon` 被 UIPI 静默丢弃：Qt 不抛异常（`isVisible()` 照样 True），
+> pystray 只抛一句 `[WinError 5] 拒绝访问`。
+> `packaging/windows/build.ps1` 现在会在打包后自动把产物标签抬到 High，
+> 所以**重新打包一次就能好**；`High` 不会提升进程级别（进程级别 = min(用户, 文件)），
+> 只是保证它不被文件标签压在 explorer 之下。
+>
+> 2026-10-18 实测对照：Low → 图标不出现；Medium → 仍不出现（explorer 是 High）；
+> High → `位置=2256,1400 24x40`，图标出现。
+
+### 4.2 第二步：看托盘自检那几行
 
 ```
 [INFO] 应用图标：...\assets\screen-switch.ico（尺寸 16x16、32x32、48x48、256x256）
@@ -66,22 +111,26 @@ Windows 切到 Mac 后，Windows 就看不到显示器了，所以：
 
 先确认这几行**在哪一次启动里**：`图形界面启动` 下面紧跟的一行是
 `可执行文件：...（打包版=True/False，资源目录=...）` —— 排查打包版时最常见的坑是
-「拿到的是旧日志 / 跑的是旧 exe」，先对齐这一行再往下看，省掉一整轮来回。
+「拿到的是旧日志 / 跑的是旧 exe」，先对齐这一行再往下看。
 
 | 日志表现 | 含义 | 处理 |
 |---|---|---|
-| `图标为空=True` | `.ico` 没读出来（Qt 缺 `imageformats/qico` 插件，或 `assets/` 没打进包） | 现在会自动换「代码画的图标」并记 ERROR；重打包时确认 `--add-data ...assets;dualswitch\ui\assets` 生效 |
+| `图标为空=True` | `.ico` 没读出来（Qt 缺 `imageformats/qico` 插件，或 `assets/` 没打进包） | 会自动换「代码画的图标」并记 ERROR；重打包时确认 `--add-data ...assets;dualswitch\ui\assets` 生效 |
 | `可见=False` | 图标压根没注册给系统 | 程序 2.5 秒后会自动重注册一次；仍失败说明被安全软件/远程桌面拦了 |
-| `位置=未知` | **注册了但系统没给它留格子**（`is_visible()` 是 Qt 自己的标记，不可信 | 3 秒后自动重注册；仍为空见下面「缓存坏了」 |
+| `位置=未知` | **注册了但系统没给它留格子**（`is_visible()` 是 Qt 自己的标记，不可信） | 3 秒后自动重注册；仍为空见下面「缓存坏了」 |
 | `托盘可用=False` | 这台机器没有通知区域 | 程序会自动改成「关窗口 = 最小化」，不再隐藏（否则没有任何入口） |
-| 三项都正常但桌面上看不到 | 图标被系统关掉/收进「隐藏的图标」 | 见下面两节 |
+| 三项都正常但桌面上看不到 | 图标被系统关掉/收进「隐藏的图标」 | 见 §4.4 / §4.5 |
 
 > 判定口径：**只看 `位置`，不要看 `可见`**。Windows 打包版实测过
 > `可见=True 图标为空=False 尺寸齐全` 但托盘里什么都没有 —— Qt 的 `isVisible()`
 > 只表示「我调用过 show()」，注册失败照样 True；`geometry()` 取自系统的
 > `Shell_NotifyIconGetRect`，拿不到矩形就是通知区域里没有这一格。
+>
+> 另外：**首次注册拿不到位置是正常的**，程序自己重注册一次之后就出现了
+> （实测 High 级别下：首次 `位置=未知` → 第 2 次重试 `位置=2256,1400 24x40`）。
+> 所以不要只看第一行就下结论。
 
-### 4.1 程序会自己换实现（Qt 托盘 → pystray）
+### 4.3 程序会自己换实现（Qt 托盘 → pystray）
 
 日志里出现这行说明 Qt 的托盘没进通知区域，程序已经自动换成 pystray 那条通道：
 
@@ -89,35 +138,36 @@ Windows 切到 Mac 后，Windows 就看不到显示器了，所以：
 [WARNING] Qt 托盘没进通知区域，已换成兜底实现（pystray），图标应立即出现
 ```
 
-图标会比窗口晚 5 秒左右出现（2.5s 首检 + 两次重试）。pystray 这条通道和
-`dualswitch run` 用的是同一套代码，在 Windows 上已实测能出图标。
-如果换成它之后仍然没有，日志里会有 `pystray` 相关的异常，或 `[Qt]` 开头的系统原话。
+两条实现最终都要走 `Shell_NotifyIcon`，所以它只在「Qt 这一层出问题」时有意义。
+**完整性级别不够时程序不会换**（日志：`不切换兜底托盘：…`）—— 换了也白换，
+还会把原本可能可用的 Qt 图标藏起来。
 
-### 4.2 系统把这个 exe 的托盘图标关掉了
+pystray 自己起不来时会记 `pystray 托盘启动失败：…`（典型：`[WinError 5] 拒绝访问`，
+就是完整性级别不够），这时程序会保留 Qt 图标、并把「关窗口」改成最小化。
+
+### 4.4 系统把这个 exe 的托盘图标关掉了
 
 设置 → 个性化 → 任务栏 → 通知区域 → **「选择哪些图标显示在任务栏上」** →
 找到 `dualswitch` / 「屏幕切换」，把开关打成 **开**。
 
 > 这一项是**按可执行文件路径**记的：`pythonw.exe`（`start-ui.bat` 那条路）早就被允许，
 > 所以源码方式正常；新打出来的 `dualswitch.exe` 是"新应用"，可能带着「关」的状态。
+> 图标被收进 `^` 溢出面板时也一样 —— 点 `^` 拖出来一次就固定了（Win11 对新 exe 默认如此）。
 
-### 4.3 通知区域缓存坏了（图标"消失"但注册成功）
+### 4.5 通知区域缓存坏了（图标"消失"但注册成功）
 
-只清本程序的记录，不动别的应用的托盘偏好：
+先停进程，再清本程序的托盘偏好，然后重启 explorer：
 
 ```powershell
 Stop-Process -Name dualswitch -Force -ErrorAction SilentlyContinue
-Get-ChildItem "HKCU:\Control Panel\NotifyIconSettings" | ForEach-Object {
-    $p = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).ExecutablePath
-    if ($p -like "*dualswitch.exe") { Write-Host "删除缓存项：$p"; Remove-Item $_.PSPath -Recurse -Force }
-}
 Stop-Process -Name explorer -Force   # 任务栏会自动重启
 ```
 
-然后重新启动程序。`NotifyIconSettings` 里存着每个 exe 的托盘图标快照与显示偏好，
-换构建后偶尔会留下一个空快照 —— 表现正是「进程在、注册说成功、托盘里没有」。
-
-> 另一种情况是图标被收进了 `^` 溢出面板（Win11 对新 exe 默认如此）：点 `^` 拖出来一次就固定了。
+Windows 11 的偏好在 `HKCU:\Control Panel\NotifyIconSettings`（按 exe 路径分项，
+删掉本程序那一项即可）；Windows 10 存在
+`HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\TrayNotify`
+的 `IconStreams` 二进制里，没有单条删除的官方途径 —— 所以 Win10 上先按 §4.4 把开关打开，
+不要手改注册表。
 
 卡在这个状态时的应急退出：
 

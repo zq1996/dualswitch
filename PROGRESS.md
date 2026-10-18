@@ -1,10 +1,16 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-18 13:20
+> 最后更新：2026-10-18 16:15
 > 一句话状态：**两端都已落地可用。Windows 侧切屏 / 热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过；
 > macOS 侧界面（菜单栏 + 原生窗口 + 四页设置）跑在真机上，`⌥ Space` 全局热键已修复并通过用户实测
 > （根因是 CGEvent 字段取错、异常被静默吞掉），已打包并装进 `/Applications/屏幕切换.app`，
 > 关窗口后程序坞不留图标、只保留菜单栏图标。`sources = {windows: 17, mac: 18}`。**
+>
+> 👉 **2026-10-18 16:15 补记**：Windows 打包版「关窗口后托盘没图标」的真凶已定位 ——
+> 不是代码，是 `D:\work` 目录带了 `Low Mandatory Level` 完整性标签，打出来的 exe 继承了它，
+> 进程以低完整性级别运行，`Shell_NotifyIcon` 被 UIPI 静默丢弃（详见 §8 与 `docs/TROUBLESHOOTING.md` §4.1）。
+> `build.ps1` 现在会在打包后把产物标签抬到 High，重新打包的 `dist\dualswitch\` 已实测：图标出现、
+> 关窗口后图标仍在、进程常驻。旧产物留在 `dist\dualswitch.old-20261018\`（可删）。
 >
 > 👉 **下一步：mac 侧日常使用观察** —— 重点关注长时间运行后热键是否仍灵（tap 被系统禁用会自动重开，
 > 日志里有 `事件 tap 回调超时…已重新启用` 与 `激活策略 → Accessory` 可查）；Windows 侧无待办。
@@ -22,6 +28,7 @@
 cd D:/work/workbuddy/dualswitch
 "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" -m pytest -q
 PYTHONPATH=src "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" -m dualswitch doctor
+python tools/fix_integrity.py --self    # 托盘图标能不能注册：看本进程 / 资源管理器的完整性级别
 
 # ── macOS ────────────────────────────────────────────────
 cd ~/work/workbuddy/dualswitch
@@ -388,6 +395,33 @@ dualswitch/
 ---
 
 ## 8. 变更日志
+
+- 2026-10-18 16:10 **Windows 打包版「关窗口后托盘没图标」根因定位并修掉：exe 带了 Low 完整性标签**。
+  真凶不在代码里：`D:\work` 这个目录带 `Low Mandatory Level` 标签且是 `(OI)(CI)` 继承的，
+  `dist` 里打出来的 `dualswitch.exe` 全部继承了它 → Windows 以**低完整性级别**启动进程 →
+  `Shell_NotifyIcon` 被 UIPI 静默丢弃（explorer 在本机是提权的 High）。
+  实测对照（同一份 exe，只改标签）：
+  · `Low` → 图标永不出现（Qt 报 `可见=True`、`位置=未知`；pystray 抛 `[WinError 5] 拒绝访问`）
+  · `Medium` → 仍不出现（低于 explorer 的 High）
+  · `High` → 第 2 次重注册后 `位置=2256,1400 24x40`，图标出现
+  这解释了此前所有「换了实现还是没图标」的现象：Qt 与 pystray 走的是同一个
+  `Shell_NotifyIcon`，级别不够时两条通道一起死，而 `dualswitch run`（pythonw.exe 从
+  `C:\Users\...` 启动，无标签 → 继承终端/资源管理器的 High）从来都是好的。
+  · 新增 `src/dualswitch/winenv.py`：读「本进程 / 资源管理器」的完整性级别，
+    `blocked()` 纯函数判「会不会被 UIPI 挡」，`fix_hint()` 给出可复制的 `icacls` 命令。
+  · `dualswitch ui` 启动即记 `完整性级别：本进程=… 资源管理器=…`；
+    runner 在级别不够时**不做无用重试、不切 pystray 兜底**，直接把「关窗口 = 隐藏」
+    改成「最小化到任务栏」并在界面挂横幅（不再留下无入口进程）。
+  · pystray 兜底不再说谎：线程里的异常会被记下来（`failed` / `error`），
+    起不来就保留 Qt 图标并记 ERROR，而不是「已换成兜底实现，图标应立即出现」。
+  · `packaging/windows/build.ps1` 打包后自动 `icacls … /setintegritylevel (OI)(CI)High /T`，
+    产物不会再继承低标签（High 不会提升进程级别，进程级别 = min(用户, 文件)）。
+  · 新增 `tools/fix_integrity.py`：`--self` 看两个级别、`--path X` 查标签、`--set High` 修一次。
+  · 排障手册 §4 重写：第一步就看完整性级别；补上 Win10（`TrayNotify\IconStreams`）与
+    Win11（`NotifyIconSettings`）的差异，删掉「首次位置未知 = 注册失败」的误判口径
+    —— 实测首次注册确实可能没有位置，重注册一次就出现。
+  · 测试 +13（`tests/test_integrity.py`：级别判定 / 被挡时跳过重试与兜底 / pystray 失败上报），
+    共 105 例通过（`test_hotkey_mac_tap` 改成模块级 skip，Windows 上不再卡在收集阶段）。
 
 - 2026-10-18 13:10 **装上「应用程序」+ 关窗口只留菜单栏（程序坞不留图标）**。
   · 新增 `packaging/macos/install-app.sh`：`ditto` 复制到 `/Applications/屏幕切换.app`

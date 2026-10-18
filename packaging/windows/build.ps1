@@ -55,6 +55,22 @@ $target = if ($OneFile) { "$root\dist\dualswitch.exe" } else { "$root\dist\duals
 
 if ($LASTEXITCODE -ne 0) { throw "打包失败" }
 
+# ── 完整性标签 ─────────────────────────────────────────────────────────────
+# 托盘图标靠 Shell_NotifyIcon 交给 explorer。Windows 不允许**低完整性级别**的进程
+# 向更高级别的窗口发消息（UIPI），而本机 explorer 是提权运行的（High）。
+# 如果仓库所在的盘/目录被标成了 Low（例如 D:\work 带 (OI)(CI) 的 Low 标签），
+# 打出来的 exe 会继承这个标签 → 进程以 Low 启动 → 托盘图标永远不出现，
+# 而且 Qt 不报错、pystray 只抛一句 [WinError 5]。
+# 这里把产物的标签抬到 High：High 不会提升进程级别（进程级别 = min(用户, 文件)），
+# 只是保证它不会被文件标签压在 explorer 之下。
+$outDir = Split-Path $target -Parent
+if (-not $OneFile) {
+    & icacls $outDir /setintegritylevel "(OI)(CI)High" /T /C | Out-Null
+    & icacls $target | Select-String "Mandatory" | ForEach-Object { Write-Host "完整性标签：$($_.Line.Trim())" }
+} else {
+    & icacls $target /setintegritylevel High /C | Out-Null
+}
+
 Write-Host ""
 Write-Host "产物：$target"
 Write-Host "下一步："

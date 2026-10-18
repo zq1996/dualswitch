@@ -20,7 +20,7 @@ from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from .. import logging_setup
+from .. import logging_setup, winenv
 from . import theme
 from .chrome import current as chrome
 from .settings import SettingsWindow
@@ -151,6 +151,8 @@ class UiRunner(QObject):
         self._hotkey_suspended = False
         self._quitting = False
         self._tray_fallback = False           # 已换成备用常驻图标实现（pystray）
+        self._tray_blocked = False            # 完整性级别低于 explorer，托盘注定注册不上
+        self._tray_block_reason = ""
         self._retry_on_activate = False       # 去授权后切回应用就自动重试热键
         self._hotkey_spec = cfg.hotkey
         self._seen_history = len(controller.history)
@@ -217,13 +219,33 @@ class UiRunner(QObject):
         self.app.installEventFilter(self)
 
     def _build_status(self, hotkey_label: str) -> None:
+        # 先问一句「系统会不会收我们的图标」：完整性级别低于 explorer 时，
+        # Shell_NotifyIcon 一定被 UIPI 挡掉，再怎么重试/换实现都没用。
+        self._tray_blocked, self._tray_block_reason = winenv.tray_restriction()
+        if self._tray_blocked:
+            log.error("%s", self._tray_block_reason)
+            log.error("修复：%s", winenv.fix_hint())
+
         # Windows 返回托盘（双击切换），macOS 返回菜单栏状态项（单击切换）
         self.status = self.chrome.build_status_item(self.icon, self._on_status_click)
         self.status.set_tooltip(_status_tip(hotkey_label))
         self._refresh_menu()
         self._check_status_item()
+        if self._tray_blocked:
+            # 图标注定进不了通知区域：别再「关窗口 = 隐藏」，否则用户只剩任务管理器
+            self._disable_tray_hiding(
+                "托盘图标被系统拒绝（程序完整性级别低于资源管理器）",
+                "关闭窗口会最小化到任务栏，不会隐藏。详见日志与排障手册 §4.1。",
+            )
+            return
         # 图标要等事件循环转起来才真正落进通知区域，2.5 秒后回头确认一次
         QTimer.singleShot(2500, self._verify_status_item)
+
+    def _disable_tray_hiding(self, log_reason: str, banner: str) -> None:
+        """常驻图标不可用时，把「关窗口 = 收进托盘」改成「最小化」，保住入口。"""
+        log.warning("%s：关闭窗口改为最小化（不再隐藏）", log_reason)
+        self.window.withdraw_to_tray = False
+        self.window.show_banner("warn", banner)
 
     def _check_status_item(self) -> None:
         """常驻图标是关窗口之后**唯一**的入口：它不可用就不能再「收进托盘」。
@@ -241,10 +263,8 @@ class UiRunner(QObject):
         if available:
             return
 
-        log.error("系统托盘不可用：关闭窗口后无法从托盘找回程序，改为最小化")
-        self.window.withdraw_to_tray = False
-        self.window.show_banner(
-            "warn",
+        self._disable_tray_hiding(
+            "系统托盘不可用",
             "系统托盘不可用，关闭窗口后会最小化到任务栏（不会隐藏）。",
         )
 
@@ -268,6 +288,10 @@ class UiRunner(QObject):
         拿不到矩形就说明通知区域里没有这一格。
         """
         if self._quitting or self._tray_fallback:
+            return
+        if self._tray_blocked:
+            # 级别不够时重试/重建都是白费：Shell_NotifyIcon 直接被 UIPI 挡掉
+            log.info("常驻图标自检跳过：%s", self._tray_block_reason)
             return
         try:
             visible = bool(self.status.is_visible())
@@ -312,19 +336,28 @@ class UiRunner(QObject):
             return
         log.error(
             "托盘图标仍然没有位置：系统侧没有接受这个 exe 的托盘注册。"
-            "① 设置 → 个性化 → 任务栏 → 通知区域 →「选择哪些图标显示在任务栏上」，"
-            "确认有 %s 且是「开」；② 清 HKCU\\Control Panel\\NotifyIconSettings 里本程序的项后重启 explorer；"
-            "③ 若列表里根本没有它，把日志里 [Qt] 开头的行发出来。",
+            "① 先看日志里「完整性级别」那行，本进程级别低于资源管理器时图标一定不出现；"
+            "② 设置 → 个性化 → 任务栏 → 通知区域 →「选择哪些图标显示在任务栏上」，"
+            "确认有 %s 且是「开」；③ 清 TrayNotify 缓存后重启 explorer。",
             Path(sys.executable).name,
         )
         self.window.set_foot("托盘图标没被系统接受 · 见日志", ok=False)
+        self._disable_tray_hiding(
+            "托盘图标没被系统接受",
+            "托盘图标没被系统接受，关闭窗口会最小化到任务栏（不会隐藏）。详见日志。",
+        )
 
     def _switch_to_fallback_status(self) -> bool:
         """Qt 托盘彻底不灵时，换成 chrome 提供的另一种实现（目前只有 Windows 有）。
 
-        `QSystemTrayIcon` 在打包版里会「报可见、实则没进通知区域」，而同一个 exe 用
-        pystray（`dualswitch run` 那条老路）是能出图标的 —— 换条通道比继续跟 Qt 死磕快。
+        `QSystemTrayIcon` 会「报可见、实则没进通知区域」，而 pystray 是另一条通道。
+        但它俩最终都要走 `Shell_NotifyIcon`：完整性级别不够时 pystray 只会更早失败
+        （`ChangeWindowMessageFilterEx` → `[WinError 5] 拒绝访问`），所以那种情况下
+        不再切换 —— 换了也白换，还会把已经「可能可用」的 Qt 图标藏起来。
         """
+        if self._tray_blocked:
+            log.warning("不切换兜底托盘：%s", self._tray_block_reason)
+            return False
         build = getattr(self.chrome, "build_fallback_status_item", None)
         if not callable(build):
             return False
@@ -334,6 +367,14 @@ class UiRunner(QObject):
             log.exception("创建兜底常驻图标失败")
             return False
         if item is None:
+            return False
+        if getattr(item, "failed", False):
+            # 兜底实现自己起不来：保留 Qt 那个（它至少有可能在系统里）
+            log.error("兜底托盘启动失败：%s", getattr(item, "error", "") or "未知原因")
+            try:
+                item.hide()
+            except Exception:  # pragma: no cover
+                pass
             return False
 
         old = self.status

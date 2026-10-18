@@ -371,6 +371,7 @@ class PystrayStatusItem:
 
     def __init__(self, on_activate: Callable[[], None]):
         import threading
+        import time
 
         import pystray
         from PIL import Image
@@ -381,13 +382,43 @@ class PystrayStatusItem:
         self._on_activate = on_activate
         self._entries: list = []
         self._title = "屏幕切换"
+        self._error = ""                     # 起不来时留原因，供 runner 判断
+        self._thread: threading.Thread | None = None
 
         image = Image.open(theme.app_icon())
         image.load()
         self._icon = pystray.Icon("dualswitch", icon=image, title=self._title)
         # pystray 自带消息循环，必须放在自己的线程里跑（Qt 主线程不能让它阻塞）
-        threading.Thread(target=self._icon.run, name="pystray-tray", daemon=True).start()
-        log.info("pystray 托盘已启动（兜底实现）")
+        self._thread = threading.Thread(target=self._run, name="pystray-tray", daemon=True)
+        self._thread.start()
+
+        # 等它真的把窗口建起来（`_mark_ready` 之后 `_running` 为 True）。
+        # 不等的话「pystray 托盘已启动」就是一句谎话 —— 打包版实测过：线程里
+        # `ChangeWindowMessageFilterEx` 抛 WinError 5，图标一个都没出现，日志却写着已启动。
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if self._error or getattr(self._icon, "_running", False):
+                break
+            time.sleep(0.02)
+
+        if self._error:
+            log.error("pystray 托盘启动失败：%s", self._error)
+        elif getattr(self._icon, "_running", False):
+            log.info("pystray 托盘已启动（兜底实现）")
+        else:
+            log.warning("pystray 托盘 2 秒内没就绪，继续观察")
+
+    def _run(self) -> None:
+        """线程体：把 pystray 的异常接住并记下来（否则 windowed 版连堆栈都看不到）。"""
+        try:
+            self._icon.run()
+        except Exception as exc:             # pragma: no cover - 依赖系统环境
+            self._error = f"{exc.__class__.__name__}: {exc}"
+            log.error("pystray 托盘线程异常退出：%s", self._error, exc_info=True)
+
+    @property
+    def failed(self) -> bool:
+        return bool(self._error)
 
     # ------------------------------------------------------------------ 菜单
     def _build_menu(self):
@@ -418,6 +449,8 @@ class PystrayStatusItem:
             log.exception("停止 pystray 托盘失败")
 
     def is_visible(self) -> bool:
+        if self._error:
+            return False
         return bool(getattr(self._icon, "visible", False))
 
     def is_available(self) -> bool:
