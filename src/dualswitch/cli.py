@@ -398,6 +398,13 @@ def cmd_ui(args) -> int:
     log_file = _setup_logging(cfg, console=bool(getattr(args, "console", False)))
     log.info("=" * 62)
     log.info("dualswitch %s 图形界面启动", __version__)
+    # 「跑的是哪个 exe」必须一步可查：排查打包版时，日志和成品对不上号最费时间
+    log.info(
+        "可执行文件：%s（打包版=%s，资源目录=%s）",
+        sys.executable,
+        bool(getattr(sys, "frozen", False)),
+        getattr(sys, "_MEIPASS", "-"),
+    )
 
     try:
         backend = create_backend(cfg)
