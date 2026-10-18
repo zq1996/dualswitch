@@ -54,6 +54,17 @@
 > `AXIsProcessTrustedWithOptions(prompt=True)` 让系统弹一次框，否则用户在设置页里根本找不到本应用。
 > Windows 侧实现成恒真的空壳，共享代码因此可以无条件调用。
 
+`build_status_item()` 返回的常驻图标对象要实现这些方法（两端同名）：
+
+| 方法 | 说明 |
+|---|---|
+| `set_tooltip(text)` / `set_menu(entries)` / `show()` / `hide()` | 常规操作，`entries` 见 `ui.statusitem.MenuEntry` |
+| `is_visible()` | 图标当前是否可见（注册失败时为 False） |
+| `is_available()` | 这台机器有没有托盘 / 菜单栏；**为 False 时不能把窗口藏进后台**，否则没有入口 |
+| `geometry()` | 图标在屏幕上的位置，只给排障日志用，拿不到返回空串 |
+| `reassert()` | Windows 专用：重新向系统注册一次图标（Explorer 重启后图标会丢） |
+
+
 chrome 模块**不要**在模块顶层 import `..theme` / `..widgets`：`theme` 需要 import chrome
 才能拿到配色，顶层互相 import 会成环。需要控件时在函数内 import。
 """

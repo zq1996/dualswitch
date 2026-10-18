@@ -279,6 +279,18 @@ class MacStatusItem:
         except Exception:  # pragma: no cover
             return False
 
+    def is_available(self) -> bool:
+        """菜单栏只有「建没建出来」这一说，能走到这里就说明可用。"""
+        return True
+
+    def geometry(self) -> str:
+        """状态项在菜单栏里的位置；排障用，和 Qt 托盘保持同名接口。"""
+        try:
+            rect = self._button.window().frame()
+            return f"{int(rect.origin.x)},{int(rect.origin.y)} {int(rect.size.width)}x{int(rect.size.height)}"
+        except Exception:  # pragma: no cover
+            return ""
+
     def notify(self, title: str, message: str, icon=None, msecs: int = 4000) -> None:  # noqa: ANN001
         log.info("[通知] %s：%s", title, message)
 

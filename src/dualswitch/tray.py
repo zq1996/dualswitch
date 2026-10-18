@@ -26,8 +26,12 @@ def tray_available() -> bool:
     return True
 
 
-def _make_icon_image():
-    """程序化画一个图标：深色圆角底 + 一对交换箭头。"""
+def make_icon_image():
+    """程序化画一个图标：深色圆角底 + 一对交换箭头。
+
+    除了 pystray 托盘，`ui.runner` 在 `.ico` / `.icns` 读不出来时也拿它当兜底图标 ——
+    打包后 imageformats 插件缺失时 `QIcon(路径)` 不报错、只返回空图标，托盘会变成一片空白。
+    """
     from PIL import Image, ImageDraw
 
     size = 64
@@ -151,7 +155,7 @@ class TrayApp:
 
         self.icon = pystray.Icon(
             "dualswitch",
-            icon=_make_icon_image(),
+            icon=make_icon_image(),
             title=f"dualswitch · {self.hotkey_label}",
             menu=self._build_menu(),
         )

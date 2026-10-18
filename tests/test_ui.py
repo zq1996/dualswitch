@@ -271,3 +271,49 @@ def test_menu_entries_track_state(app):
     flipped = [e.title for e in build_menu_entries(Config(), "mac", "alt+space", {})]
     assert any("当前画面：Mac" in x for x in flipped)
     assert any("切换到 Windows" in x for x in flipped)
+
+
+def test_close_without_tray_minimizes_instead_of_hiding(app):
+    """托盘不可用时不能再把窗口藏起来 —— 否则用户既没窗口也没图标，只剩任务管理器。"""
+    win = MainWindow(Config(), "Alt+Space", "v1.0.0")
+    seen: list[int] = []
+    win.hiddenToBackground.connect(lambda: seen.append(1))
+
+    win.withdraw_to_tray = False
+    win.show()
+    win.close()
+
+    assert seen == [], "没有托盘时不该发「转入后台」"
+    assert not win.isHidden(), "没有托盘时必须留在任务栏"
+    assert win.isMinimized()
+    win.quit_completely()
+
+
+def test_app_icon_survives_broken_image_plugin(app, tmp_path: Path, monkeypatch):
+    """`.ico` 读不出来时要退回代码画的图标，而不是留个空图标（托盘会一片空白）。"""
+    from dualswitch.ui import runner as runner_mod
+
+    assert not runner_mod.load_app_icon().isNull()      # 正常路径：包内资源可用
+
+    broken = tmp_path / "screen-switch.ico"
+    broken.write_bytes(b"not an icon at all")
+    monkeypatch.setattr(theme, "app_icon", lambda: broken)
+
+    icon = runner_mod.load_app_icon()
+    assert not icon.isNull(), "图标读不出来时必须兜底，不能让托盘变成空图标"
+
+
+def test_qt_status_item_reports_availability(app):
+    """托盘对象要能自报「可不可用 / 可见 / 位置」，日志与降级都靠它。"""
+    from PySide6.QtGui import QIcon
+
+    from dualswitch.ui.chrome.win import QtStatusItem
+
+    item = QtStatusItem(QIcon(), None)
+    try:
+        assert isinstance(item.is_available(), bool)
+        assert isinstance(item.is_visible(), bool)
+        assert isinstance(item.geometry(), str)
+        item._log_state("测试")          # 空图标要能记日志而不是抛异常
+    finally:
+        item.hide()

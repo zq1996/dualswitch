@@ -33,6 +33,46 @@ def _status_tip(hotkey_label: str) -> str:
     return f"屏幕切换 · {theme.pretty_hotkey(hotkey_label)}（{theme.CLICK_HINT}）"
 
 
+def _drawn_icon() -> QIcon:
+    """兜底图标：复用托盘那套 Pillow 画的箭头图（画不出来就返回空图标，不阻断启动）。"""
+    try:
+        from PySide6.QtGui import QImage, QPixmap
+
+        from ..tray import make_icon_image
+
+        image = make_icon_image().resize((64, 64))
+        data = image.tobytes("raw", "RGBA")
+        qimage = QImage(data, image.width, image.height, QImage.Format_RGBA8888).copy()
+        return QIcon(QPixmap.fromImage(qimage))
+    except Exception:
+        log.exception("生成兜底图标失败")
+        return QIcon()
+
+
+def load_app_icon() -> QIcon:
+    """应用图标：包内的 .ico / .icns 优先，读不出来时退回代码画的图标。
+
+    `QIcon(路径)` 遇到「文件在、但 Qt 没装对应 imageformats 插件」时**不抛异常**，
+    只返回一个空图标 —— 空图标在托盘里就是「什么都没有」，而窗口图标看不出来
+    （任务栏显示的是 exe 自带的图标资源）。打包后少带一个 `qico` 插件，
+    就会正好落进这个静默失败的坑，症状是「进程在，托盘没图标」。
+    """
+    try:
+        path = theme.app_icon()
+    except FileNotFoundError:
+        log.error("找不到应用图标（assets 里没有 .ico / .icns），改用内置绘制图标")
+        return _drawn_icon()
+
+    icon = QIcon(str(path))
+    if icon.isNull():
+        log.error("应用图标读不出来：%s（检查 PySide6/plugins/imageformats/qico），改用内置绘制图标", path)
+        return _drawn_icon()
+
+    sizes = [f"{s.width()}x{s.height()}" for s in icon.availableSizes()] or ["无"]
+    log.info("应用图标：%s（尺寸 %s）", path, "、".join(sizes))
+    return icon
+
+
 class UiRunner(QObject):
     def __init__(self, cfg, cfg_file: Path, log_file: Path, backend, controller, hotkey, warning=None):
         super().__init__()
@@ -56,7 +96,7 @@ class UiRunner(QObject):
         self.app.setStyleSheet(theme.qss())
         self.chrome = chrome()
 
-        self.icon = QIcon(str(theme.app_icon()))
+        self.icon = load_app_icon()
         self.app.setWindowIcon(self.icon)
 
         hotkey_label = hotkey.describe() if hotkey else "未启用"
@@ -148,6 +188,56 @@ class UiRunner(QObject):
         self.status = self.chrome.build_status_item(self.icon, self._on_status_click)
         self.status.set_tooltip(_status_tip(hotkey_label))
         self._refresh_menu()
+        self._check_status_item()
+        # 图标要等事件循环转起来才真正落进通知区域，2.5 秒后回头确认一次
+        QTimer.singleShot(2500, self._verify_status_item)
+
+    def _check_status_item(self) -> None:
+        """常驻图标是关窗口之后**唯一**的入口：它不可用就不能再「收进托盘」。
+
+        这台机器压根没有系统托盘（远程桌面 / 精简系统）时，如果还按
+        「关窗口 = 隐藏」，用户就既看不到窗口也看不到图标，只剩任务管理器。
+        """
+        probe = getattr(self.status, "is_available", None)
+        available = True
+        if callable(probe):
+            try:
+                available = bool(probe())
+            except Exception:  # pragma: no cover
+                log.exception("检查常驻图标可用性失败")
+        if available:
+            return
+
+        log.error("系统托盘不可用：关闭窗口后无法从托盘找回程序，改为最小化")
+        self.window.withdraw_to_tray = False
+        self.window.show_banner(
+            "warn",
+            "系统托盘不可用，关闭窗口后会最小化到任务栏（不会隐藏）。",
+        )
+
+    def _verify_status_item(self) -> None:
+        """启动 2.5 秒后回头确认图标真的进了通知区域。
+
+        `QSystemTrayIcon.show()` 注册失败时既不抛异常也不返回错误。所以只能事后查：
+        可见 = False → 重新注册一次；可见 = True 但桌面上看不到，说明系统把图标收进了
+        「隐藏的图标」溢出面板（Win11 对没出现过的新 exe 默认如此），代码无能为力，
+        但这一行日志足以让排障有据可依。
+        """
+        if self._quitting:
+            return
+        try:
+            visible = bool(self.status.is_visible())
+            log.info("常驻图标检查：可见=%s", visible)
+            if visible:
+                return
+            log.warning("常驻图标未注册成功，重新注册一次")
+            reassert = getattr(self.status, "reassert", None)
+            if callable(reassert):
+                reassert()
+            else:
+                self.status.show()
+        except Exception:  # pragma: no cover
+            log.exception("常驻图标自检失败")
 
     def _status_actions(self) -> dict:
         return {

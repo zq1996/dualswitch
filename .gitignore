@@ -7,6 +7,7 @@ venv/
 build/
 dist/
 .pytest_cache/
+.pytest-tmp/          # 跑测试用 --basetemp=.pytest-tmp（本机 /tmp 不可写）
 
 # 本地配置与日志
 config.local.json

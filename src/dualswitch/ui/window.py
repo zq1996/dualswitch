@@ -92,6 +92,7 @@ class MainWindow(QWidget):
         self.hotkey_label = hotkey_label
         self.monitor_name = monitor_name
         self._allow_close = False
+        self.withdraw_to_tray = True       # 托盘真的可用时，关窗口 = 收进托盘
         self._host = cfg.effective_host()
 
         # 平台差异（谁画窗口、要不要自绘标题栏）全部来自 chrome，这里不做判断
@@ -125,7 +126,9 @@ class MainWindow(QWidget):
         # 标题栏由平台决定：Windows 返回自绘控件，macOS 返回 None（系统给）
         self.titlebar = self.chrome.titlebar("屏幕切换")
         if self.titlebar is not None:
-            self.titlebar.closeClicked.connect(self.hide)
+            # 走 close() 而不是 hide()：所有「关窗口」路径都汇到 closeEvent 一处，
+            # 托盘不可用时才有机会改成最小化（hide 是绕过去，会留下无入口的进程）
+            self.titlebar.closeClicked.connect(self.close)
             self.titlebar.minimizeClicked.connect(self.showMinimized)
             self.titlebar.settingsClicked.connect(self.openSettingsRequested)
             root_lay.addWidget(self.titlebar)
@@ -288,6 +291,10 @@ class MainWindow(QWidget):
             event.accept()
             return
         event.ignore()
+        if not self.withdraw_to_tray:
+            # 没有可用的托盘：藏起来就再也叫不回来了，至少把窗口留在任务栏
+            self.showMinimized()
+            return
         self.hide()
         self.hiddenToBackground.emit()
 

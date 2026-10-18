@@ -468,6 +468,21 @@ dualswitch/
   ⚠️ 重打包换了 ad-hoc 签名，TCC 会当成新应用：需到「隐私与安全性 → 辅助功能」
   重新勾选一次「屏幕切换」。
 
+- 2026-10-18 13:35 **Windows 打包版「关窗口后托盘没图标、进程还在」——先让它自己说出来**。
+  现象：`dualswitch.exe`（打包版）点标题栏关闭后，托盘里没有图标，任务管理器里进程仍存活；
+  同一份代码用 `start-ui.bat`（`pythonw.exe`）跑就正常。代码路径完全一致（`QSystemTrayIcon`
+  启动时创建、`closeEvent` 只 `hide()`），所以问题不在「关闭逻辑」，而在**图标有没有进通知区域**。
+  · 诊断：`QtStatusItem` 现在把注册结果写日志（托盘可用 / 图标可见 / 图标是否为空 / 尺寸 / 位置），
+    启动 2.5 秒后再复查一次，不可见就自动重注册（Explorer 重启后图标会丢）。
+  · 空图标兜底：`QIcon(路径)` 读不出格式时**不报错、只返回空图标**（打包漏带
+    `plugins/imageformats/qico` 时就是这样，任务栏因为用 exe 资源图标看不出来）。
+    新增 `runner.load_app_icon()`：空图标 → 改用 `tray.make_icon_image()` 画的箭头图并记 ERROR。
+  · 不再制造「无入口进程」：状态项新增 `is_available()`，托盘不可用时把
+    `MainWindow.withdraw_to_tray` 置 False，关窗口改为**最小化**（原来一律隐藏）。
+  · 关闭路径收敛：自绘标题栏的关闭按钮从 `hide()` 改为 `close()`，统一走 `closeEvent`。
+  · 最可能的那条：Win11 对没出现过的新 exe 默认把托盘图标收进「隐藏的图标」溢出面板，
+    按可执行文件路径记偏好 —— 所以 `pythonw.exe` 正常、新打出来的 `dualswitch.exe` 第一次就「没有」。
+  排障表见 `docs/TROUBLESHOOTING.md` §4（含 `taskkill` 应急退出）。`pytest` 99 passed。
 - 2026-10-17 22:10 **打包版诊断能力增强 + 清理调试产物**。
   `packaging/entrypoint.py`：崩溃时同时把完整堆栈打到 stderr、写文件按「默认日志 →
   exe 同目录 → C:\」三级候选依次尝试，弹窗内容带堆栈；

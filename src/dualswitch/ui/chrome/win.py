@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Callable
 
 from .base import Palette
+
+log = logging.getLogger("dualswitch.tray")
 
 NAME = "windows"
 PLATFORM_LABEL = "Windows"
@@ -183,7 +186,12 @@ def titlebar(title: str, show_settings: bool = True):  # noqa: ANN201
 # 托盘
 # --------------------------------------------------------------------------- #
 class QtStatusItem:
-    """QSystemTrayIcon 封装：单击不响应，双击切换（Windows 端已定的交互）。"""
+    """QSystemTrayIcon 封装：单击不响应，双击切换（Windows 端已定的交互）。
+
+    托盘是「关窗口收进后台」之后**唯一**的入口，所以这里每一步都要留日志：
+    图标注册失败时 Qt 不抛异常、不报警，只是托盘里少一个图标、
+    而任务管理器里进程照常在跑 —— 用户看到的症状就是「程序没了，但又没退出」。
+    """
 
     kind = "tray"
 
@@ -196,10 +204,64 @@ class QtStatusItem:
         self._menu = None                    # 保持引用，否则 QMenu 会被回收
         self._tray.activated.connect(self._activated)
         self._tray.show()
+        self._log_state("首次注册")
 
     def _activated(self, reason) -> None:      # noqa: ANN001
         if reason == self._QSystemTrayIcon.DoubleClick and self._on_left_click:
             self._on_left_click()
+
+    # ------------------------------------------------------------------ 诊断
+    def _log_state(self, when: str) -> None:
+        """把「系统认没认这个托盘图标」写进日志。
+
+        打包后「托盘里没图标但进程还在」只有三种可能，这行日志能一次分清：
+          · `图标为空=True`      → .ico 没读出来（imageformats/qico 插件或资源路径问题）
+          · `可见=False`         → 压根没注册成功
+          · 两个都正常           → 注册成功了，只是被 Windows 收进了「隐藏的图标」溢出面板
+                                   （Win11 对从没出现过的新 exe 默认就藏起来，属于系统行为）
+        """
+        try:
+            icon = self._tray.icon()
+            log.info(
+                "托盘图标（%s）：托盘可用=%s 图标可见=%s 图标为空=%s 尺寸=%s 位置=%s",
+                when,
+                self.is_available(),
+                bool(self._tray.isVisible()),
+                icon.isNull(),
+                [f"{s.width()}x{s.height()}" for s in icon.availableSizes()] or "无",
+                self.geometry() or "未知",
+            )
+            if icon.isNull():
+                log.error("托盘图标是空图标：检查包内 assets/ 里的 .ico 与 PySide6/plugins/imageformats/qico")
+        except Exception:
+            log.exception("读取托盘状态失败（%s）", when)
+
+    def is_available(self) -> bool:
+        """系统托盘是否可用（Windows 上基本恒真，远程桌面 / 精简系统可能为假）。"""
+        try:
+            return bool(self._QSystemTrayIcon.isSystemTrayAvailable())
+        except Exception:  # pragma: no cover
+            return False
+
+    def geometry(self) -> str:
+        """图标在通知区域里的位置；拿不到（没注册上 / 被藏进溢出面板）返回空串。"""
+        try:
+            rect = self._tray.geometry()
+            if rect.isNull() or rect.width() <= 0:
+                return ""
+            return f"{rect.left()},{rect.top()} {rect.width()}x{rect.height()}"
+        except Exception:  # pragma: no cover
+            return ""
+
+    def reassert(self) -> None:
+        """重新向系统注册一次图标（Explorer 重启、图标被系统吞掉时用）。"""
+        try:
+            self._tray.hide()
+            self._tray.show()
+        except Exception:  # pragma: no cover
+            log.exception("重新注册托盘图标失败")
+            return
+        self._log_state("重新注册")
 
     def set_tooltip(self, text: str) -> None:
         self._tray.setToolTip(text)
