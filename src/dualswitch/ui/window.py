@@ -290,8 +290,13 @@ class MainWindow(QWidget):
         return theme.WIN_H + int(getattr(self.chrome, "EXTRA_H", 0) or 0)
 
     def attach_clipboard(self, widget) -> None:
-        """把剪贴板页挂进本窗口（与设置页同一套：翻页 + 返回）。"""
+        """把剪贴板页挂进本窗口（两端都走这里，和设置页同一套）。"""
         self.clipboard_page = widget
+        self.pages.addWidget(widget)
+
+    def attach_settings(self, widget) -> None:
+        """把设置页挂进本窗口（mac：同一个窗口里翻页，而不是再弹一个窗口）。"""
+        self.settings_page = widget
         self.pages.addWidget(widget)
 
     def show_clipboard_page(self) -> None:
@@ -300,28 +305,8 @@ class MainWindow(QWidget):
         self._on_clipboard = True
         self._on_settings = False
         self.pages.setCurrentWidget(self.clipboard_page)
-        self.setWindowTitle("屏幕切换 · 剪贴板")
+        self._set_title("屏幕切换 · 剪贴板")
         self._apply_height(self.win_h())
-
-    def show_main_page(self) -> None:
-        self._on_settings = False
-        self._on_clipboard = False
-        self.pages.setCurrentWidget(self.main_page)
-        self.setWindowTitle("屏幕切换")
-        self._apply_height(self.win_h() + (0 if self.banner.isHidden() else BANNER_EXTRA))
-
-    def on_clipboard_page(self) -> bool:
-        return self._on_clipboard
-
-    def attach_settings(self, widget) -> None:
-        """把设置页挂进本窗口（mac：同一个窗口里翻页，而不是再弹一个窗口）。"""
-        self.settings_page = widget
-        self.pages.addWidget(widget)
-
-    def attach_clipboard(self, widget) -> None:
-        """把剪贴板页挂进本窗口（两端都走这里，和设置页同一套）。"""
-        self.clipboard_page = widget
-        self.pages.addWidget(widget)
 
     def show_settings_page(self) -> None:
         if self.settings_page is None:      # 独立窗口模式（Windows）没有这一页
@@ -332,11 +317,18 @@ class MainWindow(QWidget):
         self._set_title("屏幕切换 · 设置")
         self._apply_height(theme.SETTINGS_H)
 
-    def on_settings_page(self) -> bool:
-        return self._on_settings
+    def show_main_page(self) -> None:
+        self._on_settings = False
+        self._on_clipboard = False
+        self.pages.setCurrentWidget(self.main_page)
+        self._set_title("屏幕切换")
+        self._apply_height(self.win_h() + (0 if self.banner.isHidden() else BANNER_EXTRA))
 
     def on_clipboard_page(self) -> bool:
         return self._on_clipboard
+
+    def on_settings_page(self) -> bool:
+        return self._on_settings
 
     # ------------------------------------------------------------------ 事件
     def _on_card_clicked(self, host: str) -> None:

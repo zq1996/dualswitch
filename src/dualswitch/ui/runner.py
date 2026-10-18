@@ -489,6 +489,7 @@ class UiRunner(QObject):
         self.chrome.activate(self.settings)
 
     def show_clipboard(self) -> None:
+        """翻到剪贴板页（标题栏图标 / 列表行 / 托盘菜单都走这里）。"""
         if self.clipboard_page is None:
             return
         if not self.chrome.SETTINGS_IN_WINDOW and self.settings.isVisible():
@@ -503,6 +504,7 @@ class UiRunner(QObject):
         self.clipboard_page.setFocus()
 
     def close_clipboard(self) -> None:
+        """「‹ 返回」：回主页面，窗口不关。"""
         self.window.show_main_page()
 
     def show_pair_hint(self) -> None:
@@ -527,19 +529,6 @@ class UiRunner(QObject):
             self.window.show_main_page()
         else:
             self.settings.hide()
-
-    def show_clipboard(self) -> None:
-        """翻到剪贴板页（标题栏图标 / 列表行 / 托盘菜单都走这里）。"""
-        self._leave_background()
-        self.window.show_clipboard_page()
-        self.window.showNormal()
-        self.window.raise_()
-        self.window.activateWindow()
-        self.chrome.activate(self.window)
-
-    def close_clipboard(self) -> None:
-        """「‹ 返回」：回主页面，窗口不关。"""
-        self.window.show_main_page()
 
     def _on_status_click(self) -> None:
         # macOS 菜单栏左键直接切换；Windows 侧 QtStatusItem 已过滤成只认双击
