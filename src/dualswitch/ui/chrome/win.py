@@ -146,7 +146,6 @@ def titlebar(title: str, show_settings: bool = True, show_clipboard: bool = Fals
         minimizeClicked = Signal()
         closeClicked = Signal()
         settingsClicked = Signal()
-        clipboardClicked = Signal()
 
         def __init__(self, title: str, show_settings: bool = True,
                      show_clipboard: bool = False, parent=None):
@@ -180,7 +179,8 @@ def titlebar(title: str, show_settings: bool = True, show_clipboard: bool = Fals
             for btn in (self.btn_clipboard, self.btn_settings, self.btn_min, self.btn_close):
                 lay.addWidget(btn, 0, Qt.AlignVCenter)
 
-            self.btn_clipboard.clicked.connect(self.clipboardClicked)
+            # 剪贴板按钮不给本类发信号：`window.py` 直接连 `btn_clipboard.clicked`
+            # （这个按钮不是契约的一部分，mac 没有自绘标题栏，所以走「按能力接」）
             self.btn_settings.clicked.connect(self.settingsClicked)
             self.btn_min.clicked.connect(self.minimizeClicked)
             self.btn_close.clicked.connect(self.closeClicked)

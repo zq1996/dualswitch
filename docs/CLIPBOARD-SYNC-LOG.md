@@ -92,7 +92,7 @@ macOS 端的三道闸在 Windows 上同样跑通，用的是 `clipboard/windows.
 | 闸一 契约测试（真实后端） | `$env:DUALSWITCH_CLIP_TEST="real"; pytest tests/test_clipboard_contract.py -q` | **14 passed / 3 skipped** |
 | 闸二 单机同步自测 | `python tools/clip_sync_selftest.py` | **7/7**：文本 / 图片 / 自写回弹 / 环抑制 / 重复投递 / 20MB 大图（6847ms，sha256 一致）/ 断线重连 |
 | 闸三 本机格式矩阵 | `python tools/clip_selftest.py --role windows` | **6 PASS / 0 FAIL / 1 MANUAL**（敏感标记需手工构造） |
-| 全量回归 | `pytest tests -q` | **216 passed / 5 skipped** |
+| 全量回归 | `pytest tests -q` | **217 passed / 5 skipped** |
 
 `python -m dualswitch clip probe` 输出：
 

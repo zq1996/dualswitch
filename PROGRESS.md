@@ -134,7 +134,7 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 | 19 | **macOS 热键真机可用（根因修复）** | ✅ **用户实测确认「好用了」** | 根因：`CGEventGetIntegerValueField(event, kCGKeyboardEventFlags)` 字段不存在 → 每次回调抛 AttributeError 被静默吞掉。改 `CGEventGetFlags` + tap 被禁用自动重开；`tests/test_hotkey_mac_tap.py`（10 例）、`tools/diag_macos_hotkey.py` |
 | 20 | macOS 装机（/Applications + 登录项） | ✅ 已装并运行 | `packaging/macos/install-app.sh`（ditto + 清 quarantine + 验签 + `--login-item`）；`/Applications/屏幕切换.app`，换路径后辅助功能授权未失效 |
 | 21 | 关窗口只留菜单栏（程序坞不留图标） | ✅ 实现完成（待日常使用确认观感） | `chrome.DOCK_FOLLOWS_WINDOW` + `chrome.set_dock_visible()`（`NSApplicationActivationPolicy` 0↔1 实测）、`MainWindow.hiddenToBackground` 信号 |
-| 22 | 全量测试 | ✅ 216 passed / 5 skipped | `QT_QPA_PLATFORM=offscreen pytest tests -q --basetemp=.pytest-tmp`（本机 /tmp 不可写） |
+| 22 | 全量测试 | ✅ 217 passed / 5 skipped | `QT_QPA_PLATFORM=offscreen pytest tests -q --basetemp=.pytest-tmp`（本机 /tmp 不可写） |
 | 23 | 跨端剪贴板 · Windows 后端（M1） | ✅ 完成 | `clipboard/windows.py` + `tests/test_clipboard_windows.py`（58 例）；契约 real 14 passed / 3 skipped |
 | 24 | 跨端剪贴板 · 剪贴板页 | ✅ 完成（两端入口） | 页面以 macOS 端那版为准（引擎驱动，`tests/test_clipboard_page.py`）；Windows 保留标题栏图标、托盘菜单项、`chrome.EXTRA_H=0`；引擎起不来时退回 `ui/clipboard_feed.py` |
 | 25 | 剪贴板 M1：macOS 后端 | ✅ 完成 | `clipboard/macos.py`：NSPasteboard 直连、TIFF→PNG、双写 PNG+TIFF、敏感标记；契约测试真实后端 18 例全绿 |
@@ -447,6 +447,21 @@ dualswitch/
 ---
 
 ## 8. 变更日志
+
+- 2026-10-18 18:2x **[merge] 同步 `056c5cc`（macOS 端清理合并残留）+ Windows 侧收尾**。
+  mac 端发现 `ui/window.py` / `ui/runner.py` 里各留了两份 `attach_clipboard` / `on_clipboard_page` /
+  `show_clipboard` / `close_clipboard` —— Python 靠「后定义覆盖前定义」照样跑、测试也全绿，
+  但前一份是死代码，**后一份还丢过功能**（`show_clipboard` 少了 `refresh()` + `setFocus()`，
+  表现是翻页后列表空白、键盘不响应）。这是我上一次合并只清了冲突块、漏掉自动合并区留下的。
+  · 该提交是快进合并，无冲突。清理后 `show_clipboard_page` 改用 `_set_title()`，
+    Windows 自绘标题栏文字能跟着页面变（macOS 版本原来漏了这步）。
+  · 顺手做完 mac 端在提交信息里留的活：`chrome/win.py` 的 `clipboardClicked` 信号
+    **没有任何接收者**（`window.py` 直接连 `btn_clipboard.clicked`），删掉信号与那行 connect。
+  · **新增守卫 `tests/test_no_duplicate_defs.py`**：AST 扫描 `src/dualswitch/**/*.py`，
+    同一个类（或模块）里出现同名方法就直接失败并指出「哪个文件、哪两行」。
+    这类残留靠跑测试永远发现不了，只能静态查。已用临时文件验证守卫真的会报警。
+  · 验证：全量 **217 passed / 5 skipped**；两种模式离屏冒烟（无引擎 → `LocalClipFeed` +
+    500ms 轮询 / 有引擎 → `SyncEngine`）翻页、返回、标题、退出全部正常。
 
 - 2026-10-18 18:2x **[merge] 再同步 origin/main：macOS 端补了联调交接说明**（`9385a42`，纯文档）。
   · 新增 `docs/CLIPBOARD-SYNC-HANDOFF.md`：四步自测、联调顺序（先 CLI 定位「没读到/没发出/没收到/没写入」
