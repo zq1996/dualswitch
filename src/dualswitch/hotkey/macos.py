@@ -16,6 +16,7 @@ import sys
 import threading
 from pathlib import Path
 
+from .. import logging_setup
 from .base import Hotkey, HotkeyError, to_mac_keycode
 
 if sys.platform != "darwin":  # pragma: no cover - 平台守卫
@@ -45,6 +46,11 @@ FLAG_SHIFT = 0x00020000
 FLAG_CONTROL = 0x00040000
 FLAG_ALTERNATE = 0x00080000
 FLAG_COMMAND = 0x00100000
+# NX_DEVICERALTKEYMASK：右 Option 的「设备相关」标位。左 Option 是 0x20。
+# 按住右 Option 时它一定在 flags 里，所以即便漏掉了 FlagsChanged 也能认出来。
+FLAG_DEVICE_RALT = 0x00000040
+
+log = logging_setup.get("hotkey.mac")
 
 
 def _import_quartz():
@@ -56,6 +62,24 @@ def _import_quartz():
             "pip install pyobjc-framework-Quartz pyobjc-framework-ApplicationServices"
         ) from exc
     return Quartz
+
+
+def event_flags(Q, event) -> int:
+    """读事件的修饰键位图。
+
+    **必须**走 CGEventGetFlags。CGEvent 的「字段」枚举里没有键盘事件的 flags：
+
+        CGEventGetIntegerValueField(event, kCGKeyboardEventFlags)   # ← 字段不存在
+
+    pyobjc 的 Quartz 里连 `kCGKeyboardEventFlags` 这个常量都没有，取它就是
+    AttributeError。曾经这么写的结果是：tap 回调每次都抛 AttributeError，
+    被兜底的 `except Exception: pass` 吞掉，于是**热键整个失效**，而日志里
+    一句错都没有（用户看到的现象就是「偶尔灵一次，之后怎么按都没反应」）。
+    """
+    try:
+        return int(Q.CGEventGetFlags(event))
+    except Exception:  # pragma: no cover - 取不到就当作没按修饰键
+        return 0
 
 
 _prompted_once = False
@@ -162,8 +186,14 @@ class QuartzEventTapBackend:
         self._ready = threading.Event()
         self._run_loop = None
         self._tap = None
+        self._source = None
         self._ralt_down = False
         self._keycode = 0
+        # 诊断计数：doctor / 日志里能看出 tap 到底有没有收到键、被系统禁过几次
+        self.events_seen = 0
+        self.matches = 0
+        self.tap_resets = 0
+        self.callback_errors = 0
 
     def describe(self) -> str:
         return self.hotkey.mac_describe()
@@ -174,17 +204,22 @@ class QuartzEventTapBackend:
         if not _accessibility_trusted(prompt=True):
             # prompt=True 会弹出系统对话框；即使弹了，本次仍可能还没授权（用户要去点开关）
             raise HotkeyError("缺少「辅助功能」权限，无法监听全局按键。" + permission_message())
+        self.error = None
+        self._ready.clear()
         self._thread = threading.Thread(target=self._run, name="hotkey-quartz", daemon=True)
         self._thread.start()
         self._ready.wait(timeout)
         if self.error:
             raise HotkeyError(self.error)
+        log.info("CGEventTap 已就绪：%s（keycode=%d，吞键=%s）", self.describe(), self._keycode, self.swallow)
 
     # ------------------------------------------------------------ 内部
     def _flags_ok(self, flags: int) -> bool:
         for mod in self.hotkey.modifiers:
-            if mod == "ralt" and not (flags & FLAG_ALTERNATE and self._ralt_down):
-                return False
+            if mod == "ralt":
+                # 主判据是 FlagsChanged 维护的左右状态；设备相关位做兜底
+                if not (flags & FLAG_ALTERNATE and (self._ralt_down or flags & FLAG_DEVICE_RALT)):
+                    return False
             if mod == "alt" and not (flags & FLAG_ALTERNATE):
                 return False
             if mod == "ctrl" and not (flags & FLAG_CONTROL):
@@ -195,29 +230,70 @@ class QuartzEventTapBackend:
                 return False
         return True
 
+    def handle_event(self, Q, tap, event_type: int, event):
+        """处理一个 tap 事件，返回给系统的事件（None = 吞掉）。
+
+        拆成独立方法是为了能脱离真键盘做测试 —— 之前的 flags 取值写错，
+        因为整段逻辑埋在闭包里、异常又被吞掉，跑了一整天都没暴露。
+        """
+        self.events_seen += 1
+
+        # tap 被系统关掉后不会自己回来，必须显式重新启用：
+        #   kCGEventTapDisabledByTimeout    回调超过 1s 没返回（系统判定卡住）
+        #   kCGEventTapDisabledByUserInput  安全输入 / 权限被撤销
+        # 不处理的话症状就是「按一次之后再也没反应，只能重启程序」。
+        if event_type in (Q.kCGEventTapDisabledByTimeout, Q.kCGEventTapDisabledByUserInput):
+            self.tap_resets += 1
+            reason = "回调超时" if event_type == Q.kCGEventTapDisabledByTimeout else "被系统禁用"
+            log.warning("事件 tap %s（第 %d 次），已重新启用", reason, self.tap_resets)
+            if tap is not None:
+                try:
+                    Q.CGEventTapEnable(tap, True)
+                except Exception:  # pragma: no cover
+                    log.exception("重新启用事件 tap 失败")
+            return event
+
+        if event_type == Q.kCGEventFlagsChanged:
+            keycode = int(Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventKeycode))
+            if keycode == KEYCODE_RIGHT_OPTION:
+                self._ralt_down = bool(event_flags(Q, event) & FLAG_ALTERNATE)
+            return event
+
+        if event_type == Q.kCGEventKeyDown:
+            keycode = int(Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventKeycode))
+            if keycode == self._keycode:
+                if self._flags_ok(event_flags(Q, event)):
+                    self.matches += 1
+                    log.info("热键命中：%s（第 %d 次）", self.describe(), self.matches)
+                    try:
+                        self.callback()
+                    except Exception:
+                        self.callback_errors += 1
+                        if self.callback_errors <= 3:      # 只记前几次，别刷屏
+                            log.exception("热键回调异常（第 %d 次）", self.callback_errors)
+                    return None if self.swallow else event
+            return event
+
+        # 吞了 keyDown 就顺手吞掉配对的 keyUp，避免留下「只抬起没按下」的残键
+        if event_type == Q.kCGEventKeyUp and self.swallow:
+            keycode = int(Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventKeycode))
+            if keycode == self._keycode:
+                return None
+        return event
+
     def _run(self) -> None:
         Q = self._Quartz
 
         def _callback(proxy, event_type, event, refcon):  # noqa: ANN001
             try:
-                if event_type == Q.kCGEventFlagsChanged:
-                    keycode = Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventKeycode)
-                    if keycode == KEYCODE_RIGHT_OPTION:
-                        flags = Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventFlags)
-                        self._ralt_down = bool(flags & FLAG_ALTERNATE)
-                    return event
-                if event_type == Q.kCGEventKeyDown:
-                    keycode = Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventKeycode)
-                    flags = Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventFlags)
-                    if keycode == self._keycode and self._flags_ok(flags):
-                        try:
-                            self.callback()
-                        except Exception:
-                            pass
-                        return None if self.swallow else event
-            except Exception:  # pragma: no cover - 回调绝不能中断 tap
-                pass
-            return event
+                return self.handle_event(Q, tap, event_type, event)
+            except Exception:
+                # 这里绝不能抛：抛了系统会直接停掉 tap。但也绝不能悄悄吞掉——
+                # 之前的 flags 取值 bug 就是因为静默吞异常，坏了整整一天没人知道。
+                self.callback_errors += 1
+                if self.callback_errors <= 3:
+                    log.exception("处理按键事件出错（第 %d 次，事件类型 %#x）", self.callback_errors, event_type)
+                return event
 
         mask = (1 << Q.kCGEventKeyDown) | (1 << Q.kCGEventKeyUp) | (1 << Q.kCGEventFlagsChanged)
         tap = Q.CGEventTapCreate(
@@ -237,15 +313,23 @@ class QuartzEventTapBackend:
             return
 
         self._tap = tap
-        run_loop_source = Q.CFMachPortCreateRunLoopSource(None, tap, 0)
+        # 必须留引用：run loop source 被回收后 tap 就哑了
+        self._source = Q.CFMachPortCreateRunLoopSource(None, tap, 0)
         self._run_loop = Q.CFRunLoopGetCurrent()
-        Q.CFRunLoopAddSource(self._run_loop, run_loop_source, Q.kCFRunLoopCommonModes)
+        Q.CFRunLoopAddSource(self._run_loop, self._source, Q.kCFRunLoopCommonModes)
         Q.CGEventTapEnable(tap, True)
         self._ready.set()
         try:
             Q.CFRunLoopRun()
         finally:
-            Q.CGEventTapEnable(tap, False)
+            try:
+                Q.CGEventTapEnable(tap, False)
+            except Exception:  # pragma: no cover
+                pass
+            log.info(
+                "事件 tap 退出（收键 %d 次 / 命中 %d 次 / 被系统禁用 %d 次 / 回调异常 %d 次）",
+                self.events_seen, self.matches, self.tap_resets, self.callback_errors,
+            )
 
     def stop(self) -> None:
         Q = getattr(self, "_Quartz", None)
@@ -256,3 +340,7 @@ class QuartzEventTapBackend:
                 pass
         if self._thread:
             self._thread.join(timeout=1.5)
+            if self._thread.is_alive():  # pragma: no cover - run loop 没停干净
+                log.warning("事件 tap 线程未在 1.5s 内退出，可能残留一个监听")
+        self._thread = None
+
