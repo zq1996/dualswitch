@@ -27,6 +27,7 @@
 | `INLINE_SETTINGS_ROW` | bool | 主窗口内容区里是否放一行「设置…」 |
 | `CLICK_HINT` | str | 「单击图标切换」/「双击图标切换」 |
 | `REOPEN_ON_ACTIVATE` | bool | 激活应用时若窗口收起就自动打开（mac Dock 行为） |
+| `DOCK_FOLLOWS_WINDOW` | bool | 窗口收起时程序坞图标是否跟着消失（mac 是，Windows 无此概念） |
 | `HOTKEY_COPY` | dict | 热键页四个文案（严格修饰键 / 吞键 / 常驻 / 说明） |
 | `BACKEND_OPTIONS` | list[str] | 高级页 DDC 后端下拉选项 |
 | `STRICT_BACKEND` | str | 勾选「只认右 Alt/Option」时写进配置的 hotkey_backend |
@@ -41,6 +42,7 @@
 | `build_status_item(icon, on_click)` | 状态项对象 | 托盘 / 菜单栏，接口见 `ui.statusitem.MenuEntry` |
 | `build_app_menu(runner)` | `QMenuBar \\| None` | macOS 全局菜单栏；Windows 返回 None |
 | `activate(window)` | None | 把窗口抢到前台（macOS 需要显式 activate） |
+| `set_dock_visible(visible)` | None | 显示/隐藏程序坞图标（mac 切 `NSApplicationActivationPolicy`；Windows 空实现） |
 | `notify(status, title, message, icon)` | None | 系统通知；没有可用通道时降级为写日志 |
 | `accessibility_granted(prompt=False)` | bool | 是否已拿到「辅助功能」权限（Windows 恒 True） |
 | `request_accessibility()` | bool | 弹系统授权框 + 打开设置面板，返回当前是否已授权 |

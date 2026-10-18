@@ -33,6 +33,7 @@ INLINE_SETTINGS_ROW = True
 SETTINGS_IN_WINDOW = True        # 设置是主窗口内的一页（点返回回主页面），不另开窗口
 CLICK_HINT = "单击图标打开菜单"
 REOPEN_ON_ACTIVATE = True
+DOCK_FOLLOWS_WINDOW = True       # 窗口收起 → 从程序坞消失；菜单栏图标照常留着
 STRICT_BACKEND = "auto"          # mac 只有 CGEventTap 一种后端，左右由 spec 决定
 SETTINGS_ROW_HINT = "\u2318 ,"
 
@@ -316,7 +317,8 @@ def build_app_menu(runner):  # noqa: ANN001
 
     act_hide = QAction("隐藏 屏幕切换", runner.window)
     act_hide.setShortcut(QKeySequence("Ctrl+H"))
-    act_hide.triggered.connect(runner.window.hide)
+    # 走 runner.hide_window 而不是 window.hide：要顺手把程序坞图标收掉
+    act_hide.triggered.connect(runner.hide_window)
     app_menu.addAction(act_hide)
 
     act_quit = QAction("退出 屏幕切换", runner.window)
@@ -336,6 +338,41 @@ def activate(window) -> None:  # noqa: ANN001
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
     except Exception:  # pragma: no cover
         pass
+
+
+def set_dock_visible(visible: bool) -> None:
+    """在「程序坞里有这个 App」和「只剩菜单栏图标」之间切换。
+
+    窗口收起（红叉 / ⌘W / ⌘H）后切成 Accessory：程序坞图标、⌘Tab 条目、
+    应用菜单一起消失，但菜单栏 NSStatusItem 不受影响 —— 它是系统级的，
+    跟激活策略无关。再把窗口叫出来时切回 Regular，三者一起回来。
+
+    注意别用 Info.plist 的 `LSUIElement`：那是启动期一次性生效的，
+    设成 true 就永远不会出现在程序坞（窗口打开时也不出现），满足不了
+    「窗口开着时有 Dock 图标、收起来就没有」这个要求。
+    """
+    try:
+        from AppKit import (
+            NSApplication,
+            NSApplicationActivationPolicyAccessory,
+            NSApplicationActivationPolicyRegular,
+        )
+
+        policy = (
+            NSApplicationActivationPolicyRegular
+            if visible
+            else NSApplicationActivationPolicyAccessory
+        )
+        app = NSApplication.sharedApplication()
+        if app.activationPolicy() != policy:
+            app.setActivationPolicy_(policy)
+            log.info(
+                "激活策略 → %s（程序坞图标%s）",
+                "Regular" if visible else "Accessory",
+                "显示" if visible else "隐藏",
+            )
+    except Exception:  # pragma: no cover - 拿不到 AppKit 时不该影响主流程
+        log.warning("切换程序坞显示状态失败", exc_info=True)
 
 
 # --------------------------------------------------------------------------- #

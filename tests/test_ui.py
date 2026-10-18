@@ -213,6 +213,34 @@ def test_save_keeps_live_config_untouched(app, tmp_path: Path):
     assert cfg.sources == {"windows": 17, "mac": 18}
 
 
+def test_closing_window_goes_to_background(app):
+    """关窗口 = 收进菜单栏，而不是退出；并且要发信号（mac 靠它收掉程序坞图标）。
+
+    真正退出走 `quit_completely()`，那条路径不该再发「转入后台」。
+    """
+    cfg = Config()
+    win = MainWindow(cfg, "Alt+Space", "v1.0.0")
+    seen: list[int] = []
+    win.hiddenToBackground.connect(lambda: seen.append(1))
+
+    win.show()
+    win.close()
+    assert seen == [1], "关窗口必须通知外层（否则程序坞图标留在那儿）"
+    assert win.isHidden()
+
+    win.quit_completely()
+    assert seen == [1], "真正退出时不该再当一次「转入后台」"
+
+
+def test_dock_follows_window_only_on_mac():
+    from dualswitch.ui.chrome import current
+
+    chrome = current()
+    # mac: 窗口收起后从程序坞消失；Windows 没有这个概念
+    assert chrome.DOCK_FOLLOWS_WINDOW is (chrome.NAME == "macos")
+    assert callable(chrome.set_dock_visible)
+
+
 def test_tray_single_click_does_not_switch(app):
     """Windows 托盘：单击不响应，双击才切（防误触）。"""
     from PySide6.QtGui import QIcon

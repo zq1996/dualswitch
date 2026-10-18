@@ -77,6 +77,7 @@ class MainWindow(QWidget):
     openLogRequested = Signal()
     probeRequested = Signal()
     doctorRequested = Signal()
+    hiddenToBackground = Signal()      # 窗口收起（不退出程序）—— mac 借此收掉程序坞图标
 
     def __init__(
         self,
@@ -288,6 +289,7 @@ class MainWindow(QWidget):
             return
         event.ignore()
         self.hide()
+        self.hiddenToBackground.emit()
 
     def quit_completely(self) -> None:
         self._allow_close = True

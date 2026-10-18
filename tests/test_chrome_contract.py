@@ -40,6 +40,7 @@ FIELDS = {
     "SETTINGS_ROW_HINT": str,
     "CLICK_HINT": str,
     "REOPEN_ON_ACTIVATE": bool,
+    "DOCK_FOLLOWS_WINDOW": bool,
     "STRICT_BACKEND": str,
     "BACKEND_OPTIONS": list,
     "MATCH_DESC": str,
@@ -52,6 +53,7 @@ FUNCS = [
     "build_status_item",
     "build_app_menu",
     "activate",
+    "set_dock_visible",
     "notify",
     "open_path",
     # 「辅助功能」权限一组（mac 独有痛点，Windows 是恒真空壳）

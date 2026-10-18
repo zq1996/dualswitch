@@ -19,6 +19,7 @@ INLINE_SETTINGS_ROW = False
 SETTINGS_IN_WINDOW = False       # Windows 保持独立设置窗口（自绘标题栏，嵌进来会有两层标题）
 CLICK_HINT = "双击图标切换"
 REOPEN_ON_ACTIVATE = False
+DOCK_FOLLOWS_WINDOW = False      # Windows 没有程序坞，任务栏按钮跟着窗口走，无需处理
 STRICT_BACKEND = "hook"
 SETTINGS_ROW_HINT = ""
 
@@ -246,6 +247,11 @@ def build_app_menu(runner):  # noqa: ANN001
 
 
 def activate(window) -> None:  # noqa: ANN001
+    return None
+
+
+def set_dock_visible(visible: bool) -> None:  # noqa: ARG001
+    """Windows 没有程序坞，任务栏按钮由窗口自己管理，这里什么都不用做。"""
     return None
 
 

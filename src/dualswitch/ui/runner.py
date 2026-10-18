@@ -134,6 +134,8 @@ class UiRunner(QObject):
         self.window.doctorRequested.connect(self.do_doctor)
         self.window.openLogRequested.connect(lambda: self.chrome.open_path(self.log_file))
         self.window.openSettingsRequested.connect(self.show_settings)
+        # 窗口收起 → mac 上顺手把程序坞图标也收掉（菜单栏图标不受影响）
+        self.window.hiddenToBackground.connect(self._enter_background)
         self.settings.saved.connect(self.on_config_saved)
         self.settings.openConfigDirRequested.connect(lambda: self.chrome.open_path(self.cfg_file))
         self.settings.probeRequested.connect(self.do_probe)
@@ -178,15 +180,31 @@ class UiRunner(QObject):
         self.menubar = self.chrome.build_app_menu(self)
 
     # ------------------------------------------------------------------ 动作
+    def _enter_background(self) -> None:
+        """窗口收起来之后的收尾：mac 把程序坞图标一起收掉，只留菜单栏。"""
+        if self.chrome.DOCK_FOLLOWS_WINDOW:
+            self.chrome.set_dock_visible(False)
+
+    def _leave_background(self) -> None:
+        if self.chrome.DOCK_FOLLOWS_WINDOW:
+            self.chrome.set_dock_visible(True)
+
     def show_window(self) -> None:
+        self._leave_background()
         self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()
         self.chrome.activate(self.window)
 
+    def hide_window(self) -> None:
+        """⌘H / 菜单「隐藏」：收起窗口但不退出，程序坞图标随之消失。"""
+        self.window.hide()
+        self._enter_background()
+
     def show_settings(self) -> None:
         # 内嵌模式：翻到主窗口的设置页；独立模式：把设置窗口拿到前台
         if self.chrome.SETTINGS_IN_WINDOW:
+            self._leave_background()
             self.window.show_settings_page()
             self.window.showNormal()
             self.window.raise_()
@@ -279,6 +297,7 @@ class UiRunner(QObject):
         if event.type() == QEvent.ApplicationActivate and self.chrome.REOPEN_ON_ACTIVATE:
             # 点 Dock 图标 / Cmd+Tab 回来：窗口被收起来就再打开（mac 原生行为）
             if not self._quitting and self.window.isHidden() and not self.settings.isVisible():
+                self._leave_background()
                 self.window.showNormal()
             # 刚从「辅助功能」设置授权回来：就地重试，不用重启程序
             if self._retry_on_activate and self.hotkey is None and not self._hotkey_suspended:
