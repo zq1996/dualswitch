@@ -1,6 +1,14 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-18 13:20
+> 最后更新：2026-10-18 15:55
+>
+> **并行开发中：跨端剪贴板同步（P0 文字 + P1 图片）**
+> 分工与契约见 [`docs/CLIPBOARD-SYNC-CONTRACT.md`](docs/CLIPBOARD-SYNC-CONTRACT.md)。
+> **Windows 端 AI 先读该文档第 0 节**：只写 `src/dualswitch/clipboard/windows.py` 与
+> `tests/test_clipboard_windows.py`，其余文件一律只读。共用契约 `clipboard/base.py`
+> （`ClipItem` + 后端 `poll/write/probe/close` 语义）已冻结，契约测试
+> `tests/test_clipboard_contract.py` 已就绪（11 passed / 2 skipped，真实后端用
+> `DUALSWITCH_CLIP_TEST=real` 跑）。
 > 一句话状态：**两端都已落地可用。Windows 侧切屏 / 热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过；
 > macOS 侧界面（菜单栏 + 原生窗口 + 四页设置）跑在真机上，`⌥ Space` 全局热键已修复并通过用户实测
 > （根因是 CGEvent 字段取错、异常被静默吞掉），已打包并装进 `/Applications/屏幕切换.app`，
