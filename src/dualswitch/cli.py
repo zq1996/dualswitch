@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import platform
 import signal
@@ -420,6 +421,14 @@ def cmd_ui(args) -> int:
         _exe_stamp(),
         bool(getattr(sys, "frozen", False)),
         getattr(sys, "_MEIPASS", "-"),
+    )
+    # 日志落在哪儿、文件 handler 到底挂上没有 —— 「日志不更新」时这两项是唯一线索
+    log.info(
+        "日志：%s（默认位置 %s，文件 handler %d 个，环境变量 DUALSWITCH_LOG=%s）",
+        log_file,
+        config_mod.config_dir() / "logs" / "dualswitch.log",
+        len(logging.getLogger("dualswitch").handlers),
+        os.environ.get("DUALSWITCH_LOG") or "未设置",
     )
 
     try:
