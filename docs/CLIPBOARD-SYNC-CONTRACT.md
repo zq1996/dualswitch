@@ -192,7 +192,10 @@ A 端同法算 key，校验通过 → HELLO_OK，双方把 key 存进 config（c
 | `src/dualswitch/clipboard/macos.py` | **macOS** | — |
 | `src/dualswitch/clipboard/windows.py` | **Windows** | **你唯一要写的源码** |
 | `src/dualswitch/sync/*.py` | **macOS** | 网络/协议/引擎，平台无关 |
-| `src/dualswitch/ui/**` | **macOS** | 含新增的剪贴板设置页 |
+| `src/dualswitch/ui/clipboard_panel.py` | **macOS** | 剪贴板面板主体（共享代码，用 `chrome()` 取外壳） |
+| `src/dualswitch/ui/settings.py` `runner.py` `widgets.py` | **macOS** | 含新增的「剪贴板」设置页 |
+| `src/dualswitch/ui/chrome/win.py` | **Windows** | 只需加一项托盘菜单「剪贴板…」（约 5 行） |
+| `src/dualswitch/ui/chrome/mac.py` | **macOS** | 菜单栏菜单加一项 + 主窗口「剪贴板」行 |
 | `src/dualswitch/config.py` | macOS 加完字段后冻结 | Windows 端只读 |
 | `src/dualswitch/app.py` | macOS 加完 hook 后冻结 | Windows 端只读 |
 | `tests/test_clipboard_contract.py` | **共用** | 两端都要跑通，谁都不许改断言 |
@@ -264,14 +267,21 @@ class SyncEngine:
 | `app.py` | `SwitchController` 增加可选的 `on_before_switch` 回调列表；`trigger()` 里遍历调用（try/except 包住，异常不能影响切屏） |
 | `settings.py` | 页签列表加 `"剪贴板"`，`stack.addWidget(self._page_clipboard())`，新方法放在**文件末尾**（减少与将来改动的重叠） |
 
-### M4 · UI（Mac 独占）
+### M4 · UI（面板共享 / 菜单各归各）
 
-新增 `ui/pages/clipboard_page.py`，`settings.py` 只 import 一行。页面内容：
+设计稿与规格见 [`docs/UI-DESIGN-CLIPBOARD.md`](UI-DESIGN-CLIPBOARD.md)，
+可交互稿 `design/clipboard/index.html`（`?sel=a2` 文字预览态，`?empty=1` 空态）。
 
-- 开关：切屏时同步剪贴板 / 同步图片
-- 状态行：`已配对 · 192.168.3.214 · 上次同步 2 分钟前（文本 128 字 / 12ms）`
-- 按钮：配对…（弹 6 位 PIN 框）、诊断
-- 高级：单张图片上限（MB）、`debug_plain`（默认藏起来，只在高级页显示）
+新增 `ui/clipboard_panel.py`（共享，Mac 端写）：独立窗口 520×620，
+列表（最近 10 条）+ 预览区 + 操作栏。依赖 `engine.records()` 返回的 `ClipRecord` 列表。
+
+| 平台 | 入口 | 归属 |
+|---|---|---|
+| Windows | `chrome/win.py` 托盘右键菜单加「剪贴板…」 | **Windows 端**（5 行） |
+| macOS | `chrome/mac.py` 菜单栏菜单加「剪贴板…」`⌘⇧V` + 主窗口一行 | macOS 端 |
+| 两端 | 设置 → 剪贴板页签 → 「查看记录…」 | macOS 端 |
+
+设置页内容：同步开关（文字 / 图片）、配对状态、图片上限、`debug_plain`（藏在高级页）、查看记录入口。
 
 ### M5 · 自测工具（Mac 独占，但两端都要用）
 

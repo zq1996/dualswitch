@@ -4,6 +4,8 @@
 >
 > **并行开发中：跨端剪贴板同步（P0 文字 + P1 图片）**
 > 分工与契约见 [`docs/CLIPBOARD-SYNC-CONTRACT.md`](docs/CLIPBOARD-SYNC-CONTRACT.md)。
+> 界面设计与可交互稿见 [`docs/UI-DESIGN-CLIPBOARD.md`](docs/UI-DESIGN-CLIPBOARD.md) 与
+> `design/clipboard/index.html`（浏览器直接打开）。
 > **Windows 端 AI 先读该文档第 0 节**：只写 `src/dualswitch/clipboard/windows.py` 与
 > `tests/test_clipboard_windows.py`，其余文件一律只读。共用契约 `clipboard/base.py`
 > （`ClipItem` + 后端 `poll/write/probe/close` 语义）已冻结，契约测试
