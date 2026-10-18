@@ -142,7 +142,7 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 | 27 | 剪贴板 M3：接线 | ✅ 完成 | `config.ClipboardConfig`、`SwitchController.on_before_switch`、CLI `dualswitch clip ...` |
 | 28 | 剪贴板 M4：界面 | ✅ 完成 | `ui/clipboard_page.py`（列表/预览/操作栏/空态）挂进主窗口；mac 列表 5 行、高度 620 |
 | 29 | 剪贴板 M5：自测工具 | ✅ 完成 | `tools/clip_sync_selftest.py` 7/7、`tools/clip_selftest.py` 7/7；结果见 `docs/CLIPBOARD-SYNC-LOG.md` |
-| 30 | 跨端剪贴板 · 双端联调 | ⬜ 待做 | 合并后第一次具备条件：`clip pair` 配对 → 两端复制/切屏 → `clip status` 看 `authenticated`；人工项见 `docs/CLIPBOARD-SYNC-LOG.md` |
+| 30 | 跨端剪贴板 · 双端联调 | 🟡 前置全绿，等真机 | Windows 侧四道自测全过：契约 real 14/3、`clip_selftest` 6 PASS/1 MANUAL、`clip_sync_selftest` **7/7**、全量 216 passed；只剩「两端各 `clip pair` 一次 + 10 项人工验证」（需两台机器 + 用户在场），清单见 `docs/CLIPBOARD-SYNC-LOG.md` 第 4 节 |
 
 ---
 
@@ -447,6 +447,20 @@ dualswitch/
 ---
 
 ## 8. 变更日志
+
+- 2026-10-18 18:2x **[merge] 再同步 origin/main：macOS 端补了联调交接说明**（`9385a42`，纯文档）。
+  · 新增 `docs/CLIPBOARD-SYNC-HANDOFF.md`：四步自测、联调顺序（先 CLI 定位「没读到/没发出/没收到/没写入」
+    四环，最后才做 10 项人工验证）、6 条已踩过的坑。契约第 0 节加了指向它的链接。
+  · 该文档写作时还不知道 Windows 侧已完成 M1，所以第 1–4 步是「待办」口吻。**已在其 §0 补上现状对账表**
+    （第 1–4 步全部 ✅，只剩真机联调），并把它列的三个未知数实测结论写了进去。
+  · 本次把交接文档里那两道闸**真跑了一遍**（此前只有 macOS 端的结论）：
+    - `tools/clip_sync_selftest.py` → **7/7**：文本 / 图片 / 自写回弹 / 环抑制 / 重复投递 /
+      20MB 大图（6847ms，sha256 一致）/ 断线重连。**证明协议与引擎在 Windows 上同样跑通。**
+    - `tools/clip_selftest.py --role windows` → **6 PASS / 0 FAIL / 1 MANUAL**（敏感标记需手工构造）。
+    - `python -m dualswitch clip probe` → `formats: PNG, CF_DIB, CF_BITMAP, CF_DIBV5`，
+      `png_decoder: qt（可用）`。
+  · 冲突只有契约文档一处（两边在同一位置加状态块），合并为「两端都已落地 + 指向交接文档」。
+  · 结论：**跨端联调的前置条件已经全部满足，剩下的是需要两台机器和用户在场的部分。**
 
 - 2026-10-18 18:10 **[merge] 合并 `origin/main`（macOS 端剪贴板 M1–M5）到 Windows 端分支**。
   两边并行做了同一个功能，冲突集中在「剪贴板页」这一个文件上。合并口径：

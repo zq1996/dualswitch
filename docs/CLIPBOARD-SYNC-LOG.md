@@ -82,6 +82,36 @@ dualswitch clip send "从 Mac 手工推送的一条"
 
 ---
 
+## Windows 侧实测（2026-10-18，Windows 10 本机，由 Windows 端补记）
+
+macOS 端的三道闸在 Windows 上同样跑通，用的是 `clipboard/windows.py`（纯 `ctypes` 实现）：
+
+| 闸 | 命令 | 结果 |
+|---|---|---|
+| 闸一 契约测试（mock） | `pytest tests/test_clipboard_contract.py -q` | 11 passed / 2 skipped |
+| 闸一 契约测试（真实后端） | `$env:DUALSWITCH_CLIP_TEST="real"; pytest tests/test_clipboard_contract.py -q` | **14 passed / 3 skipped** |
+| 闸二 单机同步自测 | `python tools/clip_sync_selftest.py` | **7/7**：文本 / 图片 / 自写回弹 / 环抑制 / 重复投递 / 20MB 大图（6847ms，sha256 一致）/ 断线重连 |
+| 闸三 本机格式矩阵 | `python tools/clip_selftest.py --role windows` | **6 PASS / 0 FAIL / 1 MANUAL**（敏感标记需手工构造） |
+| 全量回归 | `pytest tests -q` | **216 passed / 5 skipped** |
+
+`python -m dualswitch clip probe` 输出：
+
+```
+backend       : windows
+seq           : 7999
+state         : ok
+formats       : PNG, CF_DIB, CF_BITMAP, CF_DIBV5
+has_text      : no
+has_image     : yes
+has_files     : no
+png_decoder   : qt（可用）
+```
+
+> 注：闸二（网络层）本来就是平台无关的，它在 Windows 上 7/7 意味着**协议 / 加密 / 选举 / 环抑制
+> 都不必再怀疑**。真机联调若出问题，优先查「后端读没读到」和「两端网络是否互通」这两头。
+
+---
+
 ## 剩下的人工验证（需要 Windows 那台机器一起）
 
 | # | 场景 | 状态 |

@@ -25,13 +25,16 @@ python tools/clip_selftest.py --role windows
 **其余文件一律只读**（尤其是 `clipboard/base.py`、`config.py`、`app.py`、`ui/`、`sync/`）。
 需要改契约时，不要直接改，把需求写进第 11 节「变更请求」，由 Mac 端改完你再 pull。
 
-> **状态（2026-10-18 17:20）：M1 已完成并实测。**
-> `clipboard/windows.py` + `tests/test_clipboard_windows.py`（58 例）已落地；
-> 契约测试带 `DUALSWITCH_CLIP_TEST=real` 时 **14 passed / 3 skipped**，全量 **175 passed / 6 skipped**。
+> **状态（2026-10-18 18:2x）：两端都已落地，代码已在 `main` 上合并。**
+> **Windows**：`clipboard/windows.py` + `tests/test_clipboard_windows.py`（58 例）已落地；
+> 契约测试带 `DUALSWITCH_CLIP_TEST=real` 时 14 passed / 3 skipped。
 > 第 6 节 M1 里那三个「本次唯一的未知数」已实测，结论写在 `windows.py` 文件头表格里：
 > 截图工具给 `CF_DIB` 32bpp、浏览器额外给注册格式 `PNG`（优先取）、序列号先于数据变化。
 > 顺手修了本文件第 7 节闸一里快照助手的崩溃（见第 11 节，**未动任何断言**）。
-> ⚠️ `tools/clip_selftest.py` 还不存在（M5 归 macOS 端），上面最后一行暂时跑不了。
+> **macOS**：网络层 / 引擎 / UI / 自测工具已全部落地，`tools/clip_selftest.py` 现在也存在了。
+> **联调的完整流程、已踩过的坑、需要用户做的事**，见
+> [`docs/CLIPBOARD-SYNC-HANDOFF.md`](CLIPBOARD-SYNC-HANDOFF.md)（联调前必读）。
+> 合并后全量：**216 passed / 5 skipped**（Windows 本机，`QT_QPA_PLATFORM=offscreen`）。
 
 ### macOS 端 AI —— 你要做的事
 
