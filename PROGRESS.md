@@ -1,6 +1,6 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-18 16:45
+> 最后更新：2026-10-18 17:40
 >
 > **并行开发中：跨端剪贴板同步（P0 文字 + P1 图片）**
 > 分工与契约见 [`docs/CLIPBOARD-SYNC-CONTRACT.md`](docs/CLIPBOARD-SYNC-CONTRACT.md)。
@@ -11,22 +11,27 @@
 > （`ClipItem` + 后端 `poll/write/probe/close` 语义）已冻结，契约测试
 > `tests/test_clipboard_contract.py` 已就绪（11 passed / 2 skipped，真实后端用
 > `DUALSWITCH_CLIP_TEST=real` 跑）。
+> **剪贴板同步：macOS 端 P0（文字）+ P1（图片）已全部实现并自测通过**，Windows 端后端仍未落地
+> （`clipboard/windows.py` 归 Windows 侧）。两端联调的 10 项人工验证待做，见
+> [`docs/CLIPBOARD-SYNC-LOG.md`](docs/CLIPBOARD-SYNC-LOG.md)。
+>
 > 一句话状态：**两端都已落地可用。Windows 侧切屏 / 热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过；
 > macOS 侧界面（菜单栏 + 原生窗口 + 四页设置）跑在真机上，`⌥ Space` 全局热键已修复并通过用户实测
 > （根因是 CGEvent 字段取错、异常被静默吞掉），已打包并装进 `/Applications/屏幕切换.app`，
 > 关窗口后程序坞不留图标、只保留菜单栏图标。`sources = {windows: 17, mac: 18}`。**
 >
-> 👉 **2026-10-18 16:15 补记**：Windows 打包版「关窗口后托盘没图标」的真凶已定位 ——
+> 👉 **2026-10-18 16:15（Windows 侧）**：打包版「关窗口后托盘没图标」的真凶已定位 ——
 > 不是代码，是 `D:\work` 目录带了 `Low Mandatory Level` 完整性标签，打出来的 exe 继承了它，
 > 进程以低完整性级别运行，`Shell_NotifyIcon` 被 UIPI 静默丢弃（详见 §8 与 `docs/TROUBLESHOOTING.md` §4.1）。
 > `build.ps1` 现在会在打包后把产物标签抬到 High，重新打包的 `dist\dualswitch\` 已实测：图标出现、
 > 关窗口后图标仍在、进程常驻。旧产物留在 `dist\dualswitch.old-20261018\`（可删）。
 >
-> 👉 **下一步（Windows 侧）**：按 `docs/CLIPBOARD-SYNC-CONTRACT.md` 第 0 节实现
-> `src/dualswitch/clipboard/windows.py`（只写这一个文件 + 它的测试）；托盘问题已闭环，无待办。
+> 👉 **下一步（Windows 侧）**：实现 `src/dualswitch/clipboard/windows.py`（只写这一个文件 + 它的测试）——
+> mac 侧的引擎 / 界面 / 自测工具已经全部就绪，`git pull` 后按契约第 0 节做后端即可直接联调。
 >
-> 👉 **下一步（mac 侧）**：日常使用观察 —— 重点关注长时间运行后热键是否仍灵（tap 被系统禁用会自动重开，
-> 日志里有 `事件 tap 回调超时…已重新启用` 与 `激活策略 → Accessory` 可查）。
+> 👉 **下一步（mac 侧）**：等 Windows 后端落地后做 `docs/CLIPBOARD-SYNC-LOG.md` 里那 10 项人工联调；
+> 同时继续日常观察热键长时间可用性（tap 被系统禁用会自动重开，日志里有
+> `事件 tap 回调超时…已重新启用` 与 `激活策略 → Accessory` 可查）。
 > Windows 端双击 `dist\dualswitch\dualswitch.exe` 即进主界面（整个文件夹一起用），右键托盘可退出。
 > 界面/分层改动请看 `docs/UI-DESIGN-MAC.md` 与 `docs/PLATFORM-SPLIT.md`（后者是给另一端 AI 读的契约）。
 
@@ -103,7 +108,12 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 | 19 | **macOS 热键真机可用（根因修复）** | ✅ **用户实测确认「好用了」** | 根因：`CGEventGetIntegerValueField(event, kCGKeyboardEventFlags)` 字段不存在 → 每次回调抛 AttributeError 被静默吞掉。改 `CGEventGetFlags` + tap 被禁用自动重开；`tests/test_hotkey_mac_tap.py`（10 例）、`tools/diag_macos_hotkey.py` |
 | 20 | macOS 装机（/Applications + 登录项） | ✅ 已装并运行 | `packaging/macos/install-app.sh`（ditto + 清 quarantine + 验签 + `--login-item`）；`/Applications/屏幕切换.app`，换路径后辅助功能授权未失效 |
 | 21 | 关窗口只留菜单栏（程序坞不留图标） | ✅ 实现完成（待日常使用确认观感） | `chrome.DOCK_FOLLOWS_WINDOW` + `chrome.set_dock_visible()`（`NSApplicationActivationPolicy` 0↔1 实测）、`MainWindow.hiddenToBackground` 信号 |
-| 22 | 全量测试 | ✅ 96 passed | `QT_QPA_PLATFORM=offscreen pytest tests -q --basetemp=.pytest-tmp`（本机 /tmp 不可写） |
+| 22 | 全量测试 | ✅ 153 passed | `QT_QPA_PLATFORM=offscreen pytest tests --basetemp=.pytest-tmp`（本机 /tmp 不可写） |
+| 23 | 剪贴板 M1：macOS 后端 | ✅ 完成 | `clipboard/macos.py`：NSPasteboard 直连、TIFF→PNG、双写 PNG+TIFF、敏感标记；契约测试真实后端 18 例全绿 |
+| 24 | 剪贴板 M2：网络层 | ✅ 完成 | `sync/{protocol,transport,discovery,engine}.py`：帧/加密/对称 TCP/选举/退避重连/环抑制三层 |
+| 25 | 剪贴板 M3：接线 | ✅ 完成 | `config.ClipboardConfig`、`SwitchController.on_before_switch`、CLI `dualswitch clip ...` |
+| 26 | 剪贴板 M4：界面 | ✅ 完成 | `ui/clipboard_page.py`（列表/预览/操作栏/空态）挂进主窗口；mac 列表 5 行、高度 620 |
+| 27 | 剪贴板 M5：自测工具 | ✅ 完成 | `tools/clip_sync_selftest.py` 7/7、`tools/clip_selftest.py` 7/7；结果见 `docs/CLIPBOARD-SYNC-LOG.md` |
 
 ---
 
@@ -409,6 +419,7 @@ dualswitch/
 
 ## 8. 变更日志
 
+<<<<<<< HEAD
 - 2026-10-18 16:10 **Windows 打包版「关窗口后托盘没图标」根因定位并修掉：exe 带了 Low 完整性标签**。
   真凶不在代码里：`D:\work` 这个目录带 `Low Mandatory Level` 标签且是 `(OI)(CI)` 继承的，
   `dist` 里打出来的 `dualswitch.exe` 全部继承了它 → Windows 以**低完整性级别**启动进程 →
@@ -435,6 +446,25 @@ dualswitch/
     —— 实测首次注册确实可能没有位置，重注册一次就出现。
   · 测试 +13（`tests/test_integrity.py`：级别判定 / 被挡时跳过重试与兜底 / pystray 失败上报），
     共 105 例通过（`test_hotkey_mac_tap` 改成模块级 skip，Windows 上不再卡在收集阶段）。
+=======
+- 2026-10-18 17:20 **剪贴板同步（macOS 端）文字 + 图片全部落地**。M1→M5 一次做完：
+  · `clipboard/macos.py`：绕开 Qt 直接用 NSPasteboard。Qt 在 mac 上只写 `public.tiff`、
+    只读 `application/x-qt-image`，浏览器/Electron 两边都粘不出来。读图片统一重编码成 PNG，
+    写图片同时写 PNG + TIFF；命中 `org.nspasteboard.ConcealedType` 的内容整条跳过。
+  · `sync/`：帧格式 `DSYN` + header JSON + payload；自研 seal/unseal（SHA256 keystream +
+    HMAC 截断）+ counter 单调防重放；对称 TCP（两端都监听也都拨号）。
+    **踩坑**：两端同时拨号会互相把对方的连接踢掉（各自"先 ready 的那条"不一致），
+    改成"拨号方 device_id 小者胜出"的一致选举规则后才稳定。
+  · `engine`：剪贴板只在 worker 线程读写；`push_now()` 只 set 一个事件（<1ms），
+    切屏链路挂 `on_before_switch`，不会拖慢 200ms 目标。
+  · 自环抑制三层：后端吞自写、引擎按 digest 丢、按 ts 单调拒绝旧内容。
+  · UI：`ui/clipboard_page.py` 挂进主窗口页面栈（第 3 页），mac 列表加「剪贴板」行、
+    窗口 600 → 620（`chrome.EXTRA_H`）。设置页多一个「剪贴板」页签（现在 5 个）。
+  · CLI：`dualswitch clip status|probe|get|pair|send|selftest`；配对是两端输入同一个 6 位码。
+  · 测试：153 passed / 12 skipped（新增协议 19 例、引擎 10 例、页面 14 例、mac 后端 10 例）；
+    `tools/clip_sync_selftest.py` 7/7、`tools/clip_selftest.py` 7/7。
+
+>>>>>>> 6ed061a ([clip-mac] docs: 剪贴板验证记录 + 契约变更（盐/plen/peer_port）+ 进度)
 
 - 2026-10-18 13:10 **装上「应用程序」+ 关窗口只留菜单栏（程序坞不留图标）**。
   · 新增 `packaging/macos/install-app.sh`：`ditto` 复制到 `/Applications/屏幕切换.app`

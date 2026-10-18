@@ -29,6 +29,25 @@ python tools/clip_selftest.py --role windows
 
 按第 6 节的 M1 → M5 顺序实现：`clipboard/macos.py` → `sync/*` → 接线 → UI → 自测工具。
 
+**2026-10-18 进度：M1–M5 全部落地**（文字 + 图片），自测见第 7 节两道闸。macOS 侧现状：
+
+| 里程碑 | 文件 | 状态 |
+|---|---|---|
+| M1 后端 | `clipboard/macos.py` | ✅ NSPasteboard 直连，契约测试真实后端 18 例通过 |
+| M2 网络 | `sync/{protocol,transport,discovery,engine}.py` | ✅ 帧/加密/对称 TCP/发现/引擎全实现 |
+| M3 接线 | `config.py` `app.py` `settings.py` | ✅ `ClipboardConfig`、`on_before_switch` 钩子、剪贴板页签 |
+| M4 界面 | `ui/clipboard_page.py` + `window.py` + `runner.py` | ✅ 主窗口内一页，列表 5 行，高度 620 |
+| M5 自测 | `tools/clip_selfcheck` / `tools/clip_sync_selftest.py` | ✅ 格式矩阵 7/7、单机 7 场景 7/7 |
+
+**Windows 端需要注意的三处实现细节**（都不改你代码，但会影响联调）：
+
+1. 帧 header 里我们**总会写 `plen`**（payload 明文长度）。你只写 `image.size` 也能互通，
+   接收端优先 `plen`、缺省回落 `image.size`。
+2. 配对的盐是**固定串** `dualswitch-v1-clipboard`，不是 `device_id_A`（见第 11 节）。
+   两端用 `dualswitch clip pair --pin <同一个6位码>` 即可得到同一个 key。
+3. `clipboard.peer_port` 新增（默认 0 = 与 `port` 相同），只用于单机自测起两个端口。
+
+
 ---
 
 ## 1. 范围（这次只做两件事）
@@ -438,7 +457,9 @@ dualswitch clip selftest               # 本机格式矩阵
 
 | 日期 | 提出方 | 要改什么 | 原因 | 处理 |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| 2026-10-18 | macOS | 配对盐改成固定串 `dualswitch-v1-clipboard`，不用 `device_id_A` | 契约原方案里 B 必须先拿到 A 的 device_id 才能算 key，配对要多一次握手；固定盐后两端输入同一 PIN 即得同一 key，密钥强度不变（PIN 仍是唯一秘密） | 已实现 |
+| 2026-10-18 | macOS | 帧 header 增加 `plen`（可缺省） | 帧格式没有总长度字段，payload 长度只能靠 `image.size` 反推；发送端写 `plen` 让长度显式化，接收端优先 `plen` / 回落 `image.size`，老实现不受影响 | 已实现 |
+| 2026-10-18 | macOS | 新增 `clipboard.peer_port`（默认 `0` = 与 `port` 相同） | 单机双引擎自测必须用两个不同端口（同一端口不能绑两次）；真实使用两端都是 47823，这个字段留 0 即可 | 已实现 |
 
 格式：`| 2026-10-19 | windows | ClipItem 增加 files 字段 | P2 需要传目录 | 待 macOS 端评估 |`
 
