@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
+import secrets
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -70,6 +72,33 @@ class ReadbackConfig:
 
 
 @dataclass
+class ClipboardConfig:
+    """跨端剪贴板同步（P0 文字 / P1 图片）。契约见 `docs/CLIPBOARD-SYNC-CONTRACT.md`。
+
+    这里只管"怎么连、传什么"，平台差异一律在 `clipboard/{macos,windows}.py` 里。
+    """
+
+    enabled: bool = True
+    image_enabled: bool = True
+    # on_switch: 只在切屏那一刻同步（本次实现）；always: 常驻同步（预留，不实现）
+    mode: str = "on_switch"
+    port: int = 47823                  # 本机监听端口
+    peer_port: int = 0                 # 对端监听端口；0 = 与 port 相同（单机自测时才需要不同）
+    discover_port: int = 47824
+    peer: str = ""                     # 手填对端地址 "192.168.1.5" 或 "192.168.1.5:47823"
+    device_id: str = ""                # 首次运行生成 {host}-{8hex}
+    peer_device: str = ""              # 最近一次握手的对端 device_id
+    peer_name: str = ""                # 对端主机名（界面上显示）
+    psk: str = ""                      # 配对后的共享密钥（hex）
+    max_image_mb: int = 32
+    record_limit: int = 10             # 内存里保留的记录条数，退出即清
+    debug_plain: bool = False          # 跳过加密（排障用，写配置时记 warning）
+
+    def effective_peer_port(self) -> int:
+        return int(self.peer_port) or int(self.port)
+
+
+@dataclass
 class Config:
     # ---- 热键 ----
     hotkey: str = "alt+space"
@@ -101,6 +130,9 @@ class Config:
     tray: bool = True
     notify: bool = True
     log_level: str = "INFO"
+
+    # ---- 剪贴板同步 ----
+    clipboard: ClipboardConfig = field(default_factory=ClipboardConfig)
 
     # ---- 派生属性 ----
     def effective_host(self) -> str:
@@ -173,6 +205,25 @@ def _merge_readback(raw: dict[str, Any], base: ReadbackConfig) -> ReadbackConfig
     return cfg
 
 
+def _merge_clipboard(raw: dict[str, Any], base: ClipboardConfig) -> ClipboardConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError("clipboard 必须是对象")
+    cfg = copy.deepcopy(base)
+    for key, value in raw.items():
+        if not hasattr(cfg, key):
+            raise ConfigError(f"未知的 clipboard 字段: {key}")
+        current = getattr(cfg, key)
+        if isinstance(current, bool):
+            setattr(cfg, key, _coerce_bool(value))
+        elif isinstance(current, int) and not isinstance(current, bool):
+            setattr(cfg, key, int(value))
+        elif value is None:
+            setattr(cfg, key, "")
+        else:
+            setattr(cfg, key, str(value))
+    return cfg
+
+
 def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
     """把 JSON 字典合并到默认配置上，并做严格校验。"""
     if not isinstance(raw, dict):
@@ -182,6 +233,9 @@ def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
     for key, value in raw.items():
         if key == "readback":
             cfg.readback = _merge_readback(value, cfg.readback)
+            continue
+        if key == "clipboard":
+            cfg.clipboard = _merge_clipboard(value, cfg.clipboard)
             continue
         if key == "sources":
             if not isinstance(value, dict):
@@ -213,6 +267,43 @@ def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
     return cfg
 
 
+def _validate_clipboard(cb: ClipboardConfig) -> None:
+    if not (1 <= int(cb.port) <= 65535):
+        raise ConfigError("clipboard.port 必须在 1..65535 之间")
+    if cb.peer_port and not (1 <= int(cb.peer_port) <= 65535):
+        raise ConfigError("clipboard.peer_port 必须在 1..65535 之间（0 表示与 port 相同）")
+    if not (1 <= int(cb.discover_port) <= 65535):
+        raise ConfigError("clipboard.discover_port 必须在 1..65535 之间")
+    if cb.mode not in ("on_switch", "always"):
+        raise ConfigError("clipboard.mode 只能是 on_switch / always")
+    if not (1 <= int(cb.max_image_mb) <= 128):
+        raise ConfigError("clipboard.max_image_mb 必须在 1..128 之间")
+    if not (1 <= int(cb.record_limit) <= 100):
+        raise ConfigError("clipboard.record_limit 必须在 1..100 之间")
+    if cb.psk and not _is_hex(cb.psk):
+        raise ConfigError("clipboard.psk 必须是十六进制字符串")
+
+
+def _is_hex(value: str) -> bool:
+    try:
+        bytes.fromhex(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def ensure_device_id(cfg: Config) -> str:
+    """确保 `clipboard.device_id` 存在并返回它（首次运行时按 `{host}-{8hex}` 生成）。
+
+    不用 uuid4 的带横线格式：设备 ID 会出现在日志与界面里，短一点好读。
+    """
+    cb = cfg.clipboard
+    if cb.device_id:
+        return cb.device_id
+    cb.device_id = f"{cfg.effective_host()}-{secrets.token_hex(4)}"
+    return cb.device_id
+
+
 def validate(cfg: Config) -> None:
     if not (0 <= int(cfg.vcp_code) <= 0xFF):
         raise ConfigError("vcp_code 必须在 0..255 之间")
@@ -237,6 +328,7 @@ def validate(cfg: Config) -> None:
         raise ConfigError("readback 的时间参数不能为负")
     if cfg.debounce_ms < 0:
         raise ConfigError("debounce_ms 不能为负")
+    _validate_clipboard(cfg.clipboard)
     if not str(cfg.hotkey).strip():
         raise ConfigError("hotkey 不能为空")
     # 延迟导入，避免 config 模块反向依赖 hotkey 包
@@ -276,9 +368,25 @@ def save(cfg: Config, path: str | os.PathLike[str] | None = None) -> Path:
 
 
 def ensure_config_file(path: str | os.PathLike[str] | None = None) -> tuple[Path, bool]:
-    """确保配置文件存在，返回 (路径, 是否新建)。"""
+    """确保配置文件存在，返回 (路径, 是否新建)。新建时顺手把设备 ID 定下来。"""
     target = Path(path).expanduser() if path else config_path()
     if target.exists():
         return target, False
-    save(platform_defaults(), target)
+    cfg = platform_defaults()
+    ensure_device_id(cfg)
+    save(cfg, target)
     return target, True
+
+
+def ensure_device_id_persisted(
+    cfg: Config, path: str | os.PathLike[str] | None = None
+) -> str:
+    """保证设备 ID 已生成并**落盘**（跨重启必须不变，否则对端会把你当新设备）。"""
+    before = cfg.clipboard.device_id
+    device_id = ensure_device_id(cfg)
+    if not before:
+        try:
+            save(cfg, path)
+        except OSError as exc:  # 配置目录只读时不该让程序起不来
+            logging.getLogger(__name__).warning("设备 ID 无法落盘：%s", exc)
+    return device_id

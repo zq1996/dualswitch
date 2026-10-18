@@ -292,6 +292,24 @@ class MacClipboardBackend:
             log.warning("PNG→TIFF 转换异常：%s", exc)
             return None
 
+    def read_now(self) -> ClipItem | None:
+        """无条件读一次（忽略"内容没变"的判断）。
+
+        给 `dualswitch clip get` / `tools/clip_selftest.py` 用：这两处要看的是
+        "此刻剪贴板里是什么"，而不是"相对上次有没有变化"。
+        契约里的 `poll()` 是给上层轮询用的，语义不同，别混。
+        """
+        with self._lock:
+            try:
+                self._last_count = int(self._pb.changeCount())
+            except Exception:  # noqa: BLE001
+                pass
+            item = self._read()
+            if item is not None:
+                self._last_digest = item.digest
+                self._last_kind = item.kind
+            return item
+
     # ----------------------------------------------------------------- probe
     def probe(self) -> dict[str, str]:
         info: dict[str, str] = {
