@@ -150,6 +150,7 @@ class UiRunner(QObject):
         self._busy = False
         self._hotkey_suspended = False
         self._quitting = False
+        self._tray_fallback = False           # 已换成备用常驻图标实现（pystray）
         self._retry_on_activate = False       # 去授权后切回应用就自动重试热键
         self._hotkey_spec = cfg.hotkey
         self._seen_history = len(controller.history)
@@ -266,7 +267,7 @@ class UiRunner(QObject):
         真正能证明系统给了位置的是 `geometry()` —— 它来自系统的 Shell_NotifyIconGetRect，
         拿不到矩形就说明通知区域里没有这一格。
         """
-        if self._quitting:
+        if self._quitting or self._tray_fallback:
             return
         try:
             visible = bool(self.status.is_visible())
@@ -296,8 +297,8 @@ class UiRunner(QObject):
         QTimer.singleShot(1500, lambda: self._confirm_status_item(attempt))
 
     def _confirm_status_item(self, attempt: int = 1) -> None:
-        """重建之后再查；几次都不行，就把「该去动哪里」说清楚。"""
-        if self._quitting:
+        """重建之后再查；几次都不行就换实现，最后才报错。"""
+        if self._quitting or self._tray_fallback:
             return
         geometry = self._status_geometry()
         log.info("常驻图标复查（第 %d 次）：位置=%s", attempt, geometry or "未知")
@@ -307,6 +308,8 @@ class UiRunner(QObject):
         if attempt < 2:
             self._retry_status_item(attempt + 1)
             return
+        if self._switch_to_fallback_status():
+            return
         log.error(
             "托盘图标仍然没有位置：系统侧没有接受这个 exe 的托盘注册。"
             "① 设置 → 个性化 → 任务栏 → 通知区域 →「选择哪些图标显示在任务栏上」，"
@@ -315,6 +318,35 @@ class UiRunner(QObject):
             Path(sys.executable).name,
         )
         self.window.set_foot("托盘图标没被系统接受 · 见日志", ok=False)
+
+    def _switch_to_fallback_status(self) -> bool:
+        """Qt 托盘彻底不灵时，换成 chrome 提供的另一种实现（目前只有 Windows 有）。
+
+        `QSystemTrayIcon` 在打包版里会「报可见、实则没进通知区域」，而同一个 exe 用
+        pystray（`dualswitch run` 那条老路）是能出图标的 —— 换条通道比继续跟 Qt 死磕快。
+        """
+        build = getattr(self.chrome, "build_fallback_status_item", None)
+        if not callable(build):
+            return False
+        try:
+            item = build(self._on_status_click)
+        except Exception:  # pragma: no cover
+            log.exception("创建兜底常驻图标失败")
+            return False
+        if item is None:
+            return False
+
+        old = self.status
+        self.status = item
+        self._tray_fallback = True          # pystray 不报位置，别再用位置判定了
+        try:
+            old.hide()
+        except Exception:  # pragma: no cover
+            log.exception("隐藏旧的常驻图标失败")
+        self.status.set_tooltip(_status_tip(self._hotkey_label()))
+        self._refresh_menu()
+        log.warning("Qt 托盘没进通知区域，已换成兜底实现（pystray），图标应立即出现")
+        return True
 
     def _status_actions(self) -> dict:
         return {

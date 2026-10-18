@@ -24,6 +24,7 @@ class MenuEntry:
     action: Callable[[], None] | None = None
     enabled: bool = True
     checked: bool = False
+    default: bool = False              # 双击图标时触发这一项（pystray 用；Qt 托盘自己处理双击）
     key: str = ""                      # mac 快捷键字符，例如 "q" / ","
     modifier: str = "cmd"              # cmd / cmd_shift
 
@@ -40,7 +41,7 @@ def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> l
         MenuEntry("label", f"当前画面：{self_title}"),
         MenuEntry("item", "打开主界面", actions.get("open")),
         MenuEntry("sep"),
-        MenuEntry("item", f"切换到 {other_title}（{PORT[other]}）", actions.get("switch")),
+        MenuEntry("item", f"切换到 {other_title}（{PORT[other]}）", actions.get("switch"), default=True),
         MenuEntry("item", f"强制切到 {self_title}（{PORT[current]}）", actions.get("force")),
         MenuEntry("sep"),
         MenuEntry("item", "探测显示器 / 读取输入源", actions.get("probe")),

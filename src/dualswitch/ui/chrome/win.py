@@ -334,6 +334,127 @@ def build_status_item(icon, on_click: Callable[[], None]):  # noqa: ANN001
     return QtStatusItem(icon, on_click)
 
 
+def pystray_menu(entries):  # noqa: ANN001, ANN201 - list[MenuEntry] -> pystray.Menu
+    """把共享的 `MenuEntry` 列表翻译成 pystray 的菜单（纯转换，可单测）。"""
+    import pystray
+
+    items = []
+    for entry in entries:
+        if entry.kind == "sep":
+            items.append(pystray.Menu.SEPARATOR)
+            continue
+        action = None
+        if entry.kind != "label" and entry.action is not None:
+            action = (lambda fn: lambda icon, item: fn())(entry.action)
+        items.append(
+            pystray.MenuItem(
+                entry.title,
+                action,
+                checked=(lambda _i: entry.checked) if entry.checked else None,
+                enabled=entry.enabled and action is not None,
+                default=entry.default,
+            )
+        )
+    return pystray.Menu(*items)
+
+
+class PystrayStatusItem:
+    """pystray 版托盘：Qt 托盘注册不上时的第二实现。
+
+    为什么留这一份：打包版里 `QSystemTrayIcon` 会出现「可见=True、图标非空，但通知
+    区域既没有条目也没有位置」，而同一个 exe 用 pystray（`dualswitch run` 那条老路）
+    在本机是出了图标的 —— 两条实现互不依赖，Qt 那条失灵就换这条顶上。
+    菜单条目仍然是共享的 `MenuEntry`，图标仍然用包里的 .ico。
+    """
+
+    kind = "tray"
+
+    def __init__(self, on_activate: Callable[[], None]):
+        import threading
+
+        import pystray
+        from PIL import Image
+
+        from .. import theme
+
+        self._pystray = pystray
+        self._on_activate = on_activate
+        self._entries: list = []
+        self._title = "屏幕切换"
+
+        image = Image.open(theme.app_icon())
+        image.load()
+        self._icon = pystray.Icon("dualswitch", icon=image, title=self._title)
+        # pystray 自带消息循环，必须放在自己的线程里跑（Qt 主线程不能让它阻塞）
+        threading.Thread(target=self._icon.run, name="pystray-tray", daemon=True).start()
+        log.info("pystray 托盘已启动（兜底实现）")
+
+    # ------------------------------------------------------------------ 菜单
+    def _build_menu(self):
+        return pystray_menu(self._entries)
+
+    def set_menu(self, entries) -> None:      # noqa: ANN001 - list[MenuEntry]
+        self._entries = list(entries)
+        menu = self._build_menu()
+        self._icon.menu = menu
+        try:
+            self._icon.update_menu()
+        except Exception:  # pragma: no cover - 图标还没起来时 update 会抛
+            log.debug("更新 pystray 菜单失败（图标可能尚未就绪）", exc_info=True)
+
+    # ------------------------------------------------------------------ 接口
+    def set_tooltip(self, text: str) -> None:
+        self._title = text
+        self._icon.title = text
+
+    def show(self) -> None:
+        self._icon.visible = True
+
+    def hide(self) -> None:
+        try:
+            self._icon.visible = False
+            self._icon.stop()
+        except Exception:  # pragma: no cover
+            log.exception("停止 pystray 托盘失败")
+
+    def is_visible(self) -> bool:
+        return bool(getattr(self._icon, "visible", False))
+
+    def is_available(self) -> bool:
+        return True
+
+    def geometry(self) -> str:
+        """pystray 不暴露图标位置；返回空串表示「查不到」，调用方据此不再重试。"""
+        return ""
+
+    def reassert(self) -> None:
+        self._icon.visible = True
+
+    def recreate(self) -> None:
+        self._icon.visible = True
+
+    def notify(self, title: str, message: str, icon=None, msecs: int = 4000) -> None:  # noqa: ANN001
+        try:
+            self._icon.notify(message, title)
+        except Exception:  # pragma: no cover
+            log.debug("pystray 通知失败", exc_info=True)
+
+
+def build_fallback_status_item(on_click: Callable[[], None]):  # noqa: ANN001
+    """Qt 托盘失灵时的备选实现；没有 pystray/Pillow 就返回 None。"""
+    try:
+        import PIL  # noqa: F401
+        import pystray  # noqa: F401
+    except Exception:
+        log.warning("未安装 pystray / Pillow，无法启用兜底托盘")
+        return None
+    try:
+        return PystrayStatusItem(on_click)
+    except Exception:
+        log.exception("创建 pystray 托盘失败")
+        return None
+
+
 def build_app_menu(runner):  # noqa: ANN001
     """Windows 没有全局菜单栏，菜单都在托盘里。"""
     return None

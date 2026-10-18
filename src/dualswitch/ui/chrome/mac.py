@@ -313,7 +313,16 @@ def build_status_item(icon, on_click: Callable[[], None]):  # noqa: ANN001
     return QtStatusItem(icon, on_click)
 
 
+def build_fallback_status_item(on_click: Callable[[], None]):  # noqa: ANN001, ARG001
+    """mac 没有「第二实现」的需要：菜单栏要么建得出来，要么 AppKit 就不可用。
+
+    （AppKit 不可用时 `build_status_item` 已经退到 Qt 托盘了。）
+    """
+    return None
+
+
 def build_app_menu(runner):  # noqa: ANN001
+
     """macOS 全局菜单栏：应用菜单里放「设置 ⌘, / 隐藏 ⌘H / 退出 ⌘Q」。"""
     from PySide6.QtGui import QAction, QKeySequence
     from PySide6.QtWidgets import QMenu, QMenuBar

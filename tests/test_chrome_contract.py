@@ -51,6 +51,7 @@ FIELDS = {
 FUNCS = [
     "titlebar",
     "build_status_item",
+    "build_fallback_status_item",
     "build_app_menu",
     "activate",
     "set_dock_visible",

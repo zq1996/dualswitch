@@ -468,6 +468,20 @@ dualswitch/
   ⚠️ 重打包换了 ad-hoc 签名，TCC 会当成新应用：需到「隐私与安全性 → 辅助功能」
   重新勾选一次「屏幕切换」。
 
+- 2026-10-18 15:10 **托盘图标：Qt 通道失灵时自动换 pystray**。
+  实测数据（打包版）：`托盘可用=True 图标可见=True 图标为空=False 尺寸齐全`，但
+  `位置=未知`，且系统「选择哪些图标显示在任务栏上」里**没有 dualswitch.exe 的条目**
+  —— 说明 `Shell_NotifyIcon` 没被系统接受，而 Qt 对此不抛异常。
+  · 依据：Qt 上游提交 `ca851b3` 把 Windows 上「图标藏在 `^` 里」的 `geometry()` 统一成
+    `QRect()`，所以 `位置=空` 只能说明「通知区域里没有这一格」，`isVisible()` 更不能信。
+  · 对策：`_confirm_status_item` 重试两次仍无位置 → `_switch_to_fallback_status()` 换实现。
+    Windows 侧新增 `PystrayStatusItem`（pystray + Pillow，和 `dualswitch run` 同一条老路，
+    本机已实测能出图标），菜单仍由共享的 `MenuEntry` 翻译（`pystray_menu()`，可单测），
+    双击仍等于「切换到对方」。macOS 侧 `build_fallback_status_item()` 返回 None。
+  · 同时：`qInstallMessageHandler` 让 Qt 的告警进日志（前缀 `[Qt]`），托盘图标改为
+    「主窗口 show() 之后再创建」，新增 `QtStatusItem.recreate()`（NIM_ADD 从未成功时
+    只有重建有用）。
+  · `MenuEntry` 增加 `default` 字段；`pytest` 101 passed。
 - 2026-10-18 13:35 **Windows 打包版「关窗口后托盘没图标、进程还在」——先让它自己说出来**。
   现象：`dualswitch.exe`（打包版）点标题栏关闭后，托盘里没有图标，任务管理器里进程仍存活；
   同一份代码用 `start-ui.bat`（`pythonw.exe`）跑就正常。代码路径完全一致（`QSystemTrayIcon`

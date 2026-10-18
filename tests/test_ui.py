@@ -317,3 +317,31 @@ def test_qt_status_item_reports_availability(app):
         item._log_state("测试")          # 空图标要能记日志而不是抛异常
     finally:
         item.hide()
+
+
+def test_pystray_menu_from_entries(app):
+    """Qt 托盘失灵时的兜底实现要把共享菜单条目原样翻过去（双击 = 切换）。"""
+    pytest.importorskip("pystray", reason="未安装 pystray")
+    from dualswitch.ui.chrome.win import pystray_menu
+    from dualswitch.ui.statusitem import build_menu_entries
+
+    calls: list[str] = []
+    entries = build_menu_entries(
+        Config(),
+        "windows",
+        "alt+space",
+        {"switch": lambda: calls.append("switch"), "quit": lambda: calls.append("quit")},
+    )
+    menu = pystray_menu(entries)
+
+    items = [i for i in menu.items if i is not menu.SEPARATOR]
+    assert any(i.text.startswith("切换到") and i.default for i in items), "双击应触发切换"
+    assert any(i.text.startswith("退出") for i in items)
+
+    # 只读行（当前画面 / 热键提示）要禁用，且不能触发任何动作
+    label = next(i for i in items if i.text.startswith("当前画面"))
+    assert label.enabled is False
+
+    switch = next(i for i in items if i.default)
+    switch(None)
+    assert calls == ["switch"]
