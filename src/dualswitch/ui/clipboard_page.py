@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
+from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -374,115 +374,6 @@ class PreviewPane(QFrame):
         self.hint.setText("可直接选中文本")
 
 
-class ImageViewer(QWidget):
-    """双击预览图后的原图查看浮层：覆盖整个剪贴板页，点任意处或 Esc 关闭。
-
-    不是独立窗口（遵守「整个应用只有一个窗口」的约定），而是页面里的一个透明
-    遮罩层。原图在遮罩内等比缩放到可用空间，双击放大到 100% 后可用滚动条细看。
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("imageViewer")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(
-            "QWidget#imageViewer{background:rgba(17,21,28,0.82);}"
-            "QLabel#viewerImg{background:transparent;}"
-            "QLabel#viewerHint{color:#C9D2E0;font-size:11px;}"
-        )
-        self.setFocusPolicy(Qt.StrongFocus)
-        self._zoom = False
-        self._pix: QPixmap | None = None
-        self._close_timer = QTimer(self)
-        self._close_timer.setSingleShot(True)
-        self._close_timer.setInterval(250)
-        self._close_timer.timeout.connect(self.hide)
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(8)
-
-        self.hint = QLabel("点击关闭 · 双击切换 100%/适应")
-        self.hint.setObjectName("viewerHint")
-        self.hint.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.hint)
-
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setStyleSheet(
-            "QScrollArea{background:transparent;border:none;}"
-            "QScrollBar:horizontal,QScrollBar:vertical{width:8px;background:transparent;}"
-            "QScrollBar::handle:horizontal,QScrollBar::handle:vertical{background:#4A5468;"
-            "border-radius:4px;min-width:18px;min-height:18px;}"
-            "QScrollBar::add-line,QScrollBar::sub-line{height:0;width:0;}"
-        )
-        self.img = QLabel()
-        self.img.setObjectName("viewerImg")
-        self.img.setAlignment(Qt.AlignCenter)
-        self.scroll.setWidget(self.img)
-        lay.addWidget(self.scroll, 1)
-
-    def show_image(self, rec: ClipRecord) -> None:
-        if rec.png is None:
-            return
-        image = QImage()
-        if not image.loadFromData(rec.png, "PNG"):
-            return
-        self._close_timer.stop()
-        self._pix = QPixmap.fromImage(image)
-        self._zoom = False
-        self.setGeometry(self.parent().rect())
-        self.show()
-        self.raise_()
-        self._apply_scale()
-        self.setFocus()
-
-    def _apply_scale(self) -> None:
-        if self._pix is None:
-            return
-        if self._zoom:
-            self.img.setPixmap(self._pix)
-            self.img.adjustSize()
-            self.hint.setText("点击关闭 · 双击回到适应窗口（可滚动）")
-        else:
-            avail = self.scroll.viewport().size()
-            scaled = self._pix.scaled(
-                max(1, avail.width() - 4),
-                max(1, avail.height() - 4),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            self.img.setPixmap(scaled)
-            self.img.adjustSize()
-            self.hint.setText("点击关闭 · 双击查看 100%")
-
-    def resizeEvent(self, event):  # noqa: N802
-        super().resizeEvent(event)
-        if not self._zoom:
-            self._apply_scale()
-
-    def mousePressEvent(self, event):  # noqa: N802
-        if event.button() == Qt.LeftButton:
-            # 延迟关闭：若紧接着是双击，则让双击接管（切缩放）
-            self._close_timer.start()
-            return
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event):  # noqa: N802
-        if event.button() == Qt.LeftButton:
-            self._close_timer.stop()
-            self._zoom = not self._zoom
-            self._apply_scale()
-            return
-        super().mouseDoubleClickEvent(event)
-
-    def keyPressEvent(self, event):  # noqa: N802
-        if event.key() == Qt.Key_Escape:
-            self.hide()
-            return
-        super().keyPressEvent(event)
-
-
 class ClipboardPage(QWidget):
     """剪贴板页。`refresh()` 由外部定时器驱动（页面不可见时不要调）。"""
 
@@ -491,9 +382,12 @@ class ClipboardPage(QWidget):
     copyRequested = Signal(str)
     cleared = Signal()
 
-    def __init__(self, engine=None, parent=None):
+    def __init__(self, engine=None, parent=None, open_external=None):
         super().__init__(parent)
         self.engine = engine
+        # 打开外部程序（系统看图软件）的回调：默认走 chrome.open_path，
+        # runner 也可以注入自己的实现（统一签名：fn(path: Path|str) -> None）
+        self._open_external = open_external
         self._records: list[ClipRecord] = []
         self._rows: dict[str, ClipRow] = {}
         self._selected: str | None = None
@@ -600,10 +494,8 @@ class ClipboardPage(QWidget):
         self.preview = PreviewPane()
         outer.addWidget(self.preview)
 
-        # 原图查看浮层：覆盖在页面上，不另开窗口
-        self.viewer = ImageViewer(self)
-        self.viewer.setVisible(False)
-        self.preview.imageActivated.connect(self.viewer.show_image)
+        # 双击图片 → 写临时 PNG → 用系统看图软件打开（不弹应用内浮层，太小）
+        self.preview.imageActivated.connect(self._open_original)
 
         # 操作栏（样式用全局 QSS 的 #clipBar：裸 setStyleSheet 会级联到子按钮，
         # 把 clipPrimary 的渐变盖成白底白字）
@@ -761,10 +653,7 @@ class ClipboardPage(QWidget):
     def keyPressEvent(self, event):  # noqa: N802
         key = event.key()
         if key == Qt.Key_Escape:
-            if self.viewer.isVisible():
-                self.viewer.hide()
-            else:
-                self.backRequested.emit()
+            self.backRequested.emit()
             return
         if key in (Qt.Key_Up, Qt.Key_Down):
             self._move(key == Qt.Key_Down)
@@ -795,8 +684,31 @@ class ClipboardPage(QWidget):
         if row is not None:
             self.scroll.ensureWidgetVisible(row, 0, 8)
 
-    # ------------------------------------------------------------------ 浮层
-    def resizeEvent(self, event):  # noqa: N802
-        super().resizeEvent(event)
-        # 原图查看浮层覆盖整个页面
-        self.viewer.setGeometry(self.rect())
+    # ------------------------------------------------------------------ 看图
+    def _open_original(self, rec: ClipRecord) -> None:
+        """双击图片：把原图写成临时 PNG，用系统看图软件打开。
+
+        写盘是「系统看图」的必经一步，用完即删做不到（看图程序还在读），所以
+        落在一个独立临时目录，交给系统清理，程序不长期持有。
+        """
+        if rec.png is None:
+            return
+        try:
+            import tempfile
+            from pathlib import Path
+
+            d = Path(tempfile.gettempdir()) / "dualswitch-preview"
+            d.mkdir(parents=True, exist_ok=True)
+            target = d / f"clip-{rec.id[:8]}.png"
+            target.write_bytes(rec.png)
+
+            opener = self._open_external
+            if opener is None:
+                from .chrome import current as _chrome
+
+                opener = _chrome().open_path
+            opener(str(target))
+        except Exception:  # noqa: BLE001 - 看图失败不能连累界面
+            import logging
+
+            logging.getLogger("dualswitch.ui").warning("打开原图预览失败", exc_info=True)

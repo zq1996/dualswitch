@@ -156,7 +156,9 @@ class UiRunner(QObject):
         # 本机记录源 `LocalClipFeed` —— 页面只按 engine 那几个方法取值，换实现不用改页面。
         # 入口不能是死按钮：没有引擎时进去至少能看到本机复制过什么。
         self.clip_feed = clip_engine if clip_engine is not None else LocalClipFeed(cfg)
-        self.clipboard_page = ClipboardPage(self.clip_feed, parent=self.window)
+        self.clipboard_page = ClipboardPage(
+            self.clip_feed, parent=self.window, open_external=self.chrome.open_path
+        )
         self.clipboard_page.backRequested.connect(self.close_clipboard)
         self.clipboard_page.pair_btn.clicked.connect(self.show_pair_hint)
         self.window.attach_clipboard(self.clipboard_page)
