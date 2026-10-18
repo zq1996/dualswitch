@@ -1,5 +1,14 @@
 # Windows 托盘图标不显示 —— 调查交接
 
+> ✅ **已闭环（2026-10-18 16:15，Windows 侧）**：真凶不是代码，是 **exe 继承了 `Low` 完整性标签**。
+> `D:\work` 带 `Low Mandatory Level` 且 `(OI)(CI)` 继承 → `dist\dualswitch\dualswitch.exe` 继承了它 →
+> Windows 以**低完整性级别**启动进程 → 本机 explorer 是提权的 `High` → UIPI 直接丢掉
+> `Shell_NotifyIcon`，所以 shell 里连登记记录都没有（本文第 3 节第 2 条强证据正是这个原因）。
+> 同一份 exe 只改标签的对照：`Low` 无图标 / `Medium` 仍无 / `High` 出现（`位置=2256,1400 24x40`）。
+> 修复与判定入口见 `docs/TROUBLESHOOTING.md` §4.1、`src/dualswitch/winenv.py`、
+> `tools/fix_integrity.py`；`packaging/windows/build.ps1` 打包后会自动把产物标签抬到 High。
+> 下面保留原始调查过程，供复盘「为什么会排查这么久」。
+>
 > 写于 2026-10-18 15:20（macOS 侧，无法直接调试 Windows，所有结论都来自用户回传的日志/截图）。
 > 接手的人请先读第 3 节「当前判定」和第 8 节「下一步行动」，其余是按需查阅的证据。
 > 仓库：`D:\work\workbuddy\dualswitch`（Windows 侧），当前应停在 `e8646cd`。
