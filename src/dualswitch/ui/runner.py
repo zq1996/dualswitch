@@ -100,7 +100,8 @@ def load_app_icon() -> QIcon:
 
 
 class UiRunner(QObject):
-    def __init__(self, cfg, cfg_file: Path, log_file: Path, backend, controller, hotkey, warning=None):
+    def __init__(self, cfg, cfg_file: Path, log_file: Path, backend, controller, hotkey,
+                 warning=None, clip_engine=None):
         super().__init__()
         # 第一件事：把 Qt 的告警接到我们的日志上（windowed 打包版没有 stderr，
         # 否则 Shell_NotifyIcon 之类的失败信息会彻底消失）
@@ -112,6 +113,7 @@ class UiRunner(QObject):
         self.controller = controller
         self.hotkey = hotkey
         self.warning = warning
+        self.clip_engine = clip_engine
 
         self.app = QApplication.instance() or QApplication(sys.argv[:1])
         self.app.setApplicationName("屏幕切换")
@@ -147,6 +149,16 @@ class UiRunner(QObject):
             self.window.attach_settings(self.settings)
             self.settings.backRequested.connect(self.close_settings)
 
+        # 剪贴板页：两端都挂在同一个窗口的页面栈里（入口各按平台习惯，见 chrome 契约）
+        self.clipboard_page = None
+        if clip_engine is not None:
+            from .clipboard_page import ClipboardPage
+
+            self.clipboard_page = ClipboardPage(clip_engine, parent=self.window)
+            self.clipboard_page.backRequested.connect(self.close_clipboard)
+            self.clipboard_page.pair_btn.clicked.connect(self.show_pair_hint)
+            self.window.attach_clipboard(self.clipboard_page)
+
         self._busy = False
         self._hotkey_suspended = False
         self._quitting = False
@@ -167,6 +179,12 @@ class UiRunner(QObject):
         self.poll.setInterval(250)
         self.poll.timeout.connect(self._poll_state)
         self.poll.start()
+
+        # 剪贴板页低频刷新（300ms），页面不可见时直接跳过，别让低频页在后台空转
+        self.clip_timer = QTimer(self)
+        self.clip_timer.setInterval(300)
+        self.clip_timer.timeout.connect(self._refresh_clipboard)
+        self.clip_timer.start()
 
         self._center(self.window)
         self._center(self.settings)
@@ -209,11 +227,13 @@ class UiRunner(QObject):
         self.window.doctorRequested.connect(self.do_doctor)
         self.window.openLogRequested.connect(lambda: self.chrome.open_path(self.log_file))
         self.window.openSettingsRequested.connect(self.show_settings)
+        self.window.openClipboardRequested.connect(self.show_clipboard)
         # 窗口收起 → mac 上顺手把程序坞图标也收掉（菜单栏图标不受影响）
         self.window.hiddenToBackground.connect(self._enter_background)
         self.settings.saved.connect(self.on_config_saved)
         self.settings.openConfigDirRequested.connect(lambda: self.chrome.open_path(self.cfg_file))
         self.settings.probeRequested.connect(self.do_probe)
+        self.settings.clipboardRequested.connect(self.show_clipboard)
         self.settings.recordingChanged.connect(self._on_recording_changed)
         # Dock 图标点击 / Cmd+Tab 回到本应用时，若窗口收起来了就再拿出来
         self.app.installEventFilter(self)
@@ -456,6 +476,35 @@ class UiRunner(QObject):
         self.settings.activateWindow()
         self.chrome.activate(self.settings)
 
+    def show_clipboard(self) -> None:
+        if self.clipboard_page is None:
+            return
+        if not self.chrome.SETTINGS_IN_WINDOW and self.settings.isVisible():
+            self.settings.hide()      # Windows：独立设置窗口，别两层叠着
+        self._leave_background()
+        self.window.show_clipboard_page()
+        self.window.showNormal()
+        self.window.raise_()
+        self.window.activateWindow()
+        self.chrome.activate(self.window)
+        self.clipboard_page.refresh()
+        self.clipboard_page.setFocus()
+
+    def close_clipboard(self) -> None:
+        self.window.show_main_page()
+
+    def show_pair_hint(self) -> None:
+        """空态里的「显示配对码」：把配对命令告诉用户（不弹新窗口）。"""
+        if self.clipboard_page is None:
+            return
+        from ..sync import protocol as proto
+
+        pin = proto.random_pin()
+        self.clipboard_page.empty_sub.setText(
+            f"配对码 {pin}：在终端执行 dualswitch clip pair --pin {pin}，"
+            f"另一台机器输入同一个码"
+        )
+
     def close_settings(self) -> None:
         """退出设置：内嵌模式翻回主页面，独立模式收起窗口。"""
         try:
@@ -543,6 +592,11 @@ class UiRunner(QObject):
             if self._retry_on_activate and self.hotkey is None and not self._hotkey_suspended:
                 QTimer.singleShot(250, self.retry_hotkey)
         return super().eventFilter(obj, event)
+
+    def _refresh_clipboard(self) -> None:
+        if self.clipboard_page is None or not self.window.on_clipboard_page():
+            return
+        self.clipboard_page.refresh()
 
     def _poll_state(self) -> None:
         changed = False
@@ -752,6 +806,8 @@ class UiRunner(QObject):
         return self.app.exec()
 
 
-def run_ui(cfg, cfg_file, log_file, backend, controller, hotkey, warning=None) -> int:
-    runner = UiRunner(cfg, cfg_file, log_file, backend, controller, hotkey, warning)
+def run_ui(cfg, cfg_file, log_file, backend, controller, hotkey, warning=None,
+           clip_engine=None) -> int:
+    runner = UiRunner(cfg, cfg_file, log_file, backend, controller, hotkey, warning,
+                      clip_engine=clip_engine)
     return runner.run()

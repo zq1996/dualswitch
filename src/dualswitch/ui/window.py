@@ -74,6 +74,7 @@ class Banner(QFrame):
 class MainWindow(QWidget):
     switchRequested = Signal()
     openSettingsRequested = Signal()
+    openClipboardRequested = Signal()
     openLogRequested = Signal()
     probeRequested = Signal()
     doctorRequested = Signal()
@@ -103,11 +104,11 @@ class MainWindow(QWidget):
             # macOS：用系统标题栏（红绿灯 + 居中标题），窗口外框、圆角、投影都交给系统，
             # 自绘一套反而显得不像 mac 应用。这里只保证内容区能正常撑满。
             self.setAttribute(Qt.WA_MacShowFocusRect, False)
-            self.setFixedSize(theme.WIN_W, theme.WIN_H)
+            self.setFixedSize(theme.WIN_W, self.win_h())
         else:
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
             self.setAttribute(Qt.WA_TranslucentBackground)
-            self.setFixedSize(theme.WIN_W, theme.WIN_H)
+            self.setFixedSize(theme.WIN_W, self.win_h())
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -137,7 +138,9 @@ class MainWindow(QWidget):
         # Windows 仍是独立设置窗口（自绘标题栏，嵌进来会变成两层标题栏）。
         self.pages = QStackedWidget()
         self.settings_page = None
+        self.clipboard_page = None
         self._on_settings = False
+        self._on_clipboard = False
 
         body = QWidget()
         body.setObjectName("body")
@@ -177,11 +180,23 @@ class MainWindow(QWidget):
         list_lay.setSpacing(0)
         self.row_probe = ListRow("search", "探测显示器", "只读")
         self.row_log = ListRow("doc", "查看日志", "dualswitch.log")
-        self.row_doctor = ListRow("pulse", "运行诊断", "doctor", last=not self.chrome.INLINE_SETTINGS_ROW)
+        self.row_doctor = ListRow(
+            "pulse", "运行诊断", "doctor",
+            last=not (self.chrome.INLINE_SETTINGS_ROW or self.chrome.INLINE_CLIPBOARD_ROW),
+        )
         self.row_probe.clicked.connect(self.probeRequested)
         self.row_log.clicked.connect(self.openLogRequested)
         self.row_doctor.clicked.connect(self.doctorRequested)
         rows = [self.row_probe, self.row_log, self.row_doctor]
+        # macOS：剪贴板入口在列表里（设置行上方）；Windows 在标题栏，所以这里是 None
+        self.row_clipboard = None
+        if self.chrome.INLINE_CLIPBOARD_ROW:
+            self.row_clipboard = ListRow(
+                "clip", "剪贴板", self.chrome.CLIPBOARD_ROW_HINT,
+                last=not self.chrome.INLINE_SETTINGS_ROW,
+            )
+            self.row_clipboard.clicked.connect(self.openClipboardRequested)
+            rows.append(self.row_clipboard)
         # macOS 没有自绘标题栏，设置入口收进这张列表（⌘, 同时可用）
         self.row_settings = None
         if self.chrome.INLINE_SETTINGS_ROW:
@@ -238,7 +253,7 @@ class MainWindow(QWidget):
         """横幅。action_text + action 用于「去授权」「重试」这类需要用户动手的提示。"""
         self._banner_action = action
         self.banner.show_message(kind, message, action_text)
-        self._apply_height(theme.WIN_H + BANNER_EXTRA)
+        self._apply_height(self.win_h() + BANNER_EXTRA)
 
     def _on_banner_action(self) -> None:
         if callable(self._banner_action):
@@ -251,13 +266,41 @@ class MainWindow(QWidget):
         if self.banner.isHidden():      # isVisible() 在窗口未 show 时恒为 False，这里只看显式状态
             return
         self.banner.clear()
-        self._apply_height(theme.WIN_H)
+        self._apply_height(self.win_h())
 
     def _apply_height(self, height: int) -> None:
         self.setFixedHeight(height)
         self.resize(theme.WIN_W, height)
 
     # ------------------------------------------------------------------ 页面
+    def win_h(self) -> int:
+        """主页面高度 = 基准高度 + 平台额外高度（mac 多一行剪贴板）。"""
+        return theme.WIN_H + int(getattr(self.chrome, "EXTRA_H", 0) or 0)
+
+    def attach_clipboard(self, widget) -> None:
+        """把剪贴板页挂进本窗口（与设置页同一套：翻页 + 返回）。"""
+        self.clipboard_page = widget
+        self.pages.addWidget(widget)
+
+    def show_clipboard_page(self) -> None:
+        if self.clipboard_page is None:
+            return
+        self._on_clipboard = True
+        self._on_settings = False
+        self.pages.setCurrentWidget(self.clipboard_page)
+        self.setWindowTitle("屏幕切换 · 剪贴板")
+        self._apply_height(self.win_h())
+
+    def show_main_page(self) -> None:
+        self._on_settings = False
+        self._on_clipboard = False
+        self.pages.setCurrentWidget(self.main_page)
+        self.setWindowTitle("屏幕切换")
+        self._apply_height(self.win_h() + (0 if self.banner.isHidden() else BANNER_EXTRA))
+
+    def on_clipboard_page(self) -> bool:
+        return self._on_clipboard
+
     def attach_settings(self, widget) -> None:
         """把设置页挂进本窗口（mac：同一个窗口里翻页，而不是再弹一个窗口）。"""
         self.settings_page = widget
@@ -267,15 +310,10 @@ class MainWindow(QWidget):
         if self.settings_page is None:      # 独立窗口模式（Windows）没有这一页
             return
         self._on_settings = True
+        self._on_clipboard = False
         self.pages.setCurrentWidget(self.settings_page)
         self.setWindowTitle("屏幕切换 · 设置")
         self._apply_height(theme.SETTINGS_H)
-
-    def show_main_page(self) -> None:
-        self._on_settings = False
-        self.pages.setCurrentWidget(self.main_page)
-        self.setWindowTitle("屏幕切换")
-        self._apply_height(theme.WIN_H + (0 if self.banner.isHidden() else BANNER_EXTRA))
 
     def on_settings_page(self) -> bool:
         return self._on_settings

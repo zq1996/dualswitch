@@ -234,7 +234,8 @@ class HotkeyRecorder(QPushButton):
 class SettingsWindow(QWidget):
     saved = Signal(object)          # Config
     openConfigDirRequested = Signal()
-    probeRequested = Signal()       # 「检测」显示器
+    probeRequested = Signal()        # 「检测」显示器
+    clipboardRequested = Signal()    # 「查看记录…」
     recordingChanged = Signal(bool)  # 热键录制开始/结束 → 调用方暂停/恢复全局热键
     backRequested = Signal()        # 窗口内嵌模式下的「返回」
 
@@ -303,7 +304,7 @@ class SettingsWindow(QWidget):
         tabs_lay.setSpacing(3)
         self.stack = QStackedWidget()
         self._tab_buttons: list[QPushButton] = []
-        for idx, name in enumerate(["常规", "热键", "显示器", "高级"]):
+        for idx, name in enumerate(["常规", "热键", "显示器", "剪贴板", "高级"]):
             btn = QPushButton(name)
             btn.setObjectName("tab")
             btn.setCheckable(True)
@@ -318,6 +319,7 @@ class SettingsWindow(QWidget):
         self.stack.addWidget(self._page_common())
         self.stack.addWidget(self._page_hotkey())
         self.stack.addWidget(self._page_display())
+        self.stack.addWidget(self._page_clipboard())
         self.stack.addWidget(self._page_advanced())
         body_lay.addWidget(self.stack, 1)
 
@@ -537,6 +539,58 @@ class SettingsWindow(QWidget):
         lay.addStretch(1)
         return page
 
+    def _page_clipboard(self) -> QWidget:
+        """剪贴板页：开关 + 配对状态 + 图片上限 + 记录入口。
+
+        故意只放"要不要同步"这类低频开关；记录本身在剪贴板页看，不在这里堆。
+        """
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+
+        hint = label(
+            "只在按热键切屏的那一刻搬运最近一条剪贴板内容，不做历史记录、不落盘。",
+            "pageHint",
+        )
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        self.sw_clip = ToggleSwitch(self.cfg.clipboard.enabled)
+        self.sw_clip_image = ToggleSwitch(self.cfg.clipboard.image_enabled)
+
+        self.edit_max_image = QLineEdit(str(self.cfg.clipboard.max_image_mb))
+        self.edit_max_image.setObjectName("num")
+        self.edit_max_image.setAlignment(Qt.AlignCenter)
+        self.edit_max_image.setFixedWidth(56)
+        self.edit_max_image.setValidator(QIntValidator(1, 128, self.edit_max_image))
+
+        btn_view = QPushButton("查看记录…")
+        btn_view.setObjectName("ghost")
+        btn_view.setFixedHeight(30)
+        btn_view.setCursor(Qt.PointingHandCursor)
+        btn_view.clicked.connect(self.clipboardRequested)
+
+        paired = bool(self.cfg.clipboard.psk)
+        pair_text = (
+            f"已配对（设备 {self.cfg.clipboard.peer_device or '未连接'}）"
+            if paired
+            else "未配对：在终端执行 dualswitch clip pair --pin <6位码>，两端输入同一个码"
+        )
+        pair_label = label(pair_text, "gDesc")
+        pair_label.setWordWrap(True)
+        pair_label.setFixedWidth(220)
+
+        lay.addWidget(group_box(
+            group_row("同步剪贴板", "切屏时把最近一次复制的内容送到另一台", self.sw_clip),
+            group_row("同步图片", "截图 / 复制的图片（统一转 PNG）", self.sw_clip_image),
+            group_row("图片大小上限", "超过就只同步其中的文字部分", self.edit_max_image),
+            group_row("配对状态", "", pair_label),
+            group_row("剪贴板记录", "最近 10 条，仅内存保留", btn_view, last=True),
+        ))
+        lay.addStretch(1)
+        return page
+
     def _num_edit(self, value: int) -> QLineEdit:
         edit = QLineEdit(str(value))
         edit.setObjectName("num")
@@ -562,6 +616,9 @@ class SettingsWindow(QWidget):
         self.combo_backend.setCurrentText(defaults.ddc_backend)
         self.sw_dryrun.setChecked(defaults.dry_run)
         self.sw_readback.setChecked(defaults.readback.enabled)
+        self.sw_clip.setChecked(defaults.clipboard.enabled)
+        self.sw_clip_image.setChecked(defaults.clipboard.image_enabled)
+        self.edit_max_image.setText(str(defaults.clipboard.max_image_mb))
 
     @staticmethod
     def _with_strict_modifier(spec: str, strict: bool) -> str:
@@ -608,6 +665,13 @@ class SettingsWindow(QWidget):
                 notify_on_unconfirmed=self.sw_readback_notify.isChecked(),
             )
             data["readback"] = readback
+            clip = dict(data.get("clipboard") or {})
+            clip.update(
+                enabled=self.sw_clip.isChecked(),
+                image_enabled=self.sw_clip_image.isChecked(),
+                max_image_mb=int(self.edit_max_image.text() or 32),
+            )
+            data["clipboard"] = clip
 
             validated = from_dict(data)
             save_config(validated, self.config_file)

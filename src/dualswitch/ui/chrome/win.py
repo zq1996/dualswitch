@@ -25,6 +25,9 @@ REOPEN_ON_ACTIVATE = False
 DOCK_FOLLOWS_WINDOW = False      # Windows 没有程序坞，任务栏按钮跟着窗口走，无需处理
 STRICT_BACKEND = "hook"
 SETTINGS_ROW_HINT = ""
+INLINE_CLIPBOARD_ROW = False     # 剪贴板入口在标题栏（齿轮左边）
+CLIPBOARD_ROW_HINT = ""
+EXTRA_H = 0                      # 列表没变长，窗口高度不变
 
 BACKEND_OPTIONS = ["auto", "dxva2", "command", "mock"]
 

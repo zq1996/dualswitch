@@ -36,6 +36,9 @@ REOPEN_ON_ACTIVATE = True
 DOCK_FOLLOWS_WINDOW = True       # 窗口收起 → 从程序坞消失；菜单栏图标照常留着
 STRICT_BACKEND = "auto"          # mac 只有 CGEventTap 一种后端，左右由 spec 决定
 SETTINGS_ROW_HINT = "\u2318 ,"
+INLINE_CLIPBOARD_ROW = True      # 剪贴板入口放主页面列表（mac 没有自绘标题栏）
+CLIPBOARD_ROW_HINT = "\u2318\u21e7V"
+EXTRA_H = 20                     # 主窗口多一行列表，加高 20px
 
 BACKEND_OPTIONS = ["auto", "m1ddc", "command", "mock"]
 

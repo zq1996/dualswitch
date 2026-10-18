@@ -78,9 +78,9 @@ def test_main_window_states(app):
 
     win.show_banner("error", "SetVCPFeature 返回错误 31")
     assert win.banner.isVisibleTo(win)      # 窗口未 show 时用 isVisibleTo 判断
-    assert win.height() > theme.WIN_H
+    assert win.height() > win.win_h()
     win.clear_banner()
-    assert win.height() == theme.WIN_H
+    assert win.height() == win.win_h()   # mac 比基准高 20（多一行剪贴板）
 
 
 def test_main_window_has_settings_entry(app):
