@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Callable
 
 from . import logging_setup
-from .config import Config
+from .config import SOURCE_UNKNOWN, Config
 from .ddc.base import DDCError, DisplayBackend
 
 log = logging_setup.get("app")
@@ -72,6 +72,9 @@ class SwitchController:
         self._last_detected: str | None = None
         self._confirm = 0
         self._current_source = cfg.effective_host()
+        # 是否「看过一眼」/「这次运行里到底见过外接屏」——决定能不能把看不见解释成在另一台
+        self._source_checked = False
+        self._ever_seen_monitor = False
         self.history: list[SwitchResult] = []
 
         # 切屏前的钩子：剪贴板同步在这里把"本机当前剪贴板"入队（必须极快返回）。
@@ -154,47 +157,93 @@ class SwitchController:
 
         显示器只会在它当前选中的输入端被枚举到：
           · 能枚举到这台屏 → 画面在本机
-          · 枚举不到       → 画面在另一台
-        返回 None 表示这次判断不了（枚举异常）。
+          · 枚举不到，但这次运行里见过它 → 画面在另一台
+          · 枚举不到，而且从来没在这台机器上见过它 → `SOURCE_UNKNOWN`
+
+        第三条是 ISSUE-001：以前只有前两条，于是「没接显示器」被硬说成
+        「画面在 Windows」。返回值 None 仍然表示这一轮判断不了（枚举异常）。
         """
         try:
             monitors = self.backend.list_monitors()
         except Exception as exc:  # 枚举失败不代表画面变了，直接放弃这一轮
             log.debug("检测画面归属失败：%s", exc)
             return None
+        return self.classify(monitors)
+
+    def classify(self, monitors: list) -> str:
+        """给定一次枚举结果，得出画面归属（纯判定，测试直接打这里）。"""
         needle = (self.cfg.monitor_match or "").strip()
         present = any(m.matches(needle) for m in monitors) if needle else bool(monitors)
-        return self.cfg.effective_host() if present else self.cfg.other_host()
+        with self._lock:
+            self._source_checked = True
+            if present:
+                self._ever_seen_monitor = True
+            ever_seen = self._ever_seen_monitor
+        if present:
+            return self.cfg.effective_host()
+        return SOURCE_UNKNOWN if not ever_seen else self.cfg.other_host()
+
+    def note_scan(self, monitors: list) -> None:
+        """把启动时那次只读探测的结果喂进来，省掉「先猜一个再纠正」的闪烁。"""
+        detected = self.classify(monitors)
+        if detected not in (None, SOURCE_UNKNOWN):
+            with self._lock:
+                self._current_source = detected
+
+    @property
+    def source_state(self) -> str:
+        """界面该显示的状态：`windows` / `mac` / `SOURCE_UNKNOWN`。
+
+        与 `current_source` 的区别：后者永远是某一台机器（切换时用它算目标），
+        前者在「根本没接屏，也没见过屏」时如实回答「不知道」。
+        """
+        with self._lock:
+            if not self._source_checked or not self._ever_seen_monitor:
+                return SOURCE_UNKNOWN
+            return self._current_source
 
     def _detect_loop(self) -> None:
         """后台轮询：外部（另一台机器上的 CLI / 显示器 OSD）切换后同步状态。"""
-        while not self._stop_event.wait(self.detect_interval_s):
-            if self.cfg.dry_run:                       # 演练模式不碰真实状态
-                continue
-            if time.monotonic() - self._last_set_at < self.detect_settle_s:
-                continue                               # 自己刚切完，等显示器真正切走/切回
-            detected = self.detect_source()
-            if detected is None:
-                self._last_detected = None
-                self._confirm = 0
-                continue
-            # 连续两轮结果一致才认：显示器消失/出现都有滞后，单轮容易误判
-            if detected == self._last_detected:
-                self._confirm += 1
-            else:
-                self._last_detected = detected
-                self._confirm = 1
-            if self._confirm < 2:
-                continue
-            with self._lock:
-                if detected == self._current_source:
-                    continue
-                self._current_source = detected
-            log.info(
-                "检测到画面已在 %s（显示器%s），已同步内部状态",
-                detected,
-                "接回本机" if detected == self.cfg.effective_host() else "离开本机",
-            )
+        while True:
+            self._detect_once()
+            if self._stop_event.wait(self.detect_interval_s):
+                return
+
+    def _detect_once(self) -> None:
+        if self.cfg.dry_run:                       # 演练模式不碰真实状态
+            return
+        if time.monotonic() - self._last_set_at < self.detect_settle_s:
+            return                                 # 自己刚切完，等显示器真正切走/切回
+        detected = self.detect_source()
+        if detected is None:
+            self._last_detected = None
+            self._confirm = 0
+            return
+        if detected == SOURCE_UNKNOWN:
+            # 没有可归因的画面：不往 _current_source 里写（那里只放 windows / mac），
+            # 界面通过 source_state 自己显示「未检测到外接显示器」
+            self._last_detected = SOURCE_UNKNOWN
+            self._confirm = 1
+            return
+        # 连续两轮结果一致才认：显示器消失/出现都有滞后，单轮容易误判
+        if detected == self._last_detected:
+            self._confirm += 1
+        else:
+            self._last_detected = detected
+            self._confirm = 1
+        if self._confirm < 2:
+            return
+        with self._lock:
+            if detected == self._current_source:
+                return
+            self._current_source = detected
+            # 重新看到屏，说明它确实存在（曾经因为「从未见过」被当成 unknown）
+            self._ever_seen_monitor = True
+        log.info(
+            "检测到画面已在 %s（显示器%s），已同步内部状态",
+            detected,
+            "接回本机" if detected == self.cfg.effective_host() else "离开本机",
+        )
 
     # ------------------------------------------------------------------ 内部
     def _resolve_target(self, forced: str | None = None) -> str:
@@ -238,6 +287,14 @@ class SwitchController:
             self._record(result)
             return result
 
+        # 从没枚举到过外接屏：与其盲发一条注定失败的 Set，不如直接说清楚
+        # （m1ddc 的原文是 "Could not find a suitable external display"，用户看不懂）
+        if forced_target is None and self._source_checked and not self._ever_seen_monitor:
+            result.error = "未检测到外接显示器（可能没接线，或画面在 Windows 那台）"
+            log.warning("跳过切换：本次运行还没有枚举到过外接屏")
+            self._record(result)
+            return result
+
         # 先读剪贴板再切屏（契约 2）：钩子只入队，实测 <1ms，不影响 200ms 目标
         self._run_before_switch(source, target)
 
@@ -262,6 +319,10 @@ class SwitchController:
         self._last_set_at = time.monotonic()
         with self._lock:
             self._current_source = target
+            # 指令已经发到这块屏上了：之后「看不到它」才等于「被切走了」，
+            # 而不是「压根没接线」
+            self._source_checked = True
+            self._ever_seen_monitor = True
 
         log.info("%s", result.summary())
         if result.send_latency_ms > 200:

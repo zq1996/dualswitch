@@ -30,19 +30,28 @@ class MenuEntry:
 
 
 def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> list[MenuEntry]:
-    """生成菜单内容。`current` 是当前画面所在的机器（windows / mac）。"""
+    """生成菜单内容。`current` 是当前画面所在的机器（windows / mac / unknown）。"""
     from .chrome import current as chrome
 
-    other = "mac" if current == "windows" else "windows"
-    other_title = "Mac" if other == "mac" else "Windows"
-    self_title = "Mac" if current == "mac" else "Windows"
+    known = current in PORT
+    if known:
+        other = "mac" if current == "windows" else "windows"
+        other_title = "Mac" if other == "mac" else "Windows"
+        self_title = "Mac" if current == "mac" else "Windows"
+        switch_title = f"切换到 {other_title}（{PORT[other]}）"
+        force_title = f"强制切到 {self_title}（{PORT[current]}）"
+    else:
+        # 没接过屏 / 屏在另一台却看不到：菜单不猜主机，也不给会失败的入口
+        self_title = "未检测到外部显示器"
+        switch_title = "切换（未检测到显示器）"
+        force_title = "强制切换（未检测到显示器）"
 
     return [
         MenuEntry("label", f"当前画面：{self_title}"),
         MenuEntry("item", "打开主界面", actions.get("open")),
         MenuEntry("sep"),
-        MenuEntry("item", f"切换到 {other_title}（{PORT[other]}）", actions.get("switch"), default=True),
-        MenuEntry("item", f"强制切到 {self_title}（{PORT[current]}）", actions.get("force")),
+        MenuEntry("item", switch_title, actions.get("switch"), default=True, enabled=known),
+        MenuEntry("item", force_title, actions.get("force"), enabled=known),
         MenuEntry("sep"),
         MenuEntry("item", "探测显示器 / 读取输入源", actions.get("probe")),
         MenuEntry("item", "剪贴板…", actions.get("clipboard"), key="v", modifier="cmd_shift"),

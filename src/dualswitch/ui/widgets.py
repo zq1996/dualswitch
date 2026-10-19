@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..config import SOURCE_UNKNOWN
+
 from . import theme
 
 
@@ -255,6 +257,12 @@ class DeviceCard(QFrame):
         else:
             self.setGraphicsEffect(None)
 
+    def set_standby(self, hint: str = "未使用") -> None:
+        """未知态：灯灭、不可点，文案别承诺「点击切换」（点了也切不了）。"""
+        self.set_active(False)
+        self.state.setText(hint)
+        self.setEnabled(False)
+
     def mouseReleaseEvent(self, event):  # noqa: N802
         if event.button() == Qt.LeftButton and not self._active:
             self.clicked.emit(self.host)
@@ -293,6 +301,7 @@ class HeroCard(QFrame):
         super().__init__(parent)
         self.setObjectName("hero")
         self.setMinimumHeight(196)
+        self._busy = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
@@ -368,6 +377,10 @@ class HeroCard(QFrame):
 
     # ------------------------------------------------------------------ 状态
     def set_state(self, host: str, monitor_line: str) -> None:
+        if host == SOURCE_UNKNOWN:
+            self.set_unknown()
+            return
+        self.plate.setVisible(True)
         title = "Windows" if host == "windows" else "Mac"
         self.title.setText(title)
         self.sub.setText(monitor_line)
@@ -376,6 +389,21 @@ class HeroCard(QFrame):
         )
         other = "Mac" if host == "windows" else "Windows"
         self.btn_text.setText(f"切换到 {other}")
+        self.button.setEnabled(not self._busy)
+        self.kbd.setVisible(self._kbd_enabled and not self._busy)
+
+    def set_unknown(self) -> None:
+        """第三态：没有任何证据说明画面属于哪台（没接屏 / 屏在另一台）。
+
+        这里**不能猜**一个主机名 —— 猜错会让用户照着界面去排障，
+        比什么都不说更糟（ISSUE-001）。
+        """
+        self.plate.setVisible(False)
+        self.title.setText("未检测到外接显示器")
+        self.sub.setText("没接线，或画面在另一台机器上")
+        self.btn_text.setText("未检测到显示器")
+        self.button.setEnabled(False)
+        self.kbd.setVisible(False)      # 这时候按热键也切不动，别给键帽暗示
 
     def set_hotkey(self, hotkey_label: str) -> None:
         """主按钮右侧键帽芯片显示当前热键（`Alt+Space` → `Alt + Space`；mac 上 → `⌥ Space`）。"""
@@ -385,6 +413,7 @@ class HeroCard(QFrame):
         self.kbd.setToolTip(hotkey_label)
 
     def set_busy(self, busy: bool, target_label: str = "") -> None:
+        self._busy = bool(busy)
         self.button.setEnabled(not busy)
         if busy:
             self.btn_text.setText(f"正在切换到 {target_label}…")

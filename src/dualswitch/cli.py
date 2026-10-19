@@ -108,8 +108,10 @@ def cmd_run(args) -> int:
         return 2
 
     # 启动时一次性安全探测：只读，不发送 Set（需求文档 3.5）
+    startup_monitors: list = []
     try:
         monitors = backend.list_monitors()
+        startup_monitors = monitors
         log.info("发现 %d 个物理显示器：%s", len(monitors), "; ".join(m.label() for m in monitors))
     except DDCError as exc:
         log.warning("枚举显示器失败：%s", exc)
@@ -120,6 +122,8 @@ def cmd_run(args) -> int:
         log.info("启动探测读取失败（符合 Q2790PC HDMI 通道已知行为，后续全部盲发）：%s", exc)
 
     controller = SwitchController(cfg, backend)
+    # 把这次探测的结果直接喂给控制器：界面第一帧就是对的，不用先猜「画面在本机」再纠正
+    controller.note_scan(startup_monitors)
 
     warning: str | None = None
     hotkey = None

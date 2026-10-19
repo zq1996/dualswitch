@@ -21,6 +21,7 @@ from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .. import logging_setup, winenv
+from ..config import SOURCE_UNKNOWN
 from . import theme
 from .chrome import current as chrome
 from .clipboard_feed import LocalClipFeed
@@ -172,7 +173,11 @@ class UiRunner(QObject):
         self._retry_on_activate = False       # 去授权后切回应用就自动重试热键
         self._hotkey_spec = cfg.hotkey
         self._seen_history = len(controller.history)
-        self._seen_source = controller.current_source
+        self._seen_source = controller.source_state
+        # 首帧就用控制器已经确认过的状态（启动时那次只读探测已经喂给 note_scan 了）
+        self.window.set_state(self._seen_source)
+        if self._seen_source == SOURCE_UNKNOWN:
+            self.window.set_foot("插上外接屏会自动恢复 · 也可用「探测显示器」", ok=False)
 
         self.menubar = None
         self._build_app_menu()
@@ -440,7 +445,7 @@ class UiRunner(QObject):
 
         entries = build_menu_entries(
             self.cfg,
-            self.controller.current_source,
+            self.controller.source_state,
             self._hotkey_label(),
             self._status_actions(),
         )
@@ -624,14 +629,17 @@ class UiRunner(QObject):
     def _poll_state(self) -> None:
         changed = False
         self._refresh_hotkey_ui()      # 兜底：任何路径改了热键，250ms 内界面一定跟上
-        source = self.controller.current_source
+        source = self.controller.source_state
         if source != self._seen_source:
             self._seen_source = source
             self.window.set_state(source)
             self._refresh_menu()       # 菜单里的「当前画面 / 切换目标」跟着翻
             changed = True
-            # 没有新的切换记录 = 状态是后台检测纠正的（另一台机器切回来的）
-            if len(self.controller.history) == self._seen_history:
+            if source == SOURCE_UNKNOWN:
+                # 不是「外部切走了」，而是根本没有可归因的画面 —— 别再说「已同步外部切换」
+                self.window.set_foot("插上外接屏会自动恢复 · 也可用「探测显示器」", ok=False)
+            elif len(self.controller.history) == self._seen_history:
+                # 没有新的切换记录 = 状态是后台检测纠正的（另一台机器切回来的）
                 label = "Windows" if source == "windows" else "Mac"
                 self.window.set_foot(f"已同步外部切换 · 当前 {label}")
 
@@ -648,7 +656,7 @@ class UiRunner(QObject):
             self._refresh_led_only()
 
     def _refresh_led_only(self) -> None:
-        host = self.controller.current_source
+        host = self.controller.source_state
         self.window.card_win.set_active(host == "windows")
         self.window.card_mac.set_active(host == "mac")
 
@@ -719,7 +727,7 @@ class UiRunner(QObject):
         self.controller.cfg = cfg
         self.window.cfg = cfg
         self.settings.cfg = cfg
-        self.window.set_state(self.controller.current_source)
+        self.window.set_state(self.controller.source_state)
 
         # 热键改了才重建，避免每次保存都抢一次注册
         if cfg.hotkey != old_hotkey or self.hotkey is None:

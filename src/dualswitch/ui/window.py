@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..config import SOURCE_UNKNOWN
 from . import theme
 from .chrome import current as chrome
 from .widgets import (
@@ -95,6 +96,7 @@ class MainWindow(QWidget):
         self._allow_close = False
         self.withdraw_to_tray = True       # 托盘真的可用时，关窗口 = 收进托盘
         self._host = cfg.effective_host()
+        self._busy = False
 
         # 平台差异（谁画窗口、要不要自绘标题栏）全部来自 chrome，这里不做判断
         self.chrome = chrome()
@@ -235,8 +237,17 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------ 状态
     def set_state(self, host: str) -> None:
         self._host = host
+        if host == SOURCE_UNKNOWN:
+            # 第三态：不猜主机（ISSUE-001）。_other 保持上一次的值，
+            # 免得 set_busy 之类的地方拿到一个不存在的主机名。
+            self.hero.set_unknown()
+            self.card_win.set_standby("未连接")
+            self.card_mac.set_standby("未连接")
+            return
         other = "mac" if host == "windows" else "windows"
         self.hero.set_state(host, self._monitor_line(host))
+        self.card_win.setEnabled(not self._busy)
+        self.card_mac.setEnabled(not self._busy)
         self.card_win.set_active(host == "windows")
         self.card_mac.set_active(host == "mac")
         self._other = other
@@ -246,8 +257,11 @@ class MainWindow(QWidget):
         return f"{name} · {PORT[host]} · 输入源 {self.cfg.sources[host]}"
 
     def set_busy(self, busy: bool) -> None:
+        self._busy = bool(busy)
         target = "Mac" if self._other == "mac" else "Windows"
         self.hero.set_busy(busy, target)
+        if not busy and self._host == SOURCE_UNKNOWN:
+            self.hero.button.setEnabled(False)   # 未知态下按钮始终不可点
         self.card_win.setEnabled(not busy)
         self.card_mac.setEnabled(not busy)
 
