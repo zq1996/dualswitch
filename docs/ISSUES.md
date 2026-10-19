@@ -29,25 +29,29 @@
 
 ---
 
-## ISSUE-002 屏在 Windows 输入时，Mac 端无法切回
+## ISSUE-002 屏停在另一台的输入上时，本机无法切回（**双向**）
 
 - **owner**: mac（`sync/protocol.py` + `sync/engine.py` 都在共享层；Windows 端 0 行代码）
-- **影响**: 两端（Windows 端只需 pull + 验证）
-- **现象**: 屏走 HDMI（Windows）时，macOS 侧枚举不到该屏，`m1ddc set input` 报
-  `Could not find a suitable external display`，点「切换到 Mac」必然失败。
+- **影响**: 两端，两个方向都成立 —— Mac 看不到屏时请 Windows 代发，Windows 看不到屏时同样请 Mac 代发
+- **现象**: 屏走 HDMI（Windows）时 macOS 枚举不到它，`m1ddc set input` 报
+  `Could not find a suitable external display`；反过来屏走 USB-C 时 Windows 也看不到它。
+  谁不持有画面，谁就切不回来。
 - **设计**: 见 [`REMOTE-SWITCH.md`](REMOTE-SWITCH.md)。**本地优先、失败才请对端代发**，
-  所以「屏在别的输入时 macOS 还能不能枚举到」这个未验证项不再阻塞实现：
-  能枚举到走本地，枚举不到才走链路。
+  所以「屏在别的输入时本机还能不能枚举到」这个未验证项不再阻塞实现：
+  能枚举到走本地，枚举不到才走链路。能力双向，代码只有一份（共享层）。
 - **契约（`[contract]`）**: 新增 `T_SWITCH = 0x30` / `T_SWITCH_ACK = 0x31`，
   header `{"vcp":96,"value":18,"req":"<幂等 id>"}`；旧端落到「忽略未知帧」，不断连。
 - **验收**:
-  1. `pytest -q tests/test_remote_switch.py --basetemp=.pytest-tmp`（17 例：帧往返、超时、
-     回执、拒绝、幂等、非法 VCP、本地失败回落、对端未就绪不发请求、未知态按钮）
-  2. 真机：屏在 Windows，Mac 点「从 Windows 切过来」→ 3 秒内切过来；
-     Windows 端日志出现 `替对端切屏 VCP 0x60=18 → ok`
-  3. 拔掉对端网线：按钮 250ms 内变灰
-- **状态**: 已合并 `012a4f3`（mac 侧全链路 + 17 例测试）；Windows 端 pull 即可。
-  真机验收（需要接显示器）待做 —— 当前机器没外接屏。
+  1. `pytest -q tests/test_remote_switch.py --basetemp=.pytest-tmp`（18 例：帧往返、超时、
+     回执、拒绝、幂等、非法 VCP、本地失败回落、**两个方向都回落**、对端未就绪不发请求、
+     未知态按钮 + 两端文案）
+  2. 真机方向 A：屏在 HDMI，Mac 点「从 Windows 切过来」→ 3 秒内切过来；
+     Windows 端日志 `替对端切屏 VCP 0x60=18 → ok`
+  3. 真机方向 B：屏在 USB-C，Windows 点「从 Mac 切过来」→ 3 秒内切回；
+     Mac 端日志 `替对端切屏 VCP 0x60=17 → ok`
+  4. 拔掉任一端网线：按钮 250ms 内变灰
+- **状态**: 已合并 `012a4f3`（mac 侧全链路 + 18 例测试）；Windows 端 pull 即可。
+  真机验收（需要接显示器，两个方向各一次）待做 —— 当前机器没外接屏。
 
 ---
 

@@ -214,15 +214,29 @@ def test_local_failure_falls_back_to_peer():
 
 
 def test_never_seen_monitor_uses_peer():
+    """Windows 端看不到屏（画面在 Mac）时，请 Mac 代发 —— 方向是对称的。"""
     backend = MockBackend(current=17, monitors=[])
-    ctl = SwitchController(make_cfg(), backend)
+    ctl = SwitchController(make_cfg(), backend)          # this_host = windows
     ctl.note_scan([])
     assert ctl.source_state == SOURCE_UNKNOWN
     ctl.remote_switch = lambda value: (True, "")
     result = ctl.switch_now()
     assert result.ok is True and result.via == "remote"
+    assert result.target == "mac" and result.value == 18
     assert backend.set_calls == []          # 一条本地 Set 都没发
     assert ctl.source_state == "mac"
+
+
+def test_mac_can_ask_windows_too():
+    """反过来同理：Mac 端看不到屏时请 Windows 代发（不是 Mac 专属能力）。"""
+    backend = MockBackend(current=18, monitors=[], fail_set=True)
+    ctl = SwitchController(make_cfg(this_host="mac"), backend)
+    ctl.note_scan([])
+    ctl.remote_switch = lambda value: (True, "")
+    result = ctl.switch_now()
+    assert result.ok is True and result.via == "remote"
+    assert result.target == "windows" and result.value == 17
+    assert ctl.current_source == "windows"
 
 
 def test_never_seen_monitor_without_peer_still_fails_clearly():
@@ -270,6 +284,7 @@ def qt_app():
 def test_unknown_state_enables_button_when_peer_ready(qt_app):
     from dualswitch.ui.window import MainWindow
 
+    # Windows 端：只能请 Mac 代发
     win = MainWindow(make_cfg(), "Alt+Space", "v1.0.0")
     win.set_state(SOURCE_UNKNOWN)
     assert win.hero.button.isEnabled() is False
@@ -282,3 +297,14 @@ def test_unknown_state_enables_button_when_peer_ready(qt_app):
     win.set_remote_available(False)
     assert win.hero.button.isEnabled() is False
     assert win.hero.btn_text.text() == "未检测到显示器"
+
+
+def test_mac_unknown_state_asks_windows(qt_app):
+    """反方向：Mac 端未知态时按钮写「从 Windows 切过来」。"""
+    from dualswitch.ui.window import MainWindow
+
+    win = MainWindow(make_cfg(this_host="mac"), "Alt+Space", "v1.0.0")
+    win.set_state(SOURCE_UNKNOWN)
+    win.set_remote_available(True)
+    assert win.hero.button.isEnabled() is True
+    assert "从 Windows 切过来" in win.hero.btn_text.text()
