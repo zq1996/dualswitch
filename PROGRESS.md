@@ -1,6 +1,16 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-18 17:40
+> 最后更新：2026-10-19 09:20
+>
+> 👉 **2026-10-19（ISSUE-001 已关闭）**：画面归属加了**第三态 `unknown`**。以前
+> `detect_source()` 只有「能枚举到→本机 / 枚举不到→另一台」两分支，拔掉外接屏启动
+> 4 秒后界面会谎报「已同步外部切换 · 当前 Windows」。现在「本次运行从没见过这块屏」
+> 单列为一态：状态卡显示「未检测到外接显示器」、按钮与设备卡置灰、菜单不给会失败的入口，
+> 也**不会盲发 Set**（直接给中文原因）。启动时那次只读探测经 `note_scan()` 喂给控制器，
+> 首帧就是对的。`tests/test_source_state.py` 15 例；全量 198 passed。
+> **协作流程见 [`docs/COORDINATION.md`](docs/COORDINATION.md) + [`docs/ISSUES.md`](docs/ISSUES.md)**
+> （任务=编号+可观察行为+验收命令；共享层只有 macOS 端一个作者）。
+> 下一个：ISSUE-002（屏在 Windows 时 Mac 切回来），**先做 30 秒物理验证**再设计协议。
 >
 > **并行开发中：跨端剪贴板同步（P0 文字 + P1 图片）**
 > 分工与契约见 [`docs/CLIPBOARD-SYNC-CONTRACT.md`](docs/CLIPBOARD-SYNC-CONTRACT.md)。
