@@ -498,10 +498,17 @@ dualswitch/
   · **根因级修复**：三个 `.ps1` 都是**无 BOM 的 UTF-8**，Windows PowerShell 5.1 按 GBK 读，
     中文注释的字节吃掉后面的引号 → `build.ps1` 报「语句块中缺少右 `}`」，文档里那条打包命令
     **根本跑不起来**。全部补 UTF-8 BOM，并在文件头写明「改完别丢 BOM」。
-  · **打包后自检**：`build.ps1` 现在会跑 `--selfcheck` 并**用 `Start-Process -Wait` 取退出码**
-    （`--windowed` 是 GUI 子系统程序，`& $exe` 不会等它、`$LASTEXITCODE` 也拿不到）；
+  · **打包后自检**：`build.ps1` 现在会跑 `--selfcheck` 并取到退出码。`--windowed` 是 GUI 子系统
+    程序，`& $exe` 不会等它、`$LASTEXITCODE` 也拿不到；`Start-Process -Wait` 在本机（stdout 已
+    重定向到文件时）实测**直接卡死**（跑了 6 分钟没动静，日志停在 `Build complete`）。
+    最后改用 .NET `ProcessStartInfo`（`UseShellExecute=false` + 重定向 stdout/stderr）：
+    能等、能取退出码、还能把「自检通过：17 个界面模块可导入」打出来。
     自检模块表补上 `clipboard_page` / `clipboard_feed` / `focus_style` / `sync.*` /
     `chrome.win32tray` / `clipboard.windows` —— 这些是间接导入，PyInstaller 漏掉时双击就闪退。
+  · 端到端复跑：文档里那条 `-File packaging\windows\build.ps1` 现在**退出码 0**，
+    日志依次出现 `Build complete` → `自检通过：17 个界面模块` → `翻译只保留中文…删除 96 个`
+    → `完整性标签：High`；产物 134MB，启动实测 `打包版=True` / `High` / 托盘注册成功 /
+    热键启用 / 剪贴板同步已启动。
   · 测试：全量 **277 passed**；三个脚本 `Parser::ParseFile` 语法校验通过。
 - 2026-10-19 **[test] 远端代发补「本机端到端」验收工具（ISSUE-002）**。
   · 新增 `tools/e2e_remote_switch.py`：起两个**真实** `SyncEngine`（A 扮 Windows、B 扮 Mac），

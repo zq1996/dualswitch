@@ -64,11 +64,27 @@ if ($LASTEXITCODE -ne 0) { throw "打包失败" }
 # 界面模块大多是「间接 import」（clipboard_page / focus_style / win32tray 由 runner 或
 # 函数内导入）。PyInstaller 漏掉它们时，源码跑得好好的、双击 exe 却立刻闪退，
 # 日志里只有一句 ModuleNotFoundError。这里跑一遍导入自检，缺了就让打包直接失败。
-# 注意：`--windowed` 是 GUI 子系统程序，`& $exe` 不会等它跑完（$LASTEXITCODE 也拿不到），
-# 必须用 Start-Process -Wait 取退出码。
-$check = Start-Process -FilePath $target -ArgumentList "--selfcheck" -Wait -PassThru -WindowStyle Hidden
-if ($check.ExitCode -ne 0) { throw "打包自检失败：界面模块没进包（退出码 $($check.ExitCode)）" }
-Write-Host "自检通过：界面模块齐全（--selfcheck 退出码 0）"
+#
+# 为什么不用 Start-Process：`--windowed` 是 GUI 子系统程序，`& $exe` 不等它、也拿不到
+# $LASTEXITCODE；而 `Start-Process -Wait` 在本机（stdout 已被重定向到文件时）实测会卡住。
+# 用 .NET 的 Process + UseShellExecute=false 最稳：能等、能取退出码、还能把自检输出打出来。
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $target
+$psi.Arguments = "--selfcheck"
+$psi.UseShellExecute = $false
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$psi.CreateNoWindow = $true
+$check = [System.Diagnostics.Process]::Start($psi)
+$checkOut = $check.StandardOutput.ReadToEnd()
+$checkErr = $check.StandardError.ReadToEnd()
+$check.WaitForExit()
+if ($check.ExitCode -ne 0) {
+    Write-Host $checkOut
+    Write-Host $checkErr
+    throw "打包自检失败：界面模块没进包（退出码 $($check.ExitCode)）"
+}
+Write-Host $checkOut.Trim()
 
 # ── 翻译裁剪 ───────────────────────────────────────────────────────────────
 # Qt 自带 200 个各语言翻译（.qm，约 7MB），本工具只用中文，且代码里没有安装
