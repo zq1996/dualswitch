@@ -484,6 +484,25 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-19 **[packaging] Windows 产物重打 + 自启改启动界面；顺手修掉「.ps1 没 BOM，打包脚本根本跑不起来」**。
+  · **重打包**：`dist\dualswitch` 从 10-18 16:10 的旧版重打到 21:23（含剪贴板页重做、设置内嵌、
+    未知态三态、远端代发、焦点治理）。实测：`打包版=True`、**完整性级别 High（与 explorer 同级）**、
+    托盘图标注册成功（位置 `2232,1400`）、热键 `Alt+Space` 已启用、剪贴板同步已启动、进程常驻。
+  · **翻译裁剪漏了 7MB**：PySide6 6.12 把 `translations` 从 `_internal\PySide6\Qt\translations`
+    挪到了 `_internal\PySide6\translations`，脚本只认旧路径 → 新产物把 96 个 `.qm` 全带上了。
+    改成两个路径都查（老打包机照旧），并改用 `[System.IO.File]::Delete` 删（本机把 `Remove-Item`
+    换成了安全壳子，不接受管道输入）。产物 141MB → **134MB**，只剩 3 个 `*_zh_CN.qm`。
+  · **自启**：`install_autostart.ps1` 以前给 exe 传 `run`（pystray 无窗口），自启后只有一个旧托盘，
+    新界面得自己去双击 —— 和 mac 登录项启动 `.app` 不一致。默认改 `ui`，新增 `-TrayOnly`（旧行为）
+    与 `-Minimized`（登录不抢焦点），`-UsePython` 分支同步。
+  · **根因级修复**：三个 `.ps1` 都是**无 BOM 的 UTF-8**，Windows PowerShell 5.1 按 GBK 读，
+    中文注释的字节吃掉后面的引号 → `build.ps1` 报「语句块中缺少右 `}`」，文档里那条打包命令
+    **根本跑不起来**。全部补 UTF-8 BOM，并在文件头写明「改完别丢 BOM」。
+  · **打包后自检**：`build.ps1` 现在会跑 `--selfcheck` 并**用 `Start-Process -Wait` 取退出码**
+    （`--windowed` 是 GUI 子系统程序，`& $exe` 不会等它、`$LASTEXITCODE` 也拿不到）；
+    自检模块表补上 `clipboard_page` / `clipboard_feed` / `focus_style` / `sync.*` /
+    `chrome.win32tray` / `clipboard.windows` —— 这些是间接导入，PyInstaller 漏掉时双击就闪退。
+  · 测试：全量 **277 passed**；三个脚本 `Parser::ParseFile` 语法校验通过。
 - 2026-10-19 **[test] 远端代发补「本机端到端」验收工具（ISSUE-002）**。
   · 新增 `tools/e2e_remote_switch.py`：起两个**真实** `SyncEngine`（A 扮 Windows、B 扮 Mac），
     各占一个空闲端口，走 127.0.0.1 的真实 socket + 真实加密 + 真实握手，**8/8 通过**：

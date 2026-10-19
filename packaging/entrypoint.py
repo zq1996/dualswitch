@@ -81,7 +81,19 @@ def _selfcheck() -> int:
         "dualswitch.ui.window",
         "dualswitch.ui.settings",
         "dualswitch.ui.runner",
+        # 间接导入的三个（runner / 函数内 import）：漏掉它们时双击就是闪退
+        "dualswitch.ui.clipboard_page",
+        "dualswitch.ui.clipboard_feed",
+        "dualswitch.ui.focus_style",
+        # 剪贴板同步链路（引擎 + 协议），同样没有顶层入口 import
+        "dualswitch.sync.engine",
+        "dualswitch.sync.protocol",
+        "dualswitch.sync.transport",
     ]
+    if sys.platform == "win32":
+        # 只存在于 Windows 的兜底托盘：`build_fallback_status_item` 里函数内导入
+        modules.append("dualswitch.ui.chrome.win32tray")
+        modules.append("dualswitch.clipboard.windows")
     failures: list[str] = []
     for name in modules:
         try:

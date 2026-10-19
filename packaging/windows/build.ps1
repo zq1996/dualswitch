@@ -1,7 +1,12 @@
-# 打包 Windows 可执行程序
+﻿# 打包 Windows 可执行程序
 # 用法（在项目根目录执行）：
 #   powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 # 产物：dist\dualswitch\dualswitch.exe（整个文件夹一起拷走 / 建快捷方式）
+#
+# ⚠️ 本文件必须保存为 **UTF-8 with BOM**。Windows PowerShell 5.1 会把无 BOM 的 UTF-8
+#    当成 GBK 读，中文注释里的字节会「吃掉」后面的引号，脚本直接解析失败
+#    （2026-10-19 就是这样：仓库里的 .ps1 全都没 BOM，`-File build.ps1` 一跑就报
+#    「语句块中缺少右 }」）。改完确认前三个字节是 EF BB BF。
 #
 # 默认 --onedir：启动不需要往 %TEMP% 解压，本机实测 onefile 双击有大约三成概率报
 # "Could not create temporary directory!"（系统镜像/安全软件间歇性拦截 Temp 建目录）。
@@ -55,17 +60,40 @@ $target = if ($OneFile) { "$root\dist\dualswitch.exe" } else { "$root\dist\duals
 
 if ($LASTEXITCODE -ne 0) { throw "打包失败" }
 
+# ── 打包自检 ───────────────────────────────────────────────────────────────
+# 界面模块大多是「间接 import」（clipboard_page / focus_style / win32tray 由 runner 或
+# 函数内导入）。PyInstaller 漏掉它们时，源码跑得好好的、双击 exe 却立刻闪退，
+# 日志里只有一句 ModuleNotFoundError。这里跑一遍导入自检，缺了就让打包直接失败。
+# 注意：`--windowed` 是 GUI 子系统程序，`& $exe` 不会等它跑完（$LASTEXITCODE 也拿不到），
+# 必须用 Start-Process -Wait 取退出码。
+$check = Start-Process -FilePath $target -ArgumentList "--selfcheck" -Wait -PassThru -WindowStyle Hidden
+if ($check.ExitCode -ne 0) { throw "打包自检失败：界面模块没进包（退出码 $($check.ExitCode)）" }
+Write-Host "自检通过：界面模块齐全（--selfcheck 退出码 0）"
+
 # ── 翻译裁剪 ───────────────────────────────────────────────────────────────
 # Qt 自带 200 个各语言翻译（.qm，约 7MB），本工具只用中文，且代码里没有安装
 # QTranslator —— 除 zh_CN 外全是死重量，打出来就删掉。
-$qmDir = Join-Path (Split-Path $target -Parent) "_internal\PySide6\Qt\translations"
-if (Test-Path $qmDir) {
-    $qmAll = @(Get-ChildItem -Path $qmDir -Filter "*.qm")
-    $qmDrop = @($qmAll | Where-Object { $_.Name -notlike "*_zh_CN.qm" })
-    if ($qmDrop.Count -gt 0) { $qmDrop | Remove-Item -Force }
-    Write-Host "翻译只保留中文（zh_CN）：保留 $($qmAll.Count - $qmDrop.Count) 个，删除 $($qmDrop.Count) 个 .qm"
+# PySide6 6.12 起目录从 `PySide6\Qt\translations` 挪到了 `PySide6\translations`，
+# 两个位置都查一遍（老版本打包机照旧能裁）。
+$outRoot = Split-Path $target -Parent
+$qmDirs = @(
+    (Join-Path $outRoot "_internal\PySide6\translations"),
+    (Join-Path $outRoot "_internal\PySide6\Qt\translations")
+) | Where-Object { Test-Path $_ }
+if ($qmDirs.Count -gt 0) {
+    foreach ($qmDir in $qmDirs) {
+        $qmAll = @(Get-ChildItem -Path $qmDir -Filter "*.qm")
+        $dropped = 0
+        foreach ($f in $qmAll) {
+            if ($f.Name -like "*_zh_CN.qm") { continue }
+            # 用 .NET 直接删：某些环境把 Remove-Item 换成了安全壳子（不接受管道输入）
+            [System.IO.File]::Delete($f.FullName)
+            $dropped++
+        }
+        Write-Host "翻译只保留中文（zh_CN）：$qmDir 保留 $($qmAll.Count - $dropped) 个，删除 $dropped 个 .qm"
+    }
 } else {
-    Write-Host "[warn] 没找到 $qmDir，跳过翻译裁剪"
+    Write-Host "[warn] 没找到 translations 目录（PySide6\translations 或 PySide6\Qt\translations），跳过翻译裁剪"
 }
 
 # ── 完整性标签 ─────────────────────────────────────────────────────────────

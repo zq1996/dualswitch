@@ -172,9 +172,14 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 # "Could not create temporary directory!"（安全软件间歇拦截 %TEMP% 建目录），所以默认用 onedir
 powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1 -OneFile
 
-# 开机自启（启动文件夹快捷方式）
+# 开机自启（启动文件夹快捷方式；默认启动完整界面，与 mac 登录项一致）
 powershell -ExecutionPolicy Bypass -File packaging\windows\install_autostart.ps1 -Exe .\dist\dualswitch\dualswitch.exe
+# 只要托盘不要窗口：加 -TrayOnly；登录时窗口最小化：加 -Minimized
 ```
+
+> 打包脚本会在构建后跑一次 `--selfcheck`（界面模块导入自检），并在产物上把完整性标签抬到
+> `High` —— 少了后者，exe 会以低完整性级别运行，托盘图标被 UIPI 静默丢掉（见 §9 与
+> `docs/TROUBLESHOOTING.md` §4.1）。
 
 **macOS**
 

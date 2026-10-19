@@ -1,4 +1,4 @@
-# 取消 Windows 开机自启
+﻿# 取消 Windows 开机自启
 
 $ErrorActionPreference = "Stop"
 $startup = [Environment]::GetFolderPath("Startup")
