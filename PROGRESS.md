@@ -127,7 +127,7 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 
 | # | 阶段 | 状态 | 证据 |
 |---|---|---|---|
-| 1 | 调研现成方案并选型 | ✅ 完成 | `docs/RESEARCH.md`，结论：无完全匹配，自研应用层 |
+| 1 | 调研现成方案并选型 | ✅ 完成 | `docs/archive/RESEARCH.md`，结论：无完全匹配，自研应用层 |
 | 2 | 项目骨架 + 配置/日志 | ✅ 完成 | `config.py` / `logging_setup.py`，14 个配置用例通过 |
 | 3 | DDC 后端（Win/macOS/command/mock） | ✅ 完成（Win 真机） | `probe` 输出 `MONITOR\AOC2790`、`VCP 0x60 = 17` |
 | 4 | 全局热键（Win register + hook，macOS CGEventTap） | ✅ 完成（Win 真机） | `tools/e2e_hotkey.py` 两种模式均 OK |
@@ -213,7 +213,7 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 ### 3.4 配置
 - JSON，单文件，未知字段直接报错（防止拼写错误静默失效）。
 - 默认值即生产值：`sources = {windows:17, mac:18}`、`monitor_match="AOC"`。
-  （18 是实测出来的，不是 MCCS 标准的 27 —— 见 `docs/VERIFY-M1DDC.md`）
+  （18 是实测出来的，不是 MCCS 标准的 27 —— 见 `docs/archive/VERIFY-M1DDC.md`）
 - 热键字符串在配置校验阶段就解析，非法值启动即失败，不会带病运行。
 
 ### 3.5 CLI
@@ -439,7 +439,8 @@ dualswitch/
     ├── UI-DESIGN.md             Windows 界面规格
     ├── UI-DESIGN-MAC.md         macOS 界面规格（菜单栏为主）
     ├── PLATFORM-SPLIT.md        ★ 平台分层契约（另一端 AI 先读这个）
-    └── RESEARCH / VERIFY-M1DDC / TROUBLESHOOTING
+    ├── COORDINATION / ISSUES    双端协作规则与任务台账
+    └── archive/                 历史记录（RESEARCH / VERIFY-M1DDC / 两份 PLAN/HANDOFF / 托盘复盘）
 ```
 
 ---
@@ -912,7 +913,7 @@ dualswitch/
   下一步改为在 Mac 上 `m1ddc get input` 直接读出 USB-C 的真实值。
 - 2026-10-17 16:00 **macOS 首次实测未通过**：`m1ddc set input 17/27` 无反应，R-1 风险触发。
   新增 `tools/diag_macos.sh`（架构/外接屏识别/VCP 四项读值/亮度写入测试），
-  重写 `docs/VERIFY-M1DDC.md` 的失败定位决策树（A 画面归属 → B DDC 通道 → C 输入源指令 → D 退路）。
+  重写 `docs/archive/VERIFY-M1DDC.md` 的失败定位决策树（A 画面归属 → B DDC 通道 → C 输入源指令 → D 退路）。
 - 2026-10-17 15:42 生成 `dualswitch-1.0.0-mac.zip`（70KB，41 文件，排除 .venv/缓存），供拷到 Mac 验证。
 - 2026-10-17 15:35 `tools/verify_m1ddc.sh` 增加 `--status` / `--scan` 两种模式与「回传报告」输出；
   标记 T2 为当前待办。

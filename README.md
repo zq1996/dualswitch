@@ -20,7 +20,7 @@
 ## 1. 为什么不用现成工具
 
 GitHub 上没有同时满足「Windows + macOS 双端 + 全局热键 + 托盘常驻 + 对 Q2790PC 盲发」的项目。
-最接近的几个各有缺口（详见 [docs/RESEARCH.md](docs/RESEARCH.md)）：
+最接近的几个各有缺口（详见 [docs/archive/RESEARCH.md](docs/archive/RESEARCH.md)）：
 
 | 项目 | 覆盖 | 缺口 |
 |---|---|---|
@@ -223,7 +223,7 @@ dualswitch/
 ├── design/                windows/index.html（界面设计稿）+ icon/（透明母版 / PNG / ICO）
 ├── start-ui.bat           双击启动图形界面（无控制台）
 ├── packaging/             windows + macos 打包与自启（macos/install-app.sh 装进「应用程序」）
-└── docs/                  RESEARCH / UI-DESIGN / VERIFY-M1DDC / TROUBLESHOOTING
+└── docs/                  现状文档（CONTRACT / PLATFORM-SPLIT / UI-DESIGN* / TROUBLESHOOTING）+ archive/（历史记录）
 ```
 
 ---
