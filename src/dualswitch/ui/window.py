@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -144,6 +145,13 @@ class MainWindow(QWidget):
         # 页面栈：主页面 + 剪贴板页 +（mac 上）设置页。都不另开窗口，点「返回」就回主页面。
         # Windows 的设置仍是独立窗口（自绘标题栏，嵌进来会变成两层标题栏）。
         self.pages = QStackedWidget()
+        # 页面栈是「一页一高度」的：每页按自己的设计高度撑窗口（主/剪贴板 600，设置 484）。
+        # 但 QStackedWidget 的最小尺寸会把**所有**页（含隐藏页）的尺寸要求合到一起，
+        # 于是栈永远要求「最高那一页」的高度，`_apply_height` 的 setFixedHeight 就压不下去
+        # ——实测日志里 `minimum size: 440x654 maximum size: 440x600`（下限大于上限），
+        # 窗口既缩不回也每翻一页就跳一次，透明分层窗口还会 UpdateLayeredWindowIndirect 失败。
+        # 纵向给 Ignored：栈不再自报最小高度，窗口高度完全由 `_apply_height` 决定。
+        self.pages.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)
         self.settings_page = None
         self.clipboard_page = None
         self._on_settings = False
@@ -323,25 +331,46 @@ class MainWindow(QWidget):
             return
         self._on_clipboard = True
         self._on_settings = False
-        self.pages.setCurrentWidget(self.clipboard_page)
-        self._set_title("屏幕切换 · 剪贴板")
-        self._apply_height(self.win_h())
+        self._resize_then_switch(self.win_h(), self.clipboard_page, "屏幕切换 · 剪贴板")
 
     def show_settings_page(self) -> None:
         if self.settings_page is None:      # 独立窗口模式（Windows）没有这一页
             return
         self._on_settings = True
         self._on_clipboard = False
-        self.pages.setCurrentWidget(self.settings_page)
-        self._set_title("屏幕切换 · 设置")
-        self._apply_height(theme.SETTINGS_H)
+        # 设置页的内容是照 484 排的（mac 没有自绘标题栏，窗口高度 = 内容高度，
+        # 所以 `SETTINGS_H = 484` 在 mac 上正好）。Windows 的窗口里还要占掉 44px 的自绘
+        # 标题栏，直接按 484 设窗口会让内容只剩 440。补上标题栏高度才是 484 的内容区。
+        self._resize_then_switch(
+            theme.SETTINGS_H + theme.TITLEBAR_H, self.settings_page, "屏幕切换 · 设置"
+        )
 
     def show_main_page(self) -> None:
         self._on_settings = False
         self._on_clipboard = False
-        self.pages.setCurrentWidget(self.main_page)
-        self._set_title("屏幕切换")
-        self._apply_height(self.win_h() + (0 if self.banner.isHidden() else BANNER_EXTRA))
+        height = self.win_h() + (0 if self.banner.isHidden() else BANNER_EXTRA)
+        self._resize_then_switch(height, self.main_page, "屏幕切换")
+
+    def _resize_then_switch(self, height: int, page, title: str) -> None:
+        """换页 + 换窗口高度；**缩窗口时栈里不能露着页**，否则高度定不准。
+
+        这个是透明分层窗口（`WA_TranslucentBackground`），页面栈就挂在窗口里。实测
+        「主页面带 warning 横幅时窗口 654 → 切剪贴板 600 / 设置 528」：只要栈里还露着一页，
+        Windows 就会把窗口顶成 649/655，`setFixedHeight` 压不下去，窗口顺带挪位
+        （`UpdateLayeredWindowIndirect failed`）。用户看到的就是「点了设置没反应、
+        点返回也没反应」。把要离开的那一页先藏起来（栈里没有可见页），高度就照 min/max 走；
+        定完再切页，新页照常显示 —— 三件事都在同一轮事件循环里，看不出中间那一帧。
+
+        同页重入只改高度：必须先 `hide` 再 `setCurrentWidget` 的话，`QStackedLayout`
+        会因为「index 没变」直接 return，页面就藏在那儿不显示了。
+        """
+        if self.pages.currentWidget() is page:
+            self._apply_height(height)
+            return
+        self.pages.currentWidget().hide()
+        self._apply_height(height)
+        self.pages.setCurrentWidget(page)
+        self._set_title(title)
 
     def on_clipboard_page(self) -> bool:
         return self._on_clipboard

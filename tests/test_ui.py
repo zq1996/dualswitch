@@ -142,7 +142,9 @@ def test_settings_page_attaches_to_main_window(app, tmp_path: Path):
     main.show_settings_page()
     assert main.on_settings_page() is True
     assert main.windowTitle() == "屏幕切换 · 设置"
-    assert main.height() == theme.SETTINGS_H
+    # SETTINGS_H 是「内容」高度（mac 没有自绘标题栏，窗口 = 内容）；Windows 的窗口里还要
+    # 让出 44px 自绘标题栏，所以窗口高度要加上 TITLEBAR_H，两端的内容区才是同一个 484。
+    assert main.height() == theme.SETTINGS_H + theme.TITLEBAR_H
 
     page.backRequested.emit()
     main.show_main_page()
