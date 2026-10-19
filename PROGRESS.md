@@ -484,6 +484,18 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-19 **[test] 远端代发补「本机端到端」验收工具（ISSUE-002）**。
+  · 新增 `tools/e2e_remote_switch.py`：起两个**真实** `SyncEngine`（A 扮 Windows、B 扮 Mac），
+    各占一个空闲端口，走 127.0.0.1 的真实 socket + 真实加密 + 真实握手，**8/8 通过**：
+    链路建立、方向 A（Windows 请 Mac 代发 17）、方向 B（Mac 请 Windows 代发 18，各 1ms 回执）、
+    重复 req 幂等（只执行 1 次）、非法 VCP 0x10 拒绝（0 次执行 + failed+1）、
+    对端离线 **0ms** 快速失败、对端重启自动重连、真实 CLI 执行器已挂上（演练模式明确拒绝）。
+  · 执行方是记录型 executor，**不写真实 DDC**，所以不会把显示器切走，也不需要 Mac 在场。
+  · 这一步把「两台机器才能验」的范围压到只剩**最后一次 DDC 写入**；
+    真机仍需两个方向各一次（Windows 日志 `替对端切屏 VCP 0x60=17 → ok`、Mac 日志 `远端代发切屏 → ok`）。
+  · 顺带确认 Windows 未知态界面：对端离线 → 按钮「未检测到显示器」置灰；
+    对端在线 → 「从 Mac 切过来」可点（离屏抓图 + 断言）。
+  · 文档：`docs/REMOTE-SWITCH.md` §6 增加该命令，`docs/ISSUES.md` ISSUE-002 状态补本次结果。
 - 2026-10-19 **[ui] 第 12 项收尾：焦点虚框 + 「列表灰底」回归守卫**。
   · **灰底根因定位**：`QScrollArea::setWidget()` 会**强行**把宿主的 `autoFillBackground`
     打开（与 QSS、与焦点样式都无关，实测 `False → True`）。宿主随即用 `QPalette::Window`

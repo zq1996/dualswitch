@@ -105,7 +105,16 @@ dualswitch doctor                                # 确认 clipboard.enabled=yes�
 ```bash
 # 单测（macOS / Windows 都跑同一份）
 pytest -q tests/test_remote_switch.py
+
+# 本机端到端（只有一台机器 / Mac 不在场时跑这个）
+python tools/e2e_remote_switch.py        # 期望 8/8
 ```
+
+`tools/e2e_remote_switch.py` 起两个**真实** `SyncEngine`（A 扮 Windows、B 扮 Mac），
+各占一个空闲端口，走 127.0.0.1 的真实 socket + 真实加密握手，覆盖：链路建立、
+**方向 A / 方向 B 两个方向**、重复 req 幂等、非法 VCP 拒绝、对端离线 0ms 快速失败、
+对端重启自动重连、真实 CLI 执行器已挂上（演练模式下明确拒绝）。
+执行方是**记录型 executor**，不写真实 DDC —— 所以它不会把显示器切走，也不需要 Mac。
 
 覆盖：帧往返（加密 + 明文）、未连接快速失败、超时、成功回执、对端拒绝、幂等去重、
 非法 VCP 拒绝、无执行器、本地失败回落、**两个方向都回落**、对端未就绪时不发请求、
