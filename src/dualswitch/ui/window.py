@@ -240,7 +240,8 @@ class MainWindow(QWidget):
         if host == SOURCE_UNKNOWN:
             # 第三态：不猜主机（ISSUE-001）。_other 保持上一次的值，
             # 免得 set_busy 之类的地方拿到一个不存在的主机名。
-            self.hero.set_unknown()
+            peer = "Windows" if self.cfg.other_host() == "windows" else "Mac"
+            self.hero.set_unknown(peer)
             self.card_win.set_standby("未连接")
             self.card_mac.set_standby("未连接")
             return
@@ -260,10 +261,14 @@ class MainWindow(QWidget):
         self._busy = bool(busy)
         target = "Mac" if self._other == "mac" else "Windows"
         self.hero.set_busy(busy, target)
-        if not busy and self._host == SOURCE_UNKNOWN:
-            self.hero.button.setEnabled(False)   # 未知态下按钮始终不可点
+        if not busy and self._host == SOURCE_UNKNOWN and not self.hero.remote_ok:
+            self.hero.button.setEnabled(False)   # 未知态且对端不可用：按钮始终不可点
         self.card_win.setEnabled(not busy)
         self.card_mac.setEnabled(not busy)
+
+    def set_remote_available(self, available: bool) -> None:
+        """对端能不能代发切换（未知态下决定按钮是否可点、文案怎么写）。"""
+        self.hero.set_remote_available(available)
 
     def set_foot(self, text: str, ok: bool = True) -> None:
         self.hero.set_foot(text, ok)

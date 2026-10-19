@@ -31,23 +31,23 @@
 
 ## ISSUE-002 屏在 Windows 输入时，Mac 端无法切回
 
-- **owner**: mac（`sync/protocol.py` + `sync/engine.py` 都在共享层；Windows 端预计 0 行代码）
-- **影响**: 两端；但**先做物理验证再动代码**（见下）
+- **owner**: mac（`sync/protocol.py` + `sync/engine.py` 都在共享层；Windows 端 0 行代码）
+- **影响**: 两端（Windows 端只需 pull + 验证）
 - **现象**: 屏走 HDMI（Windows）时，macOS 侧枚举不到该屏，`m1ddc set input` 报
   `Could not find a suitable external display`，点「切换到 Mac」必然失败。
-- **前置验证（30 秒，不做完不许设计协议）**:
-  屏显示 Windows 时，在 Mac 上跑 `m1ddc display list`：
-  - 若仍列出 `Q2790R3` → **本 issue 直接作废**，本地直发即可，只改按钮的失败提示；
-  - 若只有 `[1] (null)` → 走远端代发。
-- **期望（走远端代发时）**: Mac 点「切换到 Mac」→ 经现有 TCP 通道请求对端代发 VCP 0x60=18
-  → 对端执行后回 ACK → Mac 端页脚显示「已由 Windows 端切换」。
-- **契约（需双端确认，`[contract]` 前缀）**:
-  新增 `T_SWITCH = 0x30`，header 至少 `{"vcp": 96, "value": 18, "req": "<幂等 id>"}`；
-  对端回 `T_ACK` 带同一 `req`。旧端收到未知类型必须**忽略而不拆连接**（兼容口子）。
+- **设计**: 见 [`REMOTE-SWITCH.md`](REMOTE-SWITCH.md)。**本地优先、失败才请对端代发**，
+  所以「屏在别的输入时 macOS 还能不能枚举到」这个未验证项不再阻塞实现：
+  能枚举到走本地，枚举不到才走链路。
+- **契约（`[contract]`）**: 新增 `T_SWITCH = 0x30` / `T_SWITCH_ACK = 0x31`，
+  header `{"vcp":96,"value":18,"req":"<幂等 id>"}`；旧端落到「忽略未知帧」，不断连。
 - **验收**:
-  1. `pytest -q tests/test_sync_protocol.py -k switch --basetemp=.pytest-tmp`（黄金样本：固定 header → 固定字节）
-  2. 真机：Mac 点按钮，Windows 端日志出现 `remote switch vcp=0x60 value=18`，屏 3 秒内切过来。
-- **状态**: 待做（等 ISSUE-002 前置验证结论）
+  1. `pytest -q tests/test_remote_switch.py --basetemp=.pytest-tmp`（17 例：帧往返、超时、
+     回执、拒绝、幂等、非法 VCP、本地失败回落、对端未就绪不发请求、未知态按钮）
+  2. 真机：屏在 Windows，Mac 点「从 Windows 切过来」→ 3 秒内切过来；
+     Windows 端日志出现 `替对端切屏 VCP 0x60=18 → ok`
+  3. 拔掉对端网线：按钮 250ms 内变灰
+- **状态**: 已合并（mac 侧全链路 + 17 例测试）；Windows 端 pull 即可。
+  真机验收（需要接显示器）待做 —— 当前机器没外接屏。
 
 ---
 

@@ -302,6 +302,9 @@ class HeroCard(QFrame):
         self.setObjectName("hero")
         self.setMinimumHeight(196)
         self._busy = False
+        self._unknown = False          # 当前是不是「未检测到外接显示器」那一态
+        self._remote_ok = False        # 未知态下对端能否代发切换
+        self._other_title = "Windows"  # 另一台机器的显示名（未知态用来写按钮文案）
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
@@ -380,6 +383,7 @@ class HeroCard(QFrame):
         if host == SOURCE_UNKNOWN:
             self.set_unknown()
             return
+        self._unknown = False
         self.plate.setVisible(True)
         title = "Windows" if host == "windows" else "Mac"
         self.title.setText(title)
@@ -388,17 +392,44 @@ class HeroCard(QFrame):
             logo_pixmap("windows" if host == "windows" else "apple", 26)
         )
         other = "Mac" if host == "windows" else "Windows"
+        self._other_title = other
         self.btn_text.setText(f"切换到 {other}")
         self.button.setEnabled(not self._busy)
         self.kbd.setVisible(self._kbd_enabled and not self._busy)
 
-    def set_unknown(self) -> None:
+    def set_unknown(self, other_label: str = "") -> None:
         """第三态：没有任何证据说明画面属于哪台（没接屏 / 屏在另一台）。
 
         这里**不能猜**一个主机名 —— 猜错会让用户照着界面去排障，
-        比什么都不说更糟（ISSUE-001）。
+        比什么都不说更糟（ISSUE-001）。但对端连着的时候，确实有办法把画面
+        叫回来（ISSUE-002 远端代发），那就把按钮留给它。
         """
+        self._unknown = True
+        if other_label:
+            self._other_title = other_label
+        self._render_unknown()
+
+    def set_remote_available(self, available: bool) -> None:
+        """对端能不能代发切换。只在未知态下影响界面，已知态保持原样。"""
+        if available == self._remote_ok:
+            return
+        self._remote_ok = bool(available)
+        if self._unknown:
+            self._render_unknown()
+
+    @property
+    def remote_ok(self) -> bool:
+        return self._remote_ok
+
+    def _render_unknown(self) -> None:
         self.plate.setVisible(False)
+        if self._remote_ok:
+            self.title.setText("未检测到外接显示器")
+            self.sub.setText(f"画面可能在 {self._other_title} · 可以请它代发切换")
+            self.btn_text.setText(f"从 {self._other_title} 切过来")
+            self.button.setEnabled(not self._busy)
+            self.kbd.setVisible(self._kbd_enabled and not self._busy)
+            return
         self.title.setText("未检测到外接显示器")
         self.sub.setText("没接线，或画面在另一台机器上")
         self.btn_text.setText("未检测到显示器")

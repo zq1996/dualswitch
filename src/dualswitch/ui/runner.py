@@ -629,6 +629,8 @@ class UiRunner(QObject):
     def _poll_state(self) -> None:
         changed = False
         self._refresh_hotkey_ui()      # 兜底：任何路径改了热键，250ms 内界面一定跟上
+        # 未知态下按钮能不能点，取决于对端是否在线（ISSUE-002 远端代发）
+        self.window.set_remote_available(self._remote_ready())
         source = self.controller.source_state
         if source != self._seen_source:
             self._seen_source = source
@@ -660,6 +662,16 @@ class UiRunner(QObject):
         self.window.card_win.set_active(host == "windows")
         self.window.card_mac.set_active(host == "mac")
 
+    def _remote_ready(self) -> bool:
+        """对端此刻能不能替我们发 DDC（引擎起来 + 已连接 + 已配对）。"""
+        probe = self.controller.remote_ready
+        if probe is None:
+            return False
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001 - 状态查询坏了不该影响界面
+            return False
+
     def _apply_result(self, result) -> None:
         if not result.ok:
             self.window.set_foot("切换失败，详见日志", ok=False)
@@ -670,6 +682,10 @@ class UiRunner(QObject):
         self.window.clear_banner()
         if result.dry_run:
             self.window.set_foot("[演练] 未真正发送指令", ok=True)
+            return
+        if getattr(result, "via", "local") == "remote":
+            peer = "Windows" if self.cfg.other_host() == "windows" else "Mac"
+            self.window.set_foot(f"已由 {peer} 端代发 · 回读跳过（屏不在本机）", ok=True)
             return
         ms = result.set_call_ms
         if result.readback == "confirmed":

@@ -80,6 +80,8 @@ class SyncEngine:
         backend=None,
         transport: Transport | None = None,
         clock: Callable[[], float] = time.time,
+        switch_executor: Callable[[int], "tuple[bool, str]"] | None = None,
+        vcp_code: int = 0x60,
     ) -> None:
         self.cfg = cfg
         self.host_label = host_label or "mac"
@@ -88,6 +90,13 @@ class SyncEngine:
         self._transport = transport
         self._discovery: Discovery | None = None
         self._owns_transport = transport is None
+
+        # 远端代发切屏（ISSUE-002）：对端来到的请求交给它，返回值是 (ok, detail)
+        self._switch_executor = switch_executor
+        self._vcp_code = int(vcp_code)
+        self._switch_waiters: dict[str, tuple[threading.Event, dict[str, Any]]] = {}
+        self._switch_seen: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.switch_stats = {"requested": 0, "served": 0, "failed": 0}
 
         self._lock = threading.RLock()
         self._records: deque[ClipRecord] = deque(maxlen=max(1, int(cfg.record_limit or 10)))
@@ -172,6 +181,8 @@ class SyncEngine:
             peer=peer,
             on_clip=self._on_remote_clip,
             on_ack=self._on_ack,
+            on_switch=self._on_switch_request,
+            on_switch_ack=self._on_switch_ack,
             on_state=self._on_state,
         )
         if peer is None:
@@ -240,6 +251,116 @@ class SyncEngine:
             "error": self.last_error or "-",
             "types": str(backend_info.get("types", "-")),
         }
+
+    # ------------------------------------------------------------ 远端代发切屏
+    @property
+    def switch_ready(self) -> bool:
+        """这条链路现在能不能替本机切屏（连上且已配对）。"""
+        transport = self._transport
+        return bool(transport and transport.connected and transport.authenticated)
+
+    def set_switch_executor(self, executor: Callable[[int], "tuple[bool, str]"] | None) -> None:
+        """挂上"替对端发 DDC Set"的实现（由 CLI 注入，引擎不碰硬件）。"""
+        self._switch_executor = executor
+
+    def request_switch(self, value: int, *, timeout: float = 3.0) -> tuple[bool, str]:
+        """请对端代发一次 VCP Set。返回 (ok, detail)，**阻塞到对端回执或超时**。
+
+        调用方要放在后台线程（runner 的切换线程），不要卡 UI / 热键回调。
+        """
+        transport = self._transport
+        if transport is None or not self.switch_ready:
+            return False, "对端未连接或未配对"
+        req = secrets.token_hex(8)
+        waiter = threading.Event()
+        box: dict[str, Any] = {}
+        with self._lock:
+            self._switch_waiters[req] = (waiter, box)
+        try:
+            transport.send_switch(
+                {"vcp": self._vcp_code, "value": int(value), "req": req}
+            )
+        except (LinkError, OSError) as exc:
+            with self._lock:
+                self._switch_waiters.pop(req, None)
+            self.switch_stats["failed"] += 1
+            return False, f"发送失败：{exc}"
+        self.switch_stats["requested"] += 1
+        answered = waiter.wait(timeout)
+        with self._lock:
+            self._switch_waiters.pop(req, None)
+        if not answered:
+            self.switch_stats["failed"] += 1
+            return False, "对端未响应（可能版本过旧或链路已断）"
+        ok = bool(box.get("ok"))
+        detail = str(box.get("detail") or ("" if ok else "对端拒绝"))
+        if not ok:
+            self.switch_stats["failed"] += 1
+        log.info("远端代发切屏 → %s（%s）", "ok" if ok else "失败", detail or "-")
+        return ok, detail
+
+    def _on_switch_request(self, header: dict[str, Any]) -> None:
+        """socket 读线程：对端要我们替它切屏。DDC 调用放到小线程里，别堵读循环。"""
+        try:
+            req = str(header.get("req") or "")
+            vcp = int(header.get("vcp", -1))
+            value = int(header.get("value", -1))
+        except (TypeError, ValueError):
+            log.warning("收到非法的 SWITCH 帧：%r", header)
+            return
+        if not req:
+            log.warning("SWITCH 帧缺 req，丢弃（无法回执）")
+            return
+        # 幂等：同一 req 10 秒内重复到达，直接重发上次的结果
+        with self._lock:
+            seen = self._switch_seen.get(req)
+            cached = dict(seen[1]) if seen and self._clock() - seen[0] < 10.0 else None
+        if cached is not None:
+            self._transport_switch_ack(cached)
+            return
+        threading.Thread(
+            target=self._serve_switch, args=(req, vcp, value), name="remote-switch", daemon=True
+        ).start()
+
+    def _serve_switch(self, req: str, vcp: int, value: int) -> None:
+        ok, detail = False, ""
+        if vcp != self._vcp_code:
+            detail = f"VCP 0x{vcp:02X} 与本机配置（0x{self._vcp_code:02X}）不一致"
+        elif self._switch_executor is None:
+            detail = "本机未挂载切屏实现"
+        else:
+            try:
+                ok, detail = self._switch_executor(value)
+            except Exception as exc:  # noqa: BLE001 - 对端请求不能把引擎搞崩
+                ok, detail = False, f"{type(exc).__name__}: {exc}"
+        ack = {"req": req, "ok": bool(ok), "detail": detail}
+        with self._lock:
+            self._switch_seen[req] = (self._clock(), ack)
+            if len(self._switch_seen) > 32:      # 只留最近一小把，防止无限增长
+                oldest = sorted(self._switch_seen.items(), key=lambda kv: kv[1][0])
+                for key, _ in oldest[: len(self._switch_seen) - 32]:
+                    self._switch_seen.pop(key, None)
+        if ok:
+            self.switch_stats["served"] += 1
+        else:
+            self.switch_stats["failed"] += 1
+        log.info("替对端切屏 VCP 0x%02X=%d → %s（%s）", vcp, value, "ok" if ok else "失败", detail or "-")
+        self._transport_switch_ack(ack)
+
+    def _transport_switch_ack(self, ack: dict[str, Any]) -> None:
+        if self._transport is not None:
+            self._transport.send_switch_ack(ack)
+
+    def _on_switch_ack(self, header: dict[str, Any]) -> None:
+        req = str(header.get("req") or "")
+        with self._lock:
+            entry = self._switch_waiters.get(req)
+        if entry is None:
+            log.debug("收到无人等待的 SWITCH_ACK：%s", req[:8])
+            return
+        waiter, box = entry
+        box.update(header)
+        waiter.set()
 
     def records(self) -> list[ClipRecord]:
         with self._lock:
