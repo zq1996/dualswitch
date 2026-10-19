@@ -448,6 +448,58 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-19 **[ui] 第 12 项收尾：焦点虚框 + 「列表灰底」回归守卫**。
+  · **灰底根因定位**：`QScrollArea::setWidget()` 会**强行**把宿主的 `autoFillBackground`
+    打开（与 QSS、与焦点样式都无关，实测 `False → True`）。宿主随即用 `QPalette::Window`
+    （浅灰 `#EFEFEF`）把自己刷一遍。而 `ClipRow` 未选中时不画背景 → 整片列表露出这层灰。
+    修法：`setWidget()` **之后**关掉宿主的 `autoFillBackground`（顺序不能反）。
+  · **补回归守卫** `test_list_gap_is_not_scroll_area_gray`：既断言根因（宿主属性为 False），
+    又把页面挂进主窗口渲染、采样一条未选中行左侧留白，断言不是调色板灰、且是窗口白底。
+    **已验证**：把修复那行注掉，用例立即失败（"滚动宿主又被刷上灰底了"）。
+  · 焦点虚框（`focus_style.NoFocusRectStyle` 拦 `PE_FrameFocusRect`）维持原方案不变 ——
+    QSS `outline:none` 在 offscreen 下无法验证是否真能挡住 Windows 原生焦点框，不动为妙。
+  · 心跳线程 `Link._beat_loop` 已由 `time.sleep` 改成 `Event.wait`（`close()` 置位即醒），
+    `Transport.stop()` 的 join 不再超时、不留下引用已关 socket 的活线程。
+  · 测试：全量 1 failed（`test_ddc.py::test_factory_command_backend`，本机无 `echo` 可执行
+    文件，与本次改动无关）/ 其余全绿。
+  · 说明：offscreen 平台画不出 Windows 那圈虚线焦点框，所以虚框只能靠路由级用例
+    （`tests/test_focus_style.py` 的 spy 断言 primitive 被拦）守住，无法做像素级断言。
+
+- 2026-10-18 19:5x **[ui] 剪贴板页重做 + Windows 设置改成「主窗口内一页」**（用户：按钮丑、和设置页不统一、
+  双击放大不好使、框线太多、文本缩略图用 T 不像、hover 太生硬）。
+  · **按钮统一到设置页那套**：页头「‹ 返回」= `ghost` 26px（和设置页返回条同一个控件规格）；
+    操作条 = `solid`（复制到本机）/ `ghost`（重发）/ `clipDanger`（清空记录，红字 ghost），
+    操作条底色 `#F7F9FC` + 上沿 1px，与设置页 footer 完全同款。删掉 `theme.py` 里那套
+    **写了但页面从来没用过**的剪贴板 QSS（`#clipPrimary` / `#clipBtn` / `#citem` / `#cthumb` …），
+    换成页面真正在用的对象名 —— 之前的「不统一」就是因为页面全在写内联样式。
+  · **框线只留三条**：预览卡一圈、操作条上沿、状态栏上沿。行分隔线全部去掉，
+    行改成自绘（圆角 hover / 选中底 + 左侧 2.5px 主色条）；文本预览不再自带一圈内框。
+  · **hover / 选中做 130ms 缓动**（`QVariantAnimation` + `OutCubic`，颜色在 `paintEvent` 里插值）。
+    QSS 换背景是瞬时的，鼠标扫过时一行一行硬切 —— 这就是「生硬」的来源。
+  · **文本缩略图换成系统图标**：新增 chrome 契约字段 `PLATFORM_LOGO`（win=`windows` / mac=`apple`），
+    经 `theme.PLATFORM_LOGO` 取；两端各改自己的 `chrome/*.py`，共享文件里没有平台判断。
+    >8MB 或解不出的图片改画线框小图（不退回系统图标，否则截图看起来像文本）。
+  · **「双击查看原图」真的能用了**：新增 `ImageViewer` 页面内遮罩（深色底 + 等比放大 + 单击/`Esc` 关闭），
+    不开新窗口（设计第 1 节）。原先只有 `hint` 文案，没有任何 handler。
+  · 空态时收起操作条（设计第 7 节写了、实现漏了）；药丸改成**自己**接点击（以前点整行都会重发）。
+  · **Windows 设置不再单开窗口**：`chrome/win.py` `SETTINGS_IN_WINDOW = True`，标题栏齿轮 →
+    主窗口内翻页 → 「‹ 返回」回主页面（保存后也自动返回）。配套：
+    `SettingsWindow` 内嵌时用 `#rootEmbedded`（透明、无边框）+ 不加投影，否则窗口里会套第二圈框；
+    runner 不再给内嵌设置页摆位置（它是页面栈里的一页）。
+  · 测试 +7：文本缩略图走图标分支、图片缩略图能解码、双击开遮罩、空态收起操作条、
+    两端 `SETTINGS_IN_WINDOW` 均为 True、内嵌设置页有返回条且能回主页面、行宽不超可视区。
+    全量 **227 passed / 5 skipped**。
+  · **离屏渲染抓出两个隐藏 bug**（都是「控件尺寸声明」问题，跑测试看不出来）：
+    1. `list_host.setStyleSheet("background:transparent")` 会连同子控件一起接管样式，
+       把状态药丸（`#stOk`…）的应用级背景整条盖掉 —— 药丸变成"只有文字"。
+       已删掉那行（普通 QWidget 本来就不画背景）。
+    2. 副行是普通 `QLabel`，`minimumSizeHint` 是整段文字宽度，**把行撑到 500+**，
+       在 404 宽的可视区里把药丸和删除按钮直接挤出屏幕 —— 旧版页面看起来"总少一截"
+       就是这个原因。副行改用 `ElidedLabel`，并加了守卫用例 `test_row_fits_visible_area`。
+  · 文档：`docs/UI-DESIGN-CLIPBOARD.md`（版面图 / 行规格 / 预览 / 交互）、
+    `docs/PLATFORM-SPLIT.md`（`PLATFORM_LOGO`、`SETTINGS_IN_WINDOW` 两端都 True）、
+    `docs/UI-DESIGN-MAC.md`（去掉「Windows 仍是独立设置窗口」的旧说明）。
+
 - 2026-10-18 18:2x **[merge] 同步 `056c5cc`（macOS 端清理合并残留）+ Windows 侧收尾**。
   mac 端发现 `ui/window.py` / `ui/runner.py` 里各留了两份 `attach_clipboard` / `on_clipboard_page` /
   `show_clipboard` / `close_clipboard` —— Python 靠「后定义覆盖前定义」照样跑、测试也全绿，

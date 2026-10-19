@@ -29,6 +29,8 @@ CHROME_MODULES = ["win", "mac"]
 FIELDS = {
     "NAME": str,
     "PLATFORM_LABEL": str,
+    "PLATFORM_LOGO": str,
+    "PEER_LOGO": str,
     "PALETTE": Palette,
     "NATIVE_CHROME": bool,
     "ROOT_QSS": str,
@@ -41,6 +43,7 @@ FIELDS = {
     "SETTINGS_IN_WINDOW": bool,
     "SETTINGS_ROW_HINT": str,
     "CLICK_HINT": str,
+    "STATUS_ACTIVATE": str,
     "REOPEN_ON_ACTIVATE": bool,
     "DOCK_FOLLOWS_WINDOW": bool,
     "STRICT_BACKEND": str,
@@ -100,6 +103,17 @@ def test_chrome_module_contract(name: str):
     assert mod.BACKEND_OPTIONS, "DDC 后端下拉不能为空"
 
 
+@pytest.mark.parametrize("name", CHROME_MODULES)
+def test_platform_logo_asset_exists(name: str):
+    """PLATFORM_LOGO / PEER_LOGO 必须真的能找到对应图片：拼错名字只会在运行时少一张图标。"""
+    from dualswitch.ui import theme
+
+    mod = importlib.import_module(f"dualswitch.ui.chrome.{name}")
+    for kind in (mod.PLATFORM_LOGO, mod.PEER_LOGO):
+        assert theme.asset(f"{kind}-logo.png").exists()
+    assert mod.PEER_LOGO != mod.PLATFORM_LOGO
+
+
 @pytest.fixture(scope="module")
 def qapp():
     from PySide6.QtWidgets import QApplication
@@ -123,6 +137,37 @@ def test_current_follows_platform():
 
     expected = "macos" if sys.platform == "darwin" else "windows"
     assert current().NAME == expected
+
+
+@pytest.mark.parametrize("name", CHROME_MODULES)
+def test_status_activate_semantics(name: str):
+    """点常驻图标后干什么只有两种合法语义；Windows 必须是「摊开主页面」。
+
+    切换会改显示器输入源，是不可撤销的重操作 —— 放在"双击托盘"这种高误触动作上
+    早晚出事（用户双击只是想看看窗口）。
+    """
+    from dualswitch.ui import theme
+    from dualswitch.ui.chrome import current
+
+    mod = importlib.import_module(f"dualswitch.ui.chrome.{name}")
+    assert mod.STATUS_ACTIVATE in ("show_main", "switch")
+    if name == current().NAME:
+        # theme 只镜像「本平台」的 chrome，跨平台模块没得比
+        assert theme.STATUS_ACTIVATE == mod.STATUS_ACTIVATE
+    if name == "win":
+        assert mod.STATUS_ACTIVATE == "show_main"
+
+
+def test_windows_click_hint_matches_activate():
+    """Windows 的提示文案必须与行为一致：文案写"打开主界面"，双击就得摊开主页面。
+
+    （mac 侧 `CLICK_HINT` 写"单击图标打开菜单"、代码却是单击切换，是历史遗留，
+     已记进 PROGRESS 待 mac 端负责人确认，别在这儿把它锁成"对的"。）
+    """
+    from dualswitch.ui.chrome import win
+
+    assert win.STATUS_ACTIVATE == "show_main"
+    assert "打开主界面" in win.CLICK_HINT
 
 
 def test_chrome_selector_imports_statically():

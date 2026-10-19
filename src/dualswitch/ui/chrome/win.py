@@ -15,12 +15,20 @@ log = logging.getLogger("dualswitch.tray")
 
 NAME = "windows"
 PLATFORM_LABEL = "Windows"
+PLATFORM_LOGO = "windows"        # 本机图标（剪贴板页文本记录的缩略图）
+PEER_LOGO = "apple"              # 对端图标：本应用只在 Windows/mac 两端配对，对端就是另一台
 
 NATIVE_CHROME = False
 BODY_TOP = 16
 INLINE_SETTINGS_ROW = False
-SETTINGS_IN_WINDOW = False       # Windows 保持独立设置窗口（自绘标题栏，嵌进来会有两层标题）
-CLICK_HINT = "双击图标切换"
+# 设置也是主窗口里的一页（齿轮进去、点「‹ 返回」回来）。
+# 以前是独立窗口：自绘标题栏 + 固定 484 高，和主页面并排时是两套壳子，
+# 现在统一成「一个窗口、几页内容」，和 mac 一致。
+SETTINGS_IN_WINDOW = True
+CLICK_HINT = "双击图标打开主界面"
+# 双击托盘的语义：Windows 上是「把主页面摊开给用户看」，不再是「顺手切一下屏」。
+# 双击会误触（切换是改显示器输入源的重操作），而"打开主界面"随时可撤销。
+STATUS_ACTIVATE = "show_main"
 REOPEN_ON_ACTIVATE = False
 DOCK_FOLLOWS_WINDOW = False      # Windows 没有程序坞，任务栏按钮跟着窗口走，无需处理
 STRICT_BACKEND = "hook"
@@ -212,13 +220,16 @@ def titlebar(title: str, show_settings: bool = True, show_clipboard: bool = Fals
 # 托盘
 # --------------------------------------------------------------------------- #
 class QtStatusItem:
-    """QSystemTrayIcon 封装：单击不响应，双击切换（Windows 端已定的交互）。
+    """QSystemTrayIcon 封装：单击不响应，双击摊开主页面（Windows 端已定的交互）。
+
+    **为什么不双击切换**：切换会改显示器输入源，是重操作且不可撤销；
+    双击托盘在 Windows 上是"把程序叫回来看看"的习惯性动作，误触成本很高。
+    真要切换，切屏热键 / 托盘菜单 / 主按钮三条路都在。
 
     托盘是「关窗口收进后台」之后**唯一**的入口，所以这里每一步都要留日志：
     图标注册失败时 Qt 不抛异常、不报警，只是托盘里少一个图标、
     而任务管理器里进程照常在跑 —— 用户看到的症状就是「程序没了，但又没退出」。
     """
-
     kind = "tray"
 
     def __init__(self, icon, on_left_click: Callable[[], None] | None = None):

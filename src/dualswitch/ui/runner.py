@@ -25,6 +25,7 @@ from . import theme
 from .chrome import current as chrome
 from .clipboard_feed import LocalClipFeed
 from .clipboard_page import ClipboardPage
+from . import focus_style
 from .settings import SettingsWindow
 from .window import MainWindow
 
@@ -127,6 +128,8 @@ class UiRunner(QObject):
         font.setPointSizeF(theme.APP_FONT_POINT)
         self.app.setFont(font)
         self.app.setStyleSheet(theme.qss())
+        # 点过的按钮不留灰色虚线焦点框（噪音，见 ui/focus_style.py）
+        focus_style.install(self.app)
         self.chrome = chrome()
 
         self.icon = load_app_icon()
@@ -198,7 +201,9 @@ class UiRunner(QObject):
             self.clip_poll.start()
 
         self._center(self.window)
-        self._center(self.settings)
+        if not self.chrome.SETTINGS_IN_WINDOW:
+            # 独立窗口才需要摆位置；内嵌时它是页面栈里的一页，位置由布局决定
+            self._center(self.settings)
         self.window.show()
         # 常驻图标放在「主窗口已显示」之后创建：Windows 打包版实测过
         # 「先建图标、后显示窗口」时 Shell_NotifyIcon 静默失败（图标可见=True 但没有位置），
@@ -468,6 +473,19 @@ class UiRunner(QObject):
         self.window.activateWindow()
         self.chrome.activate(self.window)
 
+    def show_main_window(self) -> None:
+        """把主页面摊开：从托盘/后台出来，并且**翻回主页面**。
+
+        单纯 `show_window()` 只把窗口拿出来，页面还停在上次那一页
+        （比如剪贴板）—— 用户看到的不是"主页面"。双击托盘要的就是"看看现在切到哪了"。
+        """
+        self._leave_background()
+        self.window.show_main_page()
+        self.window.showNormal()
+        self.window.raise_()
+        self.window.activateWindow()
+        self.chrome.activate(self.window)
+
     def hide_window(self) -> None:
         """⌘H / 菜单「隐藏」：收起窗口但不退出，程序坞图标随之消失。"""
         self.window.hide()
@@ -493,7 +511,7 @@ class UiRunner(QObject):
         if self.clipboard_page is None:
             return
         if not self.chrome.SETTINGS_IN_WINDOW and self.settings.isVisible():
-            self.settings.hide()      # Windows：独立设置窗口，别两层叠着
+            self.settings.hide()      # 独立窗口模式才需要：别和剪贴板页两层叠着
         self._leave_background()
         self.window.show_clipboard_page()
         self.window.showNormal()
@@ -531,8 +549,12 @@ class UiRunner(QObject):
             self.settings.hide()
 
     def _on_status_click(self) -> None:
-        # macOS 菜单栏左键直接切换；Windows 侧 QtStatusItem 已过滤成只认双击
-        self.do_switch()
+        # 点常驻图标干什么由平台定（`STATUS_ACTIVATE`）：
+        # Windows 双击 = 摊开主页面；macOS 菜单栏单击 = 直接切换
+        if theme.STATUS_ACTIVATE == "show_main":
+            self.show_main_window()
+        else:
+            self.do_switch()
 
     def do_switch(self, target: str | None = None) -> None:
         if self._busy:

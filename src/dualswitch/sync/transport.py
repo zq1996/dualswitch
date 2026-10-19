@@ -75,6 +75,7 @@ class Link:
         self._send_lock = threading.Lock()
         self._send_counter = 0
         self._alive = True
+        self._stop = threading.Event()      # close() 置位：让读写 / 心跳线程立刻醒，别睡满间隔
         self._ready = False
         self._last_rx = time.monotonic()
         self._closed_reason = ""
@@ -122,6 +123,7 @@ class Link:
         if not self._alive:
             return
         self._alive = False
+        self._stop.set()                     # 先叫醒睡眠中的心跳 / 读线程
         self._closed_reason = reason
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
@@ -230,7 +232,11 @@ class Link:
 
     def _beat_loop(self) -> None:
         while self._alive:
-            time.sleep(HEARTBEAT_INTERVAL_S / 2)
+            # 用 Event.wait 而不是 time.sleep：否则 close() 之后还得再睡满半个心跳
+            # 才退出，`Transport.stop()` 的 join 会超时，留一个引用着已关闭 socket 的
+            # 活线程 —— 解释器退出时踩它，直接 access violation
+            if self._stop.wait(HEARTBEAT_INTERVAL_S / 2):
+                return
             if not self._alive:
                 return
             if self.idle_s > HEARTBEAT_TIMEOUT_S:

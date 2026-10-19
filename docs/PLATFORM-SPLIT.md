@@ -63,6 +63,7 @@ src/dualswitch/ui/
 |---|---|---|---|---|
 | `NAME` | str | `"windows"` | `"macos"` | 日志 / 调试 |
 | `PLATFORM_LABEL` | str | `"Windows"` | `"macOS"` | 诊断弹窗里的平台名 |
+| `PLATFORM_LOGO` | str | `"windows"` | `"apple"` | 本机图标名（剪贴板页文本记录的缩略图） |
 | `PALETTE` | `Palette` | 品牌蓝 `#2F6BFF` | 系统蓝 `#0A7AFF` | 主色、按钮渐变、字体、字号、键帽符号表 |
 | `NATIVE_CHROME` | bool | `False` | `True` | 窗口外框/标题栏是否由系统绘制 |
 | `ROOT_QSS` | str | 白底 + 1px 描边 + 14px 圆角 | 无描边无圆角 | `#root` 的 QSS |
@@ -70,7 +71,7 @@ src/dualswitch/ui/
 | `QSS_EXTRA` | str | `""` | `""` | 其它平台专属 QSS（目前都没用上） |
 | `BODY_TOP` | int | 16 | 14 | 内容区上边距（mac 少了自绘标题栏） |
 | `INLINE_SETTINGS_ROW` | bool | `False` | `True` | 主窗口内容区是否放「设置…」行 |
-| `SETTINGS_IN_WINDOW` | bool | `False` | `True` | 设置是否为主窗口内的一页（mac 用「‹ 返回」回主页面，不另开窗口） |
+| `SETTINGS_IN_WINDOW` | bool | `True` | `True` | 设置是否为主窗口内的一页（「‹ 返回」回主页面，不另开窗口） |
 | `SETTINGS_ROW_HINT` | str | `""` | `"⌘ ,"` | 设置行右侧提示 |
 | `CLICK_HINT` | str | `"双击图标切换"` | `"单击图标打开菜单"` | 常驻图标提示、菜单里的说明 |
 | `REOPEN_ON_ACTIVATE` | bool | `False` | `True` | 点 Dock / Cmd+Tab 回来时自动展开窗口 |

@@ -20,12 +20,17 @@
 | 名字 | 类型 | 含义 |
 |---|---|---|
 | `NAME` | str | 平台名，写日志用 |
+| `PLATFORM_LABEL` | str | 界面上的平台名（`Windows` / `macOS`） |
+| `PLATFORM_LOGO` | str | 本机图标名（`windows` / `apple`，对应 assets 里那两张 PNG） |
+| `PEER_LOGO` | str | 对端图标名（`PLATFORM_LOGO` 的另一边）—— 本应用只在 Win/mac 两端配对，协议里不传系统信息 |
 | `PALETTE` | `Palette` | 颜色 / 字体 / 字号 |
 | `NATIVE_CHROME` | bool | 窗口外框与标题栏是否由系统绘制 |
 | `ROOT_QSS` / `STATUSBAR_QSS` / `QSS_EXTRA` | str | QSS 片段（窗口外框、底部状态栏圆角、其它微调） |
 | `BODY_TOP` | int | 内容区上边距 |
 | `INLINE_SETTINGS_ROW` | bool | 主窗口内容区里是否放一行「设置…」 |
-| `CLICK_HINT` | str | 「单击图标切换」/「双击图标切换」 |
+| `SETTINGS_IN_WINDOW` | bool | 设置是否为主窗口里的一页（False = 独立窗口） |
+| `CLICK_HINT` | str | 「双击图标打开主界面」/「单击图标打开菜单」 |
+| `STATUS_ACTIVATE` | str | 点击常驻图标后干什么：`"show_main"` / `"switch"`。Windows 双击摊开主页面（切屏是改输入源的不可逆重操作，不绑双击）；mac 单击仍切换 |
 | `REOPEN_ON_ACTIVATE` | bool | 激活应用时若窗口收起就自动打开（mac Dock 行为） |
 | `DOCK_FOLLOWS_WINDOW` | bool | 窗口收起时程序坞图标是否跟着消失（mac 是，Windows 无此概念） |
 | `HOTKEY_COPY` | dict | 热键页四个文案（严格修饰键 / 吞键 / 常驻 / 说明） |

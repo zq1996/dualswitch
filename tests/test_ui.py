@@ -111,6 +111,46 @@ def test_main_window_has_settings_entry(app):
         assert not settings.titlebar.btn_settings.isVisibleTo(settings)
 
 
+def test_settings_in_window_on_both_platforms():
+    """两端都是「一个窗口、几页内容」：设置不再单开窗口。"""
+    from dualswitch.ui.chrome import mac, win
+
+    assert mac.SETTINGS_IN_WINDOW is True
+    assert win.SETTINGS_IN_WINDOW is True
+
+
+def test_embedded_settings_has_back_bar(app, tmp_path: Path):
+    """内嵌进主窗口时：没有自绘标题栏、不画第二圈外框，返回按钮能回主页面。"""
+    win = SettingsWindow(Config(), tmp_path / "config.json", "Alt+Space", "v1.0.0", embedded=True)
+    assert win.titlebar is None
+    assert win.root.objectName() == "rootEmbedded"
+    assert win.root.graphicsEffect() is None        # 页面里不能再叠一层窗口投影
+
+    fired: list[int] = []
+    win.backRequested.connect(lambda: fired.append(1))
+    win.back_btn.click()
+    assert fired == [1]
+
+
+def test_settings_page_attaches_to_main_window(app, tmp_path: Path):
+    main = MainWindow(Config(), "Alt+Space", "v1.0.0")
+    page = SettingsWindow(
+        Config(), tmp_path / "config.json", "Alt+Space", "v1.0.0", parent=main, embedded=True
+    )
+    main.attach_settings(page)
+
+    main.show_settings_page()
+    assert main.on_settings_page() is True
+    assert main.windowTitle() == "屏幕切换 · 设置"
+    assert main.height() == theme.SETTINGS_H
+
+    page.backRequested.emit()
+    main.show_main_page()
+    assert main.on_settings_page() is False
+    assert main.windowTitle() == "屏幕切换"
+    assert main.height() == main.win_h()
+
+
 def test_display_page_probe_button(app, tmp_path: Path):
     """显示器页的「检测」按钮应把 probeRequested 抛给 runner。"""
     from PySide6.QtWidgets import QPushButton
@@ -320,8 +360,9 @@ def test_qt_status_item_reports_availability(app):
 
 
 def test_pystray_menu_from_entries(app):
-    """Qt 托盘失灵时的兜底实现要把共享菜单条目原样翻过去（双击 = 切换）。"""
+    """Qt 托盘失灵时的兜底实现要把共享菜单条目原样翻过去（default = 双击语义）。"""
     pytest.importorskip("pystray", reason="未安装 pystray")
+    from dualswitch.ui.chrome import current as chrome
     from dualswitch.ui.chrome.win import pystray_menu
     from dualswitch.ui.statusitem import build_menu_entries
 
@@ -330,21 +371,72 @@ def test_pystray_menu_from_entries(app):
         Config(),
         "windows",
         "alt+space",
-        {"switch": lambda: calls.append("switch"), "quit": lambda: calls.append("quit")},
+        {"open": lambda: calls.append("open"),
+         "switch": lambda: calls.append("switch"),
+         "quit": lambda: calls.append("quit")},
     )
     menu = pystray_menu(entries)
 
     items = [i for i in menu.items if i is not menu.SEPARATOR]
-    assert any(i.text.startswith("切换到") and i.default for i in items), "双击应触发切换"
-    assert any(i.text.startswith("退出") for i in items)
+    # 双击触发哪一项，必须和平台语义一致（不能两份实现各干各的）
+    defaults = [i for i in items if i.default]
+    assert len(defaults) == 1, "双击只能绑定一个条目"
+    if chrome().STATUS_ACTIVATE == "show_main":
+        assert defaults[0].text.startswith("打开主界面")
+    else:
+        assert defaults[0].text.startswith("切换到")
 
     # 只读行（当前画面 / 热键提示）要禁用，且不能触发任何动作
     label = next(i for i in items if i.text.startswith("当前画面"))
     assert label.enabled is False
 
-    switch = next(i for i in items if i.default)
-    switch(None)
-    assert calls == ["switch"]
+    default = defaults[0]
+    default(None)
+    assert calls == ["open" if chrome().STATUS_ACTIVATE == "show_main" else "switch"]
+
+    # 切换项本身仍在菜单里（真要切换有三条路：热键 / 菜单 / 主按钮）
+    assert any(i.text.startswith("切换到") for i in items)
+    assert any(i.text.startswith("退出") for i in items)
+
+
+def test_status_click_routes_by_platform(app):
+    """点常驻图标：Windows 双击摊开主页面，mac 单击切换（由 chrome.STATUS_ACTIVATE 决定）。"""
+    from dualswitch.ui import theme
+    from dualswitch.ui.runner import UiRunner
+
+    class _Stub:
+        def __init__(self):
+            self.opened = self.switched = 0
+
+        def show_main_window(self):
+            self.opened += 1
+
+        def do_switch(self):
+            self.switched += 1
+
+    stub = _Stub()
+    UiRunner._on_status_click(stub)
+    if theme.STATUS_ACTIVATE == "show_main":
+        assert (stub.opened, stub.switched) == (1, 0)
+    else:
+        assert (stub.opened, stub.switched) == (0, 1)
+
+
+def test_menu_default_matches_tray_double_click(app):
+    """菜单 default 与 Qt 托盘双击必须同一语义：别在一条通道里改，另一条还按老规矩走。"""
+    from dualswitch.ui.chrome import current as chrome
+    from dualswitch.ui.statusitem import build_menu_entries
+
+    entries = build_menu_entries(
+        Config(), "windows", "alt+space",
+        {"open": lambda: None, "switch": lambda: None, "force": lambda: None},
+    )
+    default = next(e for e in entries if e.default)
+    if chrome().STATUS_ACTIVATE == "show_main":
+        assert default.title == "打开主界面"
+    else:
+        assert default.title.startswith("切换到")
+    assert [e for e in entries if e.kind == "sep"], "菜单里该有分组分隔"
 
 
 # --------------------------------------------------------------------------- #

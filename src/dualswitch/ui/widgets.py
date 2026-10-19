@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -58,6 +59,57 @@ def label(text: str, name: str = "", size: float | None = None, weight=None) -> 
             f.setWeight(weight)
         lb.setFont(f)
     return lb
+
+
+# 页头两侧固定占位：返回键和右侧状态文字宽度不可能正好相等，
+# 不给两侧同样宽的格子，「页名居中」就会歪向一边。
+PAGE_HEAD_SIDE = 108
+
+
+def page_header(title: str, back_text: str = "\u2039 返回", on_back=None, right: QWidget | None = None) -> QWidget:
+    """主窗口内嵌页的统一页头：返回 / 页名（整页正中）/ 右侧状态，三者同一水平线。
+
+    设置页和剪贴板页都用它，两端共用一份，才不会一页一个样。
+    """
+    bar = QWidget()
+    bar.setObjectName("pageHead")
+    bar.setAttribute(Qt.WA_StyledBackground, True)
+
+    left = QWidget()
+    left.setFixedWidth(PAGE_HEAD_SIDE)
+    left_lay = QHBoxLayout(left)
+    left_lay.setContentsMargins(0, 0, 0, 0)
+    left_lay.setSpacing(0)
+    btn = QPushButton(back_text)
+    btn.setObjectName("ghost")
+    btn.setFixedHeight(26)
+    btn.setCursor(Qt.PointingHandCursor)
+    left_lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+
+    title_lb = label(title, "pageTitle")
+    title_lb.setAlignment(Qt.AlignCenter)
+
+    right_box = QWidget()
+    right_box.setFixedWidth(PAGE_HEAD_SIDE)
+    right_lay = QHBoxLayout(right_box)
+    right_lay.setContentsMargins(0, 0, 0, 0)
+    right_lay.setSpacing(0)
+    if right is not None:
+        # 用 stretch 1 而不是 0：否则窄控件（如省略标签）只会拿到自己那个被省略过的
+        # sizeHint，越窄越省、越省越窄，状态文字最后只剩一两个字
+        right_lay.addWidget(right, 1, Qt.AlignRight | Qt.AlignVCenter)
+
+    grid = QGridLayout(bar)
+    grid.setContentsMargins(10, 8, 10, 2)
+    grid.setSpacing(0)
+    grid.addWidget(left, 0, 0)
+    grid.addWidget(title_lb, 0, 1)
+    grid.addWidget(right_box, 0, 2)
+
+    if on_back is not None:
+        btn.clicked.connect(on_back)
+    bar.back_btn = btn          # 测试 / 调用方可能要按它，留个引用
+    return bar
 
 
 class ElidedLabel(QLabel):

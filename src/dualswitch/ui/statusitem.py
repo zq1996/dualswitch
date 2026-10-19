@@ -1,7 +1,7 @@
 """常驻入口的菜单数据模型（平台无关）。
 
 真正画图标、收点击的实现分别在：
-  · `chrome/win.py` → QtStatusItem（QSystemTrayIcon，双击切换）
+  · `chrome/win.py` → QtStatusItem（QSystemTrayIcon，双击摊开主界面）
   · `chrome/mac.py` → MacStatusItem（NSStatusBar，单击切换）
 
 这里只定义两端共用的「菜单条目」，`build_menu_entries()` 是纯函数，可以直接单测。
@@ -36,12 +36,16 @@ def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> l
     other = "mac" if current == "windows" else "windows"
     other_title = "Mac" if other == "mac" else "Windows"
     self_title = "Mac" if current == "mac" else "Windows"
+    # 双击图标的语义与 Qt 托盘保持一致（`chrome.STATUS_ACTIVATE`）：
+    # Windows 上是摊开主界面，所以「打开主界面」是 default；mac 单击即切换，default 是切换项
+    double_click_open = chrome().STATUS_ACTIVATE == "show_main"
 
     return [
         MenuEntry("label", f"当前画面：{self_title}"),
-        MenuEntry("item", "打开主界面", actions.get("open")),
+        MenuEntry("item", "打开主界面", actions.get("open"), default=double_click_open),
         MenuEntry("sep"),
-        MenuEntry("item", f"切换到 {other_title}（{PORT[other]}）", actions.get("switch"), default=True),
+        MenuEntry("item", f"切换到 {other_title}（{PORT[other]}）", actions.get("switch"),
+                  default=not double_click_open),
         MenuEntry("item", f"强制切到 {self_title}（{PORT[current]}）", actions.get("force")),
         MenuEntry("sep"),
         MenuEntry("item", "探测显示器 / 读取输入源", actions.get("probe")),

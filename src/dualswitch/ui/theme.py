@@ -58,6 +58,9 @@ FONT_FAMILIES = list(_P.font_families)
 BODY_FS = _P.body_font_size
 APP_FONT_POINT = _P.app_font_point
 CLICK_HINT = _C.CLICK_HINT
+STATUS_ACTIVATE = _C.STATUS_ACTIVATE      # `show_main` / `switch`：点常驻图标干什么
+PLATFORM_LOGO = _C.PLATFORM_LOGO      # `windows` / `apple`，剪贴板页文本缩略图用
+PEER_LOGO = _C.PEER_LOGO              # 对端图标：来自对端的记录用它
 
 
 def pretty_hotkey(describe: str) -> str:
@@ -121,10 +124,16 @@ def qss() -> str:
     #root {{
         {_C.ROOT_QSS}
     }}
+    /* 内嵌成主窗口一页的设置页：外框和投影归窗口，这里保持透明 */
+    #rootEmbedded {{ background: transparent; border: 0; border-radius: 0; }}
     #body {{ background: transparent; }}
 
-    /* ---------- 标题栏（仅 Windows 自绘；macOS 用系统标题栏） ---------- */
-    #titlebar {{
+    /* ---------- 共享页头（设置页 / 剪贴板页） ----------
+       返回 / 页名（居中，靠两侧等宽格子保证）/ 右侧状态，同一水平线。 */
+    #pageHead {{ background: transparent; }}
+    #pageTitle {{ color: {INK}; font-size: 13px; font-weight: 600; }}
+
+    /* ---------- 标题栏（仅 Windows 自绘；macOS 用系统标题栏） ---------- */    #titlebar {{
         background: #F5F7FB;
         border: 0;
         border-bottom: 1px solid {LINE};
@@ -318,31 +327,23 @@ def qss() -> str:
     QPushButton#bannerAction:hover {{ background: #FFFFFF; border-color: {ACCENT}; color: {ACCENT}; }}
     QPushButton#bannerAction:pressed {{ background: {ACCENT_SOFT}; }}
 
-    /* ---------- 剪贴板页（docs/UI-DESIGN-CLIPBOARD.md） ---------- */
-    #clipHead {{ background: #FFFFFF; border-bottom: 1px solid {LINE_SOFT}; }}
-    QPushButton#clipBack {{
-        background: transparent; border: 0; color: {INK2};
-        font-size: 12px; text-align: left; padding: 4px 7px 4px 3px; border-radius: 6px;
-    }}
-    QPushButton#clipBack:hover {{ background: #F3F6FB; color: {ACCENT_DEEP}; }}
-    #clipTitle {{ color: {INK}; font-size: 13.5px; font-weight: 600; }}
+    /* ---------- 剪贴板页（docs/UI-DESIGN-CLIPBOARD.md） ----------
+       框线只留三条：预览卡、操作条上沿、状态栏上沿。
+       列表行改成自绘（hover / 选中都做渐变），所以这里没有行的 QSS。 */
+    /* 页头与设置页共用一套（#pageHead / #pageTitle），见下面「共享页头」 */
     #clipConn {{ color: {INK3}; font-size: 11px; }}
 
-    /* 行：选中靠左侧主色条 + 浅蓝底，不加边框（会和 hover 混） */
-    #clipList {{ background: #FFFFFF; }}
-    #citem {{
-        background: #FFFFFF; border: 0; border-bottom: 1px solid {LINE_SOFT};
-        border-left: 2.5px solid transparent;
+    #clipPreview {{
+        background: #FBFCFE; border: 1px solid {LINE_SOFT}; border-radius: 11px;
     }}
-    #citem:hover {{ background: #FAFBFE; }}
-    #citemSel {{
-        background: #F3F7FF; border: 0; border-bottom: 1px solid {LINE_SOFT};
-        border-left: 2.5px solid {ACCENT};
+    #pvHead {{ color: {INK3}; font-size: 11px; }}
+    #pvHint {{ color: #A0A9B8; font-size: 10.5px; }}
+    #pvEmpty {{ color: #A0A9B8; font-size: 11.5px; }}
+    /* 文本预览不再自带一圈边框：卡片已经框住了，里面再框一层就是多余线 */
+    QPlainTextEdit#pvText {{
+        background: transparent; border: 0; padding: 0;
+        color: {INK2}; font-size: 11.5px;
     }}
-    #ctitle {{ color: {INK}; font-size: 12.5px; }}
-    #ctitleMono {{ color: {INK}; font-size: 11.8px; }}
-    #cmeta {{ color: {INK3}; font-size: 10.5px; }}
-    #cthumb {{ background: #F4F6FA; border: 1px solid {LINE}; border-radius: 7px; }}
 
     #stOk {{ color: #0E7C4A; background: #EDF8F1; font-size: 10px; font-weight: 600;
              border-radius: 5px; padding: 2px 6px; }}
@@ -352,43 +353,40 @@ def qss() -> str:
                border-radius: 5px; padding: 2px 6px; }}
     #stLocal {{ color: #7C8698; background: #F3F5F9; font-size: 10px; font-weight: 600;
                 border-radius: 5px; padding: 2px 6px; }}
+    /* 可重试的药丸给一点 hover 反馈，否则「能点」这件事完全看不出来 */
+    #stFail:hover {{ background: #FBE3E3; }}
+    #stLocal:hover {{ background: #EAEEF5; }}
 
-    #clipPreview {{ background: #FAFBFD; border-top: 1px solid {LINE}; }}
-    #pvHead {{ color: {INK3}; font-size: 10.5px; }}
-    #pvKind {{ color: {INK2}; font-size: 11px; font-weight: 600; }}
-    #pvHint {{ color: #A0A9B8; font-size: 10.5px; }}
-    #pvImg {{ background: #FFFFFF; border: 1px solid #DCE2EC; border-radius: 7px; }}
-    #pvText {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
-        color: {INK2}; font-size: 11.5px;
-    }}
-    #pvEmpty {{ color: #A0A9B8; font-size: 11.5px; }}
-
-    #clipBar {{ background: #FFFFFF; border-top: 1px solid {LINE}; }}
-    QPushButton#clipPrimary {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {PRIMARY_TOP}, stop:1 {PRIMARY_BOTTOM});
-        color: #FFFFFF; border: 0; border-radius: 7px;
-        font-size: 12px; font-weight: 600; padding: 0 12px;
-    }}
-    QPushButton#clipPrimary:hover {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {PRIMARY_TOP_HOVER}, stop:1 {PRIMARY_BOTTOM_HOVER});
-    }}
-    QPushButton#clipPrimary:disabled {{ background: #B7C6E8; color: #FFFFFF; }}
-    QPushButton#clipBtn {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
-        color: {INK2}; font-size: 12px; font-weight: 600; padding: 0 11px;
-    }}
-    QPushButton#clipBtn:hover {{ background: #F7F9FC; border-color: #D6DDE9; }}
-    QPushButton#clipBtn:disabled {{ color: #B6BFCD; border-color: {LINE_SOFT}; }}
+    /* 操作条：和设置页 footer 同一块底色，按钮才是同一套 */
+    #clipBar {{ background: #F7F9FC; border-top: 1px solid {LINE}; }}
     QPushButton#clipDanger {{
-        background: #FFFFFF; border: 1px solid #F0D6D6; border-radius: 7px;
-        color: {DANGER}; font-size: 12px; font-weight: 600; padding: 0 11px;
+        background: #FFFFFF; border: 1px solid #F0D6D6; border-radius: 8px;
+        color: {DANGER}; font-size: {BODY_FS}px; padding: 0 14px; min-width: 52px;
     }}
     QPushButton#clipDanger:hover {{ background: #FDEEEE; border-color: #E9BFBF; }}
-    QPushButton#clipDanger:disabled {{ color: #D9AFAF; border-color: {LINE_SOFT}; }}
+    QPushButton#clipDanger:pressed {{ background: #FBE3E3; }}
 
-    #clipEmptyIcon {{ background: #F4F7FC; border: 1px solid {LINE}; border-radius: 14px; }}
+    #clipEmptyIcon {{ background: #F4F7FC; border: 1px solid {LINE_SOFT}; border-radius: 15px; }}
     #clipEmptyTitle {{ color: {INK}; font-size: 13.5px; font-weight: 600; }}
     #clipEmptyText {{ color: {INK3}; font-size: 11.5px; }}
+
+    /* 列表 / 预览的滚动条：细轨道、无箭头（默认那套带上下箭头的太重） */
+    #clipList QScrollBar:vertical, #clipPreview QScrollBar:vertical {{
+        width: 6px; background: transparent; border: 0; margin: 0;
+    }}
+    #clipList QScrollBar::handle:vertical, #clipPreview QScrollBar::handle:vertical {{
+        background: #D9DFE9; border-radius: 3px; min-height: 20px;
+    }}
+    #clipList QScrollBar::handle:vertical:hover, #clipPreview QScrollBar::handle:vertical:hover {{
+        background: #C4CDDB;
+    }}
+    #clipList QScrollBar::add-line:vertical, #clipList QScrollBar::sub-line:vertical,
+    #clipPreview QScrollBar::add-line:vertical, #clipPreview QScrollBar::sub-line:vertical {{
+        height: 0; border: 0; background: transparent;
+    }}
+    #clipList QScrollBar::add-page:vertical, #clipList QScrollBar::sub-page:vertical,
+    #clipPreview QScrollBar::add-page:vertical, #clipPreview QScrollBar::sub-page:vertical {{
+        background: transparent;
+    }}
     {_C.QSS_EXTRA}
     """

@@ -16,7 +16,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6", reason="未安装 PySide6，跳过界面测试")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
+from PySide6.QtGui import QPalette  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from dualswitch.clipboard import make_image, make_text  # noqa: E402
 from dualswitch.clipboard.mock import MockBackend  # noqa: E402
@@ -24,6 +26,7 @@ from dualswitch.config import ClipboardConfig, Config  # noqa: E402
 from dualswitch.sync.engine import SyncEngine  # noqa: E402
 from dualswitch.ui import theme  # noqa: E402
 from dualswitch.ui.clipboard_page import ClipboardPage  # noqa: E402
+from dualswitch.ui.widgets import page_header  # noqa: E402
 from dualswitch.ui.window import MainWindow  # noqa: E402
 
 
@@ -36,7 +39,14 @@ def app():
 def engine():
     cfg = ClipboardConfig()
     cfg.psk = "ab" * 32                     # 已配对
-    return SyncEngine(cfg, backend=MockBackend())
+    engine = SyncEngine(cfg, backend=MockBackend())
+    yield engine
+    # 每个用例用完必须停：传输的心跳线程是 daemon 线程，不收尾会一直转，
+    # 会话退出时踩已经释放的 socket（实测 access violation 崩在 _beat_loop）
+    try:
+        engine.stop()
+    except Exception:                       # noqa: BLE001 - 收尾失败不该连带挂掉用例
+        pass
 
 
 @pytest.fixture()
@@ -133,6 +143,166 @@ def test_back_button_emits(page, app):
     page.backRequested.connect(lambda: fired.append(True))
     page.back.click()
     assert fired == [True]
+
+
+# --------------------------------------------------------------------------- #
+# 版式细节：文本缩略图用本机图标 / 双击看原图 / 空态收起操作条
+# --------------------------------------------------------------------------- #
+def _png(w: int = 24, h: int = 16) -> bytes:
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QColor, QImage
+
+    image = QImage(w, h, QImage.Format_RGB32)
+    image.fill(QColor("#3366CC"))
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    image.save(buf, "PNG")
+    return bytes(buf.data())
+
+
+def test_text_thumb_uses_platform_logo(page, engine, app):
+    """缩略图画**来源端**的图标：对端来的画对端标，本机复制出来的画本机标。"""
+    from dualswitch.ui.chrome import current as chrome
+    from dualswitch.ui.clipboard_page import Thumb
+
+    engine._add(make_text("本机复制的"), source="local", state="ok")
+    engine._add(make_text("对端发来的"), source="remote", state="ok")
+    page.refresh()
+    app.processEvents()
+
+    local, remote = engine.records()[1], engine.records()[0]
+    thumb_local = page._rows[local.id].findChild(Thumb)
+    thumb_remote = page._rows[remote.id].findChild(Thumb)
+    assert thumb_local is not None and thumb_remote is not None
+
+    assert thumb_local._kind == "text" and thumb_local._pix is None      # 走图标分支
+    assert thumb_local._logo_kind == theme.PLATFORM_LOGO == chrome().PLATFORM_LOGO
+    assert thumb_remote._logo_kind == theme.PEER_LOGO == chrome().PEER_LOGO
+    assert theme.PEER_LOGO != theme.PLATFORM_LOGO
+
+
+def test_page_head_is_shared_and_centered(page, app):
+    """返回 / 页名 / 连接状态同一水平线，页名在整页正中（设置页同理）。"""
+    bar = page.header
+    assert bar.objectName() == "pageHead"
+    title = bar.findChild(QLabel, "pageTitle")
+    assert title is not None and title.text() == "剪贴板"
+
+    def center_y(widget: QWidget) -> int:
+        return widget.mapTo(bar, QPoint(0, widget.height() // 2)).y()
+
+    back_center = center_y(bar.back_btn)
+    title_center = center_y(title)
+    assert abs(back_center - title_center) <= 2, "返回键和页名不在同一水平线"
+
+    bar.resize(440, 40)
+    app.processEvents()
+    # QRect.center() 是 (x + (w-1)/2) 的整数除，直接比会有 1px 抖动，用浮点中心比
+    title_center = title.x() + title.width() / 2
+    assert abs(title_center - bar.width() / 2) <= 1, "页名没居中"
+
+
+def test_image_thumb_decodes_png(page, engine, app):
+    from dualswitch.ui.clipboard_page import Thumb
+
+    engine._add(make_image(_png(), 24, 16), source="local", state="ok")
+    page.refresh()
+    app.processEvents()
+    thumb = page.findChild(Thumb)
+    assert thumb is not None and thumb._pix is not None
+
+
+def test_double_click_preview_opens_viewer(page, engine, app):
+    """预览写着「双击全屏预览」，双击就得真能全屏（顶层窗口，不是页面内的小遮罩）。"""
+    engine._add(make_image(_png(64, 48), 64, 48), source="local", state="ok")
+    page.refresh()
+    app.processEvents()
+    page._select(engine.records()[0].id)
+    assert page.preview.hint.text() == "双击全屏预览"
+
+    page.preview.image.activated.emit()
+    app.processEvents()
+    assert page.viewer.isVisible()
+    assert page.viewer.windowFlags() & Qt.FramelessWindowHint
+    screen = app.primaryScreen().availableGeometry()
+    assert page.viewer.width() >= screen.width(), "预览应是全屏窗口，不是页面大小的遮罩"
+    assert page.viewer.height() >= screen.height()
+    assert page.viewer._shots and page.viewer._shots[page.viewer._index][1] == engine.records()[0].id
+
+    page.viewer.close_viewer()
+    assert not page.viewer.isVisible()
+
+
+def test_empty_state_hides_action_bar(page, app):
+    page.refresh()
+    app.processEvents()
+    assert page.footer.isVisibleTo(page) is False
+
+
+def test_row_fits_visible_area(page, engine, app):
+    """行不能被撑到比可视区更宽，否则状态药丸会被挤出屏幕。
+
+    副行曾经是普通 `QLabel`：它的 `minimumSizeHint` 是整段文字宽度，把行撑到
+    500+（可视区只有 404），药丸和删除按钮全在窗口外 —— 界面看着像少了一半内容。
+    """
+    from PySide6.QtCore import QPoint
+
+    for _ in range(4):
+        engine._add(make_text("很长" * 40), source="local", state="ok")
+    page.refresh()
+    app.processEvents()
+
+    assert page._rows
+    for row in page._rows.values():
+        assert row.width() <= page.scroll.viewport().width()
+        pill_right = row.pill.mapTo(page, QPoint()).x() + row.pill.width()
+        assert pill_right <= page.width()
+
+
+def test_list_gap_is_not_scroll_area_gray(engine, app):
+    """列表行之间不能露出滚动容器被强制刷上的灰底 —— 「灰底」回归守卫。
+
+    `QScrollArea.setWidget()` 会**强行**把宿主的 `autoFillBackground` 打开，宿主就用
+    `QPalette::Window`（浅灰）把自己刷一遍。而列表行在未选中时不画背景，于是整片
+    列表变成灰的 —— 这就是用户报的「列表容器被刷成灰底」。修复是在 `setWidget()`
+    之后把宿主的 `autoFillBackground` 关掉（见 `ClipboardPage._list_area`）。
+    这条用例同时守住根因（属性被改写）与表现（渲染出来的像素）。
+    """
+    for text in ("第一条记录", "第二条记录", "第三条记录"):
+        engine._add(make_text(text), source="local", state="ok")
+
+    # 页面必须**新建**在主窗口里，并且套上应用 QSS 再渲染：不给 QSS，`#root`
+    # 就没有白底（窗口是透明的），采样出来全是透明像素，渲染断言不可靠。
+    # 样式表用完还原，免得影响同模块里别的用例。
+    prev_qss = app.styleSheet()
+    app.setStyleSheet(theme.qss())
+    page = ClipboardPage(engine)
+    win = MainWindow(Config(), "Alt+Space", "v1.0.0")
+    win.attach_clipboard(page)
+    win.show()
+    win.show_clipboard_page()
+    app.processEvents()
+    page.refresh()
+    app.processEvents()
+    try:
+        # 根因：宿主不能被强行打开自动填充
+        assert page.list_host.autoFillBackground() is False, "滚动宿主又被刷上灰底了"
+
+        image = win.grab().toImage()
+        # 采样一条**未选中**行左侧留白处（x=4，缩略图从 x=12 才开始）：
+        # 该行不画背景，这里露出的就是滚动宿主的底色。
+        target = list(page._rows.values())[1]
+        at = page.mapTo(win, target.mapTo(page, QPoint(4, target.height() // 2)))
+        color = image.pixelColor(at.x(), at.y())
+        gray = app.palette().color(QPalette.Window)
+    finally:
+        win.deleteLater()
+        app.setStyleSheet(prev_qss)
+
+    assert color != gray, f"行间露出了滚动容器灰底：{color.name()}"
+    assert color.lightness() > gray.lightness() + 8, (
+        f"行间底色应是窗口白底，实测 {color.name()}"
+    )
 
 
 # --------------------------------------------------------------------------- #

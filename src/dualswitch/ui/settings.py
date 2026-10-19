@@ -23,7 +23,7 @@ from ..config import Config, ConfigError, from_dict, platform_defaults, save as 
 from ..hotkey.base import HotkeyError, parse_hotkey
 from . import theme
 from .chrome import current as chrome
-from .widgets import Combo, ElidedLabel, StatusBar, ToggleSwitch, label, soft_shadow
+from .widgets import Combo, ElidedLabel, StatusBar, ToggleSwitch, label, page_header, soft_shadow
 
 
 # --------------------------------------------------------------------------- #
@@ -269,9 +269,11 @@ class SettingsWindow(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.root = QFrame()
-        self.root.setObjectName("root")
+        # 内嵌成主窗口的一页时不能再画外框和投影：窗口只有一层圆角，
+        # 页面里再套一圈边框就成了「窗里套窗」（只有独立窗口才需要那圈）
+        self.root.setObjectName("rootEmbedded" if embedded else "root")
         outer.addWidget(self.root)
-        if not self.chrome.NATIVE_CHROME:
+        if not self.chrome.NATIVE_CHROME and not embedded:
             soft_shadow(self.root, "#0F172A", blur=38, dy=14, alpha=52)
 
         root_lay = QVBoxLayout(self.root)
@@ -362,24 +364,9 @@ class SettingsWindow(QWidget):
         root_lay.addWidget(self.statusbar)
 
     def _back_bar(self) -> QWidget:
-        """内嵌模式的头：左边「‹ 返回」，右边标题。"""
-        bar = QWidget()
-        bar.setObjectName("backBar")
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(10, 8, 10, 2)
-        lay.setSpacing(8)
-
-        btn = QPushButton("\u2039 返回")
-        btn.setObjectName("ghost")
-        btn.setFixedHeight(26)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.clicked.connect(self.backRequested)
-
-        title = QLabel("设置")
-        title.setStyleSheet("font-size:13px;font-weight:600;color:%s;background:transparent;" % theme.INK)
-
-        lay.addWidget(btn, 0, Qt.AlignVCenter)
-        lay.addWidget(title, 1, Qt.AlignVCenter)
+        """内嵌模式的头：和剪贴板页同一个 `page_header`，页名同样居中。"""
+        bar = page_header("设置", on_back=self.backRequested)
+        self.back_btn = bar.back_btn
         return bar
 
     # ------------------------------------------------------------------ 页面

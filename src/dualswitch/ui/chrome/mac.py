@@ -26,12 +26,15 @@ log = logging.getLogger("dualswitch.ui.chrome.mac")
 
 NAME = "macos"
 PLATFORM_LABEL = "macOS"
+PLATFORM_LOGO = "apple"          # 本机图标（剪贴板页文本记录的缩略图）
+PEER_LOGO = "windows"            # 对端图标：本应用只在 Windows/mac 两端配对，对端就是另一台
 
 NATIVE_CHROME = True
 BODY_TOP = 14
 INLINE_SETTINGS_ROW = True
 SETTINGS_IN_WINDOW = True        # 设置是主窗口内的一页（点返回回主页面），不另开窗口
 CLICK_HINT = "单击图标打开菜单"
+STATUS_ACTIVATE = "switch"       # 菜单栏单击仍是切换（mac 菜单栏没有双击习惯）
 REOPEN_ON_ACTIVATE = True
 DOCK_FOLLOWS_WINDOW = True       # 窗口收起 → 从程序坞消失；菜单栏图标照常留着
 STRICT_BACKEND = "auto"          # mac 只有 CGEventTap 一种后端，左右由 spec 决定
