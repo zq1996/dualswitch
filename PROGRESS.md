@@ -8,6 +8,10 @@
 > 单列为一态：状态卡显示「未检测到外接显示器」、按钮与设备卡置灰、菜单不给会失败的入口，
 > 也**不会盲发 Set**（直接给中文原因）。启动时那次只读探测经 `note_scan()` 喂给控制器，
 > 首帧就是对的。`tests/test_source_state.py` 15 例；全量 198 passed。
+> **已重打包并重装**（`/Applications/屏幕切换.app`，2026-10-19 09:43 启动验证：
+> 打包版=True、热键仍启用、8 秒内日志无「检测到画面已在 windows」）。
+> `install-app.sh` 顺手修了两个坑：往已存在的 bundle 里 `ditto` 是合并语义（旧文件会留下
+> 导致签名对不上），以及 `codesign --deep` 在受限环境会自己写 `.BC.*` 临时文件把包判成坏包。
 > **协作流程见 [`docs/COORDINATION.md`](docs/COORDINATION.md) + [`docs/ISSUES.md`](docs/ISSUES.md)**
 > （任务=编号+可观察行为+验收命令；共享层只有 macOS 端一个作者）。
 > 下一个：ISSUE-002（屏在 Windows 时 Mac 切回来），**先做 30 秒物理验证**再设计协议。

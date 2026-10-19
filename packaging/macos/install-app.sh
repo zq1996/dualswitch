@@ -42,11 +42,22 @@ if pgrep -f "/Contents/MacOS/$APP_BIN" >/dev/null 2>&1; then
 fi
 
 echo "安装：$SRC → $DST"
+# ditto 是「合并」语义：目标已存在时，旧包里多出来的文件会留在原地，
+# 装完就与签名对不上（报 "a sealed resource is missing or invalid"）。
+# 所以先把旧副本整体移开（不删，同目录下留一份），再复制。
+if [[ -e "$DST" ]]; then
+  BAK="$DST.bak-$(date +%H%M%S)"
+  mv "$DST" "$BAK"
+  echo "旧副本已改名：${BAK}（确认新包能起来后可手动删除）"
+fi
 /usr/bin/ditto "$SRC" "$DST"
 /usr/bin/xattr -dr com.apple.quarantine "$DST" 2>/dev/null || true
 
-if /usr/bin/codesign --verify --deep "$DST" >/dev/null 2>&1; then
-  IDENTITY="$(/usr/bin/codesign -dv "$DST" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+# 只做浅校验，**不要 --deep**：受限环境里 codesign 会把临时文件写进 bundle
+# （.BC.T_* / .BC.D_*），于是刚装好的包被自己判成「sealed resource missing」，
+# 白报一条「辅助功能授权可能失效」。深层完整性在 build.sh 里已经对源包校验过。
+if /usr/bin/codesign --verify "$DST" >/dev/null 2>&1; then
+  IDENTITY="$(/usr/bin/codesign -dvv "$DST" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
   echo "[ok] 签名有效（${IDENTITY:-未知身份}）"
 else
   echo "[warn] 签名校验失败：辅助功能授权可能失效，热键会起不来" >&2
