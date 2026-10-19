@@ -183,6 +183,11 @@ def platform_defaults() -> Config:
 # --------------------------------------------------------------------------- #
 _VALID_HOSTS = ("windows", "mac")
 
+#: 画面归属的「第三态」：既不在本机、也不在另一台 —— 因为**根本没枚举到外接屏**。
+#: 控制器与界面共用这一个字面量：曾经把「枚举不到」直接当成「在另一台」，
+#: 结果没接显示器时界面硬说「当前 Windows」（ISSUE-001）。
+SOURCE_UNKNOWN = "unknown"
+
 
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):

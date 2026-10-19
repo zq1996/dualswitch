@@ -271,6 +271,8 @@ class Transport:
         peer: tuple[str, int] | None = None,
         on_clip: Callable[[dict[str, Any], bytes], None] | None = None,
         on_ack: Callable[[dict[str, Any]], None] | None = None,
+        on_switch: Callable[[dict[str, Any]], None] | None = None,
+        on_switch_ack: Callable[[dict[str, Any]], None] | None = None,
         on_state: Callable[[str, str], None] | None = None,
     ) -> None:
         self.device_id = device_id
@@ -280,6 +282,8 @@ class Transport:
         self.peer = peer
         self._on_clip = on_clip or (lambda header, payload: None)
         self._on_ack = on_ack or (lambda header: None)
+        self._on_switch = on_switch or (lambda header: None)
+        self._on_switch_ack = on_switch_ack or (lambda header: None)
         self._on_state = on_state or (lambda state, detail: None)
 
         self._lock = threading.Lock()
@@ -495,6 +499,12 @@ class Transport:
         if frame.type == P.T_ACK:
             self._on_ack(frame.header)
             return
+        if frame.type == P.T_SWITCH:
+            self._on_switch(frame.header)
+            return
+        if frame.type == P.T_SWITCH_ACK:
+            self._on_switch_ack(frame.header)
+            return
         log.debug("忽略未知帧 %s", frame)
 
     # ------------------------------------------------------------------ 发送
@@ -516,6 +526,25 @@ class Transport:
             link.send(P.T_ACK, {"digest": digest, "ok": bool(ok), "detail": detail})
         except (OSError, LinkError) as exc:
             log.debug("ACK 发送失败（连接已断）：%s", exc)
+
+    # ------------------------------------------------------------------ 远端代发切屏
+    def send_switch(self, header: dict[str, Any]) -> None:
+        """请求对端代发 DDC Set。未连接 / 未认证时抛 `LinkError`。"""
+        link = self._link
+        if link is None or not link.alive or not link.ready:
+            raise LinkError("未连接")
+        if not link.authenticated:
+            raise LinkError("未配对")
+        link.send(P.T_SWITCH, header)
+
+    def send_switch_ack(self, header: dict[str, Any]) -> None:
+        link = self._link
+        if link is None or not link.alive:
+            return
+        try:
+            link.send(P.T_SWITCH_ACK, header)
+        except (OSError, LinkError) as exc:
+            log.debug("SWITCH_ACK 发送失败（连接已断）：%s", exc)
 
     def reconnect_now(self) -> None:
         """让拨号线程立刻重试一次（用户点了「重试」）。"""

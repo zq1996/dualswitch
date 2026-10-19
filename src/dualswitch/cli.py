@@ -108,8 +108,10 @@ def cmd_run(args) -> int:
         return 2
 
     # 启动时一次性安全探测：只读，不发送 Set（需求文档 3.5）
+    startup_monitors: list = []
     try:
         monitors = backend.list_monitors()
+        startup_monitors = monitors
         log.info("发现 %d 个物理显示器：%s", len(monitors), "; ".join(m.label() for m in monitors))
     except DDCError as exc:
         log.warning("枚举显示器失败：%s", exc)
@@ -120,6 +122,8 @@ def cmd_run(args) -> int:
         log.info("启动探测读取失败（符合 Q2790PC HDMI 通道已知行为，后续全部盲发）：%s", exc)
 
     controller = SwitchController(cfg, backend)
+    # 把这次探测的结果直接喂给控制器：界面第一帧就是对的，不用先猜「画面在本机」再纠正
+    controller.note_scan(startup_monitors)
 
     warning: str | None = None
     hotkey = None
@@ -137,7 +141,7 @@ def cmd_run(args) -> int:
         hotkey = None
 
     controller.start()
-    clip_engine = _start_clip_engine(cfg, cfg_file, controller)
+    clip_engine = _start_clip_engine(cfg, cfg_file, controller, backend)
 
     from . import tray as tray_mod
 
@@ -574,17 +578,40 @@ def cmd_clip(args) -> int:
 # --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
-def _start_clip_engine(cfg, cfg_file, controller):  # noqa: ANN001
+def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
     """把剪贴板引擎挂到切屏链路上。失败只降级，绝不影响切屏。"""
     if not cfg.clipboard.enabled:
         return None
     try:
         from .sync.engine import SyncEngine
 
+        def _serve_switch(value: int) -> tuple[bool, str]:
+            """对端说「替我切到 value」：校验后用本机后端发 DDC Set。"""
+            if cfg.dry_run:
+                return False, "本机处于演练模式，未真正发送指令"
+            allowed = {int(v) for v in cfg.sources.values()}
+            if int(value) not in allowed:
+                return False, f"输入源 {value} 不在本机配置里（允许 {sorted(allowed)}）"
+            if backend is None:
+                return False, "本机没有可用的 DDC 后端"
+            try:
+                backend.set_input(int(value))
+                return True, ""
+            except DDCError as exc:
+                return False, str(exc)
+
         config_mod.ensure_device_id_persisted(cfg, cfg_file)
-        engine = SyncEngine(cfg.clipboard, host_label=cfg.effective_host())
+        engine = SyncEngine(
+            cfg.clipboard,
+            host_label=cfg.effective_host(),
+            switch_executor=_serve_switch,
+            vcp_code=cfg.vcp_code,
+        )
         engine.start()
         controller.add_before_switch(lambda source, target: engine.push_now(f"switch:{source}"))
+        # 本机打不到这块屏时（画面在对面 / 没接线），交给对端代发
+        controller.remote_switch = engine.request_switch
+        controller.remote_ready = lambda: engine.switch_ready
         log.info("剪贴板同步已挂载（设备 %s，端口 %s）", cfg.clipboard.device_id, cfg.clipboard.port)
         return engine
     except Exception as exc:  # noqa: BLE001 - 剪贴板坏了不能连累切屏
@@ -646,7 +673,7 @@ def cmd_ui(args) -> int:
 
     controller.start()
 
-    clip_engine = _start_clip_engine(cfg, cfg_file, controller)
+    clip_engine = _start_clip_engine(cfg, cfg_file, controller, backend)
 
     from .ui.runner import run_ui
 

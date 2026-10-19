@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..config import SOURCE_UNKNOWN
+
 from . import theme
 
 
@@ -307,6 +309,12 @@ class DeviceCard(QFrame):
         else:
             self.setGraphicsEffect(None)
 
+    def set_standby(self, hint: str = "未使用") -> None:
+        """未知态：灯灭、不可点，文案别承诺「点击切换」（点了也切不了）。"""
+        self.set_active(False)
+        self.state.setText(hint)
+        self.setEnabled(False)
+
     def mouseReleaseEvent(self, event):  # noqa: N802
         if event.button() == Qt.LeftButton and not self._active:
             self.clicked.emit(self.host)
@@ -345,6 +353,10 @@ class HeroCard(QFrame):
         super().__init__(parent)
         self.setObjectName("hero")
         self.setMinimumHeight(196)
+        self._busy = False
+        self._unknown = False          # 当前是不是「未检测到外接显示器」那一态
+        self._remote_ok = False        # 未知态下对端能否代发切换
+        self._other_title = "Windows"  # 另一台机器的显示名（未知态用来写按钮文案）
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
@@ -420,6 +432,11 @@ class HeroCard(QFrame):
 
     # ------------------------------------------------------------------ 状态
     def set_state(self, host: str, monitor_line: str) -> None:
+        if host == SOURCE_UNKNOWN:
+            self.set_unknown()
+            return
+        self._unknown = False
+        self.plate.setVisible(True)
         title = "Windows" if host == "windows" else "Mac"
         self.title.setText(title)
         self.sub.setText(monitor_line)
@@ -427,7 +444,49 @@ class HeroCard(QFrame):
             logo_pixmap("windows" if host == "windows" else "apple", 26)
         )
         other = "Mac" if host == "windows" else "Windows"
+        self._other_title = other
         self.btn_text.setText(f"切换到 {other}")
+        self.button.setEnabled(not self._busy)
+        self.kbd.setVisible(self._kbd_enabled and not self._busy)
+
+    def set_unknown(self, other_label: str = "") -> None:
+        """第三态：没有任何证据说明画面属于哪台（没接屏 / 屏在另一台）。
+
+        这里**不能猜**一个主机名 —— 猜错会让用户照着界面去排障，
+        比什么都不说更糟（ISSUE-001）。但对端连着的时候，确实有办法把画面
+        叫回来（ISSUE-002 远端代发），那就把按钮留给它。
+        """
+        self._unknown = True
+        if other_label:
+            self._other_title = other_label
+        self._render_unknown()
+
+    def set_remote_available(self, available: bool) -> None:
+        """对端能不能代发切换。只在未知态下影响界面，已知态保持原样。"""
+        if available == self._remote_ok:
+            return
+        self._remote_ok = bool(available)
+        if self._unknown:
+            self._render_unknown()
+
+    @property
+    def remote_ok(self) -> bool:
+        return self._remote_ok
+
+    def _render_unknown(self) -> None:
+        self.plate.setVisible(False)
+        if self._remote_ok:
+            self.title.setText("未检测到外接显示器")
+            self.sub.setText(f"画面可能在 {self._other_title} · 可以请它代发切换")
+            self.btn_text.setText(f"从 {self._other_title} 切过来")
+            self.button.setEnabled(not self._busy)
+            self.kbd.setVisible(self._kbd_enabled and not self._busy)
+            return
+        self.title.setText("未检测到外接显示器")
+        self.sub.setText("没接线，或画面在另一台机器上")
+        self.btn_text.setText("未检测到显示器")
+        self.button.setEnabled(False)
+        self.kbd.setVisible(False)      # 这时候按热键也切不动，别给键帽暗示
 
     def set_hotkey(self, hotkey_label: str) -> None:
         """主按钮右侧键帽芯片显示当前热键（`Alt+Space` → `Alt + Space`；mac 上 → `⌥ Space`）。"""
@@ -437,6 +496,7 @@ class HeroCard(QFrame):
         self.kbd.setToolTip(hotkey_label)
 
     def set_busy(self, busy: bool, target_label: str = "") -> None:
+        self._busy = bool(busy)
         self.button.setEnabled(not busy)
         if busy:
             self.btn_text.setText(f"正在切换到 {target_label}…")
@@ -575,7 +635,7 @@ class Combo(QComboBox):
         active = self.underMouse() or self.hasFocus()
         p.setPen(QPen(QColor(theme.ACCENT if active else theme.LINE), 1))
         p.setBrush(QColor("#FFFFFF"))
-        p.drawRoundedRect(rect, 7, 7)
+        p.drawRoundedRect(rect, 8, 8)
 
         p.setPen(QColor(theme.INK))
         p.setFont(self.font())

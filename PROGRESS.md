@@ -1,6 +1,41 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-18 17:40
+> 最后更新：2026-10-19 15:10
+>
+> 👉 **2026-10-19 15:10（ISSUE-002 已实现 · 远端代发切屏，双向）**：屏只会出现在当前输入上，
+> **谁不持有画面谁就切不回来** —— Mac 看不到屏时请 Windows 代发，Windows 看不到屏时同样请 Mac 代发。
+> 实现按「**本地优先，失败才请对端代发**」：本机 `set_input` 抛错（或本次运行从没见过这块屏）时，
+> 经已配对链路发 `T_SWITCH(0x30)`，对端校验 VCP / 输入源后用自己的后端执行，回 `T_SWITCH_ACK(0x31)`；
+> 请求带幂等 id，重复到达只重发回执不重复执行，且**不会两端互踢**（执行方只发 DDC）。
+> 未知态下按钮文案按 `cfg.other_host()` 生成（「从 Windows 切过来」/「从 Mac 切过来」），
+> 对端离线 250ms 内自动置灰。能力双向、代码只有一份（共享层），
+> 协议、报文与分工见 [`docs/REMOTE-SWITCH.md`](docs/REMOTE-SWITCH.md)；
+> **Windows 端 0 行代码，pull + 验证两个方向即可**。
+> `tests/test_remote_switch.py` 18 例；全量 216 passed。真机验收（需接显示器）待做。
+>
+> 👉 **2026-10-19 13:47（打包瘦身 · Qt 翻译）**：两端打包脚本都加了**翻译裁剪**。PySide6 会带
+> 200 个各语言 `.qm`（约 7MB），而界面里**没有安装 `QTranslator`**（标准按钮本来就是英文），
+> 除中文外全是死重量。mac 端在 `build.sh` 里于 **codesign 之前**删掉非 `*_zh_CN.qm`
+> （删文件会让签名失效，晚了得重签一遍），Windows 端在 `build.ps1` 里删
+> `_internal\PySide6\Qt\translations` 下的同一批文件（`-OneFile` 模式没有 `_internal`，只打一行 warn）。
+> 两端预期各减约 **7MB**。脚本语法与裁剪逻辑已本地验证（`bash -n` + 造 5 个 `.qm` 实测，
+> zh_CN 两个留下、其余删掉），**尚未重新打包实测体积**。
+> 顺带修正 README §6：Windows 打包默认是 `--onedir`（产物是文件夹），原写「打包单文件 exe」
+> 与脚本默认不符，自启命令里的路径也一并改对。
+>
+> 👉 **2026-10-19（ISSUE-001 已关闭）**：画面归属加了**第三态 `unknown`**。以前
+> `detect_source()` 只有「能枚举到→本机 / 枚举不到→另一台」两分支，拔掉外接屏启动
+> 4 秒后界面会谎报「已同步外部切换 · 当前 Windows」。现在「本次运行从没见过这块屏」
+> 单列为一态：状态卡显示「未检测到外接显示器」、按钮与设备卡置灰、菜单不给会失败的入口，
+> 也**不会盲发 Set**（直接给中文原因）。启动时那次只读探测经 `note_scan()` 喂给控制器，
+> 首帧就是对的。`tests/test_source_state.py` 15 例；全量 198 passed。
+> **已重打包并重装**（`/Applications/屏幕切换.app`，2026-10-19 09:43 启动验证：
+> 打包版=True、热键仍启用、8 秒内日志无「检测到画面已在 windows」）。
+> `install-app.sh` 顺手修了两个坑：往已存在的 bundle 里 `ditto` 是合并语义（旧文件会留下
+> 导致签名对不上），以及 `codesign --deep` 在受限环境会自己写 `.BC.*` 临时文件把包判成坏包。
+> **协作流程见 [`docs/COORDINATION.md`](docs/COORDINATION.md) + [`docs/ISSUES.md`](docs/ISSUES.md)**
+> （任务=编号+可观察行为+验收命令；共享层只有 macOS 端一个作者）。
+> 下一个：ISSUE-002（屏在 Windows 时 Mac 切回来），**先做 30 秒物理验证**再设计协议。
 >
 > **并行开发中：跨端剪贴板同步（P0 文字 + P1 图片）**
 > 分工与契约见 [`docs/CLIPBOARD-SYNC-CONTRACT.md`](docs/CLIPBOARD-SYNC-CONTRACT.md)。
@@ -113,7 +148,7 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 
 | # | 阶段 | 状态 | 证据 |
 |---|---|---|---|
-| 1 | 调研现成方案并选型 | ✅ 完成 | `docs/RESEARCH.md`，结论：无完全匹配，自研应用层 |
+| 1 | 调研现成方案并选型 | ✅ 完成 | `docs/archive/RESEARCH.md`，结论：无完全匹配，自研应用层 |
 | 2 | 项目骨架 + 配置/日志 | ✅ 完成 | `config.py` / `logging_setup.py`，14 个配置用例通过 |
 | 3 | DDC 后端（Win/macOS/command/mock） | ✅ 完成（Win 真机） | `probe` 输出 `MONITOR\AOC2790`、`VCP 0x60 = 17` |
 | 4 | 全局热键（Win register + hook，macOS CGEventTap） | ✅ 完成（Win 真机） | `tools/e2e_hotkey.py` 两种模式均 OK |
@@ -199,7 +234,7 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 ### 3.4 配置
 - JSON，单文件，未知字段直接报错（防止拼写错误静默失效）。
 - 默认值即生产值：`sources = {windows:17, mac:18}`、`monitor_match="AOC"`。
-  （18 是实测出来的，不是 MCCS 标准的 27 —— 见 `docs/VERIFY-M1DDC.md`）
+  （18 是实测出来的，不是 MCCS 标准的 27 —— 见 `docs/archive/VERIFY-M1DDC.md`）
 - 热键字符串在配置校验阶段就解析，非法值启动即失败，不会带病运行。
 
 ### 3.5 CLI
@@ -425,7 +460,8 @@ dualswitch/
     ├── UI-DESIGN.md             Windows 界面规格
     ├── UI-DESIGN-MAC.md         macOS 界面规格（菜单栏为主）
     ├── PLATFORM-SPLIT.md        ★ 平台分层契约（另一端 AI 先读这个）
-    └── RESEARCH / VERIFY-M1DDC / TROUBLESHOOTING
+    ├── COORDINATION / ISSUES    双端协作规则与任务台账
+    └── archive/                 历史记录（RESEARCH / VERIFY-M1DDC / 两份 PLAN/HANDOFF / 托盘复盘）
 ```
 
 ---
@@ -950,7 +986,7 @@ dualswitch/
   下一步改为在 Mac 上 `m1ddc get input` 直接读出 USB-C 的真实值。
 - 2026-10-17 16:00 **macOS 首次实测未通过**：`m1ddc set input 17/27` 无反应，R-1 风险触发。
   新增 `tools/diag_macos.sh`（架构/外接屏识别/VCP 四项读值/亮度写入测试），
-  重写 `docs/VERIFY-M1DDC.md` 的失败定位决策树（A 画面归属 → B DDC 通道 → C 输入源指令 → D 退路）。
+  重写 `docs/archive/VERIFY-M1DDC.md` 的失败定位决策树（A 画面归属 → B DDC 通道 → C 输入源指令 → D 退路）。
 - 2026-10-17 15:42 生成 `dualswitch-1.0.0-mac.zip`（70KB，41 文件，排除 .venv/缓存），供拷到 Mac 验证。
 - 2026-10-17 15:35 `tools/verify_m1ddc.sh` 增加 `--status` / `--scan` 两种模式与「回传报告」输出；
   标记 T2 为当前待办。

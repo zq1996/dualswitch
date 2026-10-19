@@ -41,6 +41,10 @@ T_ONECLIP = 0x10
 T_ACK = 0x11
 T_PING = 0x20
 T_PONG = 0x21
+# 远端代发切屏（ISSUE-002）：请求对端代替本机发 DDC Set / 对端回执。
+# 旧版本收到 0x30/0x31 会走「忽略未知帧」分支，不会断连 —— 这是有序升级的前提。
+T_SWITCH = 0x30
+T_SWITCH_ACK = 0x31
 T_ERROR = 0x7F
 
 TYPE_NAMES = {
@@ -50,6 +54,8 @@ TYPE_NAMES = {
     T_ACK: "ACK",
     T_PING: "PING",
     T_PONG: "PONG",
+    T_SWITCH: "SWITCH",
+    T_SWITCH_ACK: "SWITCH_ACK",
     T_ERROR: "ERROR",
 }
 

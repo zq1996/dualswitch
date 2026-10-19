@@ -47,11 +47,13 @@ OK = "#0F9D58"
 WIN_W, WIN_H = 440, 600
 SETTINGS_H = 484          # 设置页内容比主页面少，矮一截避免中部大片空白
 RADIUS_WIN = 14
-RADIUS_CARD = 13
+RADIUS_CARD = 12
 RADIUS_CTRL = 10
 
 # 平台外观（窗口外框 / 标题栏 / 字号 / 字体）
 NATIVE_CHROME = _C.NATIVE_CHROME
+# 文本记录缩略图用的「本机系统图标」：Mac → apple，Windows → windows
+SYSTEM_LOGO = "apple" if _C.NAME == "macos" else "windows"
 TITLEBAR_H = 0 if NATIVE_CHROME else 44
 BODY_TOP = _C.BODY_TOP
 FONT_FAMILIES = list(_P.font_families)
@@ -206,7 +208,7 @@ def qss() -> str:
     #devStateOff {{ color: #A0A9B8; font-size: 10.5px; }}
 
     /* ---------- 列表 ---------- */
-    #listWrap {{ border: 1px solid {LINE}; border-radius: 11px; background: #FFFFFF; }}
+    #listWrap {{ border: 1px solid {LINE}; border-radius: 12px; background: #FFFFFF; }}
     QPushButton#row {{
         background: #FFFFFF; border: 0; border-bottom: 1px solid {LINE_SOFT};
         color: {INK}; font-size: {BODY_FS}px; text-align: left; padding-left: 0;
@@ -227,7 +229,7 @@ def qss() -> str:
     #statusText {{ color: {INK3}; font-size: 11.5px; }}
 
     /* ---------- 设置页 ---------- */
-    #tabs {{ background: #F1F4FA; border-radius: 10px; }}
+    #tabs {{ background: #F1F4FA; border-radius: 12px; }}
     QPushButton#tab {{
         background: transparent; border: 0; border-radius: 8px;
         color: {INK2}; font-size: {BODY_FS}px; font-weight: 500;
@@ -243,7 +245,7 @@ def qss() -> str:
     #pageHint {{ color: {INK3}; font-size: 11px; padding: 0 2px 2px 2px; }}
     #gTitle {{ color: {INK}; font-size: {BODY_FS}px; font-weight: 600; }}
     #gDesc {{ color: {INK3}; font-size: 11px; }}
-    #group {{ background: {LINE_SOFT}; border: 1px solid {LINE}; border-radius: 11px; }}
+    #group {{ background: {LINE_SOFT}; border: 1px solid {LINE}; border-radius: 12px; }}
     #gRow {{ background: #FFFFFF; border-bottom: 1px solid {LINE_SOFT}; }}
     #gRowLast {{ background: #FFFFFF; }}
     QPushButton#ghost {{
@@ -282,17 +284,17 @@ def qss() -> str:
 
     /* 下拉框本体由 widgets.Combo 自绘（QSS 画不出三角箭头），这里只管弹层 */
     QComboBox QAbstractItemView {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 8px;
         color: {INK}; font-size: {BODY_FS}px; padding: 4px; outline: 0;
         selection-background-color: {ACCENT_SOFT}; selection-color: {INK};
     }}
     QLineEdit#num {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 8px;
         color: {INK}; font-size: {BODY_FS}px; font-weight: 600; padding: 4px 6px;
     }}
     QLineEdit#num:focus {{ border-color: {ACCENT}; }}
     QLineEdit#text {{
-        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 7px;
+        background: #FFFFFF; border: 1px solid {LINE}; border-radius: 8px;
         color: {INK}; font-size: 12px; padding: 5px 8px;
     }}
     QLineEdit#text:focus {{ border-color: {ACCENT}; }}
@@ -311,17 +313,17 @@ def qss() -> str:
 
     /* ---------- 提示条 ---------- */
     #bannerWarn {{
-        background: #FFF8EC; border: 1px solid #F3E2C4; border-radius: 9px;
+        background: #FFF8EC; border: 1px solid #F3E2C4; border-radius: 8px;
         color: #7A4A05; font-size: 11.5px;
     }}
     #bannerErr {{
-        background: #FDF1F1; border: 1px solid #F4D6D6; border-radius: 9px;
+        background: #FDF1F1; border: 1px solid #F4D6D6; border-radius: 8px;
         color: #8C2222; font-size: 11.5px;
     }}
     /* 横幅里的动作（去授权 / 重试）：白底细边，压在浅色横幅上不抢眼但能点 */
     QPushButton#bannerAction {{
         background: rgba(255,255,255,0.92); border: 1px solid rgba(16,24,40,0.16);
-        border-radius: 7px; color: {INK}; font-size: 11.5px; font-weight: 600;
+        border-radius: 8px; color: {INK}; font-size: 11.5px; font-weight: 600;
         padding: 3px 10px;
     }}
     QPushButton#bannerAction:hover {{ background: #FFFFFF; border-color: {ACCENT}; color: {ACCENT}; }}
@@ -344,7 +346,6 @@ def qss() -> str:
         background: transparent; border: 0; padding: 0;
         color: {INK2}; font-size: 11.5px;
     }}
-
     #stOk {{ color: #0E7C4A; background: #EDF8F1; font-size: 10px; font-weight: 600;
              border-radius: 5px; padding: 2px 6px; }}
     #stPend {{ color: #1E4FD8; background: #EEF4FF; font-size: 10px; font-weight: 600;
