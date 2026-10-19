@@ -53,6 +53,18 @@ ICON_ARGS=()
     --specpath "$ROOT/build" \
     "$ROOT/packaging/entrypoint.py"
 
+# 翻译裁剪：Qt 自带 200 个各语言翻译（.qm，约 7MB），本工具只用中文，且代码里
+# 没有安装 QTranslator —— 除 zh_CN 外全是死重量。打包后直接删掉，只留中文。
+# 必须放在 codesign 之前：删文件会让签名失效，晚了就得重新签一遍。
+PRUNED=0
+while IFS= read -r -d '' qm; do
+    if [[ "$qm" != *_zh_CN.qm ]]; then
+        rm -f "$qm"
+        PRUNED=$((PRUNED + 1))
+    fi
+done < <(find "$APP" -type f -name '*.qm' -print0)
+echo "[ok] 翻译只保留中文（zh_CN），已删除 $PRUNED 个其它语言的 .qm"
+
 # Dock / 菜单栏「关于」里显示中文名；LSUIElement=false 保留 Dock 图标（主窗口是真实窗口）
 PLIST="$APP/Contents/Info.plist"
 if [[ -f "$PLIST" ]]; then

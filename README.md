@@ -165,11 +165,15 @@ dualswitch run                        # 常驻：菜单栏 + 右 Option + Space
 **Windows**
 
 ```powershell
-# 打包单文件 exe
+# 打包（默认 --onedir：产物是文件夹 dist\dualswitch\，整个文件夹一起拷走）
 powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 
+# 需要单文件 exe 时才加 -OneFile。本机实测单文件双击约三成概率报
+# "Could not create temporary directory!"（安全软件间歇拦截 %TEMP% 建目录），所以默认用 onedir
+powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1 -OneFile
+
 # 开机自启（启动文件夹快捷方式）
-powershell -ExecutionPolicy Bypass -File packaging\windows\install_autostart.ps1 -Exe .\dist\dualswitch.exe
+powershell -ExecutionPolicy Bypass -File packaging\windows\install_autostart.ps1 -Exe .\dist\dualswitch\dualswitch.exe
 ```
 
 **macOS**

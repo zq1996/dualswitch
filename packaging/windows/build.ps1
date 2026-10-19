@@ -55,6 +55,19 @@ $target = if ($OneFile) { "$root\dist\dualswitch.exe" } else { "$root\dist\duals
 
 if ($LASTEXITCODE -ne 0) { throw "打包失败" }
 
+# ── 翻译裁剪 ───────────────────────────────────────────────────────────────
+# Qt 自带 200 个各语言翻译（.qm，约 7MB），本工具只用中文，且代码里没有安装
+# QTranslator —— 除 zh_CN 外全是死重量，打出来就删掉。
+$qmDir = Join-Path (Split-Path $target -Parent) "_internal\PySide6\Qt\translations"
+if (Test-Path $qmDir) {
+    $qmAll = @(Get-ChildItem -Path $qmDir -Filter "*.qm")
+    $qmDrop = @($qmAll | Where-Object { $_.Name -notlike "*_zh_CN.qm" })
+    if ($qmDrop.Count -gt 0) { $qmDrop | Remove-Item -Force }
+    Write-Host "翻译只保留中文（zh_CN）：保留 $($qmAll.Count - $qmDrop.Count) 个，删除 $($qmDrop.Count) 个 .qm"
+} else {
+    Write-Host "[warn] 没找到 $qmDir，跳过翻译裁剪"
+}
+
 # ── 完整性标签 ─────────────────────────────────────────────────────────────
 # 托盘图标靠 Shell_NotifyIcon 交给 explorer。Windows 不允许**低完整性级别**的进程
 # 向更高级别的窗口发消息（UIPI），而本机 explorer 是提权运行的（High）。
