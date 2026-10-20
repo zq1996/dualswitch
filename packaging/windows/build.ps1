@@ -42,6 +42,17 @@ $mode = if ($Console) { "--console" } else { "--windowed" }
 $layout = if ($OneFile) { "--onefile" } else { "--onedir" }
 $target = if ($OneFile) { "$root\dist\dualswitch.exe" } else { "$root\dist\dualswitch\dualswitch.exe" }
 
+# 兼容垫片（ui\theme.py 等 8 个）：界面拆成 ui\mac 与 ui\win 两棵树之后，除了 cli.py
+# 与 tests 几乎没有地方**静态** import 它们（树内引用的是 dualswitch.ui.win.*），
+# PyInstaller 会漏收。2026-10-20 实测：只有 theme / widgets / runner 靠间接引用进了包，
+# window / settings / statusitem / clipboard_page / focus_style 全缺，产物 `--selfcheck`
+# 直接报 ModuleNotFoundError。逐个显式收进来 —— 少一个，双击就是闪退。
+$shimArgs = @()
+foreach ($shim in "theme", "widgets", "window", "settings", "statusitem", "clipboard_page", "runner", "focus_style") {
+    $shimArgs += "--hidden-import"
+    $shimArgs += "dualswitch.ui.$shim"
+}
+
 & $Python -m PyInstaller `
     --noconfirm --clean `
     --name dualswitch `
@@ -54,6 +65,7 @@ $target = if ($OneFile) { "$root\dist\dualswitch.exe" } else { "$root\dist\duals
     --hidden-import "pystray._win32" `
     --hidden-import "PIL.ImageDraw" `
     --hidden-import "dualswitch.ui.win" `
+    @shimArgs `
     --distpath "$root\dist" `
     --workpath "$root\build" `
     --specpath "$root\build" `

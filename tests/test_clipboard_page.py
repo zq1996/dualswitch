@@ -189,15 +189,17 @@ def test_text_thumb_uses_platform_logo(page, engine, app):
     thumb_local = page._rows[local.id].findChild(Thumb)
     thumb_remote = page._rows[remote.id].findChild(Thumb)
     assert thumb_local is not None and thumb_remote is not None
-    assert thumb_local._pix is not None and thumb_remote._pix is not None
 
     if IS_WIN:
         # Windows 版把「画哪个图标」记在 _logo_kind 上，图标自身延迟绘制
+        # （文本记录不进 _pix，_pix 只装真图片；`paintEvent` 里才画 _logo）
+        assert thumb_local._pix is None and thumb_remote._pix is None
         assert thumb_local._logo_kind == theme.PLATFORM_LOGO == chrome().PLATFORM_LOGO
         assert thumb_remote._logo_kind == theme.PEER_LOGO == chrome().PEER_LOGO
         assert theme.PEER_LOGO != theme.PLATFORM_LOGO
     else:
         # mac 版直接渲染成 pixmap（按 SYSTEM_LOGO 取本机/对端那张），没有 _logo_kind
+        assert thumb_local._pix is not None and thumb_remote._pix is not None
         assert theme.SYSTEM_LOGO in ("apple", "windows")
         assert not hasattr(thumb_local, "_logo_kind")
         assert thumb_local._pix.toImage() != thumb_remote._pix.toImage(), (

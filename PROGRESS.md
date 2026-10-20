@@ -514,6 +514,28 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-20 **[packaging] 界面拆两棵树之后，Windows 侧补上垫片 hidden-import + 修掉一条只在 Windows 红的用例**。
+  · pull 到 `5a76c19` + `0d14345`（`ui/mac` + `ui/win` 两棵树）后先全量自测：**274 passed / 8 skipped**。
+  · **打包会失败**：8 个兼容垫片里除了 `runner`（`cli.py` 引用）都没有静态 import，PyInstaller 只靠间接
+    引用收进了 theme / widgets / runner，`window / settings / statusitem / clipboard_page / focus_style`
+    全缺 —— 产物 `--selfcheck` 报 `ModuleNotFoundError: No module named 'dualswitch.ui.window'` 等，
+    打包脚本以退出码 1 结束。mac 端已在 `0d14345` 用 8 条 `--hidden-import` 修掉，Windows 的
+    `build.ps1` 漏了。照同样写法补 `$shimArgs` 数组（PowerShell 5.1 用 `@shimArgs` splat，
+    逐个点名而不是拼字符串，注释里写明「少一个，双击就是闪退」）。
+  · 补完重打包：**`BUILD_EXIT=0`**，日志依次 `Build complete` → `自检通过：17 个界面模块可导入，
+    当前平台外观 = windows` → `翻译只保留中文（保留 3 个，删除 96 个）` → `完整性标签：High`，
+    产物 134MB（`dist\dualswitch\dualswitch.exe`）。
+  · **一条用例只在 Windows 红**：`test_text_thumb_uses_platform_logo` 把 `_pix is not None` 放在了
+    平台分叉**之前**；而 Windows 版文本缩略图的 `_pix` 本来就是 `None`（图标记在 `_logo_kind` 上、
+    `paintEvent` 里延迟绘制，`_pix` 只装真图片）。改成 Windows 断言 `_pix is None`、mac 断言非 None。
+  · **行为回归结论：Windows 端界面行为零变化** —— `ui/win/**` 与 `274afd2` 的旧扁平文件逐字一致，
+    只差相对 import 深度（`..` → `...`）、删掉无人引用的死字段 `theme.SYSTEM_LOGO`、
+    `theme.asset()` 改成往上一级找 `ui/assets`。三个界面（主窗口 440×600 / 设置页 484 / 剪贴板页
+    440×560，3 行记录、本机 Windows 标 + 对端 Apple 标）离屏抓图与旧版一致。
+  · **环境提醒**：连续打包两次会撞安全删除守卫（COLLECT 要 rmtree 旧 `dist\dualswitch` 的 176 个文件），
+    表现是 `[safe-delete] ... SAFE_DELETE_BULK_CONFIRM_REQUIRED` 后 `打包失败` —— 不是代码问题，
+    每次打包前先 `mv dist\dualswitch dist\dualswitch.old-<日期>`。
+
 - 2026-10-19 **[packaging] Windows 产物重打 + 自启改启动界面；顺手修掉「.ps1 没 BOM，打包脚本根本跑不起来」**。
   · **重打包**：`dist\dualswitch` 从 10-18 16:10 的旧版重打到 21:23（含剪贴板页重做、设置内嵌、
     未知态三态、远端代发、焦点治理）。实测：`打包版=True`、**完整性级别 High（与 explorer 同级）**、
