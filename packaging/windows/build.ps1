@@ -53,6 +53,7 @@ $target = if ($OneFile) { "$root\dist\dualswitch.exe" } else { "$root\dist\duals
     --add-data "$root\src\dualswitch\ui\assets;dualswitch\ui\assets" `
     --hidden-import "pystray._win32" `
     --hidden-import "PIL.ImageDraw" `
+    --hidden-import "dualswitch.ui.win" `
     --distpath "$root\dist" `
     --workpath "$root\build" `
     --specpath "$root\build" `

@@ -1,9 +1,39 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-19 15:10
+> 最后更新：2026-10-20 09:40
+>
+> 👉 **2026-10-20 09:40（界面代码两端物理拆开 · 冲突面归零）**：`src/dualswitch/ui/` 现在分成
+> **两棵互不引用的树**：`ui/mac/`（macOS 整套界面）与 `ui/win/`（Windows 整套界面），各含
+> `theme / widgets / window / settings / statusitem / clipboard_page / runner / focus_style`。
+> 唯一接缝是 `ui/__init__.py::platform_ui()`（约 10 行，两端都不需要改）。
+>
+> **为什么拆**：5 次合并统计出来的事实 —— **UI 层两端撞了 14 次，业务后台只撞了 1 次**
+> （本次的 `sync/transport.py`，且没产生冲突）。后台不冲突靠的是「一个文件一个作者」
+> （`clipboard/windows.py` 只归 Windows、`sync/*` 只归 macOS），界面照同一条边界拆开即可。
+> 拆之前 `clipboard_page.py` 两端各写了一遍（528+/273-），是全仓唯一的真分叉。
+>
+> **mac 侧口径：以 `eb74ca7`（10-19 最后一个 mac 界面提交）为准** —— 双击预览图走**系统看图软件**
+> （`_open_original` → 临时 PNG → `chrome.open_path`）、自带页头、`theme.SYSTEM_LOGO` 决定缩略图。
+> Windows 侧保持本轮成果：应用内全屏预览 + ←/→ 翻页、`page_header`、设置页内嵌为窗口一页、
+> 焦点虚框治理、空态收起操作条。**两端行为差异是刻意保留的，不再强求一致。**
+>
+> 兼容层：`ui/{theme,widgets,window,settings,statusitem,clipboard_page,runner,focus_style}.py`
+> 变成 8 个**垫片**（`sys.modules` 换绑到当前平台那棵树），`tests/`、`tools/`、
+> `cli.py` 的 40 余处导入路径一个字都不用改。资源仍在 `ui/assets/`，两棵树的 `theme.asset()`
+> 改成往上一级找。打包脚本各加一条 `--hidden-import "dualswitch.ui.{mac,win}"`。
+>
+> 新增守卫：`test_ui_tree_does_not_import_the_other`（两棵树不许互相 import）、
+> `test_ui_trees_expose_the_same_api`（同名模块 + 同名信号/方法 + `run_ui` 签名一致，
+> 防 58ecb42 那种「签名漂移一路合到启动才崩」）。`test_clipboard_page.py` 里 4 条
+> 对呈现方式敏感的用例改为按平台分叉。全量 **241 passed / 13 skipped**。
+>
+> 代价与纪律：两棵树有约 2200 行相似代码 —— **修 bug 要判断另一端是否同样存在**；
+> 跨端一致性从「代码保证」变成「`docs/UI-DESIGN*.md` + 各自自测保证」。
+> 归属规则已写进 `docs/COORDINATION.md` 第 1 节与 `docs/PLATFORM-SPLIT.md` 第 0/2 节。
 >
 > 👉 **2026-10-19 15:10（ISSUE-002 已实现 · 远端代发切屏，双向）**：屏只会出现在当前输入上，
 > **谁不持有画面谁就切不回来** —— Mac 看不到屏时请 Windows 代发，Windows 看不到屏时同样请 Mac 代发。
+
 > 实现按「**本地优先，失败才请对端代发**」：本机 `set_input` 抛错（或本次运行从没见过这块屏）时，
 > 经已配对链路发 `T_SWITCH(0x30)`，对端校验 VCP / 输入源后用自己的后端执行，回 `T_SWITCH_ACK(0x31)`；
 > 请求带幂等 id，重复到达只重发回执不重复执行，且**不会两端互踢**（执行方只发 DDC）。

@@ -7,9 +7,25 @@
 
 ## 0. 一句话规则
 
-> **改外观、改平台交互 → 只动 `ui/chrome/win.py` 或 `ui/chrome/mac.py`。
-> 共享文件（`theme / window / settings / runner / statusitem / widgets`）里不再出现
-> `sys.platform`、`IS_MAC` 这类分支；确实需要平台差异时，把它变成 chrome 的一个字段。**
+> **界面代码两端各一套，物理分开：改界面只动 `ui/mac/**` 或 `ui/win/**` 里自己那棵。
+> 只有「外观差异」这种一眼可见的东西还留在 `ui/chrome/win.py` / `ui/chrome/mac.py`。**
+
+2026-10-20 之前是"共享文件 + chrome 字段"：两端都改 `theme.py` / `clipboard_page.py`，
+每加一个平台差异就多一个冲突点。5 次合并的统计结果是 **UI 层两端撞了 14 次，
+业务后台只撞了 1 次** —— 后台之所以不冲突，是因为 `clipboard/windows.py` 只归 Windows、
+`sync/*` 只归 macOS，**一个文件一个作者**。于是界面也照这条边界拆开：
+
+| | 拆之前 | 拆之后 |
+|---|---|---|
+| 改剪贴板页 | 两端改同一个 `clipboard_page.py`（528+/273-） | 各改各的 `ui/{mac,win}/clipboard_page.py` |
+| 改 QSS | 两端改同一个 `theme.py` | 各改各的 |
+| 冲突概率 | 每次合并 3–9 个文件重叠 | **0**（剩下一行选路，两端都不需要改） |
+| 代价 | — | 约 2200 行重复代码；**跨端一致性靠文档 + 各自的自测，不靠代码** |
+
+> 因此：**两端视觉要一致的地方，写进 `docs/UI-DESIGN.md` / `docs/UI-DESIGN-MAC.md`；
+> 在一端修了一个 bug，先判断另一端是否同样存在**（两棵树不会自动同步）。
+> 用例层面已经钉住"公开接口必须对齐"（`tests/test_chrome_contract.py::test_ui_trees_expose_the_same_api`），
+> 但**行为**上的差异是允许的、也是刻意保留的。
 
 为什么要这样：两端原本在同一批文件里写 `if IS_MAC:`。Windows 和 Mac 由两个 AI（或两段时间）
 并行开发时，每加一个平台差异就多一个冲突点，merge 时大面积重叠。拆完之后两端各占一个文件。
@@ -18,39 +34,57 @@
 
 ## 1. 我要改 X，应该动哪个文件
 
+> 路径里的 `{tree}` = 自己那棵树（`mac` 或 `win`）。
+
 | 想改的东西 | 动这里 | 别动 |
 |---|---|---|
-| Windows 主色 / 字体 / 标题栏按钮 / 托盘双击 | `chrome/win.py` | theme、widgets |
-| mac 主色 / SF 字体 / 菜单栏图标与菜单 / ⌘ 快捷键 | `chrome/mac.py` | theme、widgets |
-| 「严格区分左右 Alt」这类**同一个开关、两端不同文案** | 两端 chrome 的 `HOTKEY_COPY` | settings.py |
-| DDC 后端下拉里有哪些选项 | 两端 chrome 的 `BACKEND_OPTIONS` | settings.py |
-| 状态卡 / 设备卡 / 列表行 / 灯 / 开关的外观 | `widgets.py`（共享，两端同时变） | — |
-| 四个设置页的**结构**（分组、行顺序） | `settings.py`（共享） | — |
-| 主窗口的**结构**（谁在上面、几行列表） | `window.py`（共享） | — |
-| 250ms 状态轮询、热键重建、探针/诊断弹窗 | `runner.py`（共享） | — |
-| 菜单条目的文字与顺序 | `statusitem.py::build_menu_entries`（共享） | — |
-| 切换编排、DDC、热键、配置 | `app.py` / `ddc/*` / `hotkey/*` / `config.py` | ui/ |
+| Windows 主色 / 字体 / 标题栏按钮 / 托盘双击语义 | `chrome/win.py` | 任何一棵树的 theme、widgets |
+| mac 主色 / SF 字体 / 菜单栏图标与菜单 / ⌘ 快捷键 | `chrome/mac.py` | 任何一棵树的 theme、widgets |
+| 「严格区分左右 Alt」这类**同一个开关、两端不同文案** | 两端 chrome 的 `HOTKEY_COPY` | settings |
+| DDC 后端下拉里有哪些选项 | 两端 chrome 的 `BACKEND_OPTIONS` | settings |
+| 状态卡 / 设备卡 / 列表行 / 灯 / 开关的外观 | `ui/{tree}/widgets.py`（**本端**） | 另一端那棵 |
+| 四个设置页的**结构**（分组、行顺序） | `ui/{tree}/settings.py`（本端） | 另一端那棵 |
+| 主窗口的**结构**（谁在上面、几行列表） | `ui/{tree}/window.py`（本端） | 另一端那棵 |
+| 250ms 状态轮询、热键重建、探针/诊断弹窗 | `ui/{tree}/runner.py`（本端） | 另一端那棵 |
+| 菜单条目的文字与顺序 | `ui/{tree}/statusitem.py::build_menu_entries`（本端） | 另一端那棵 |
+| 剪贴板页（列表 / 预览 / 双击语义 / 看图方式） | `ui/{tree}/clipboard_page.py`（本端） | 另一端那棵 |
+| 切换编排、DDC、热键、配置 | `app.py` / `ddc/*` / `hotkey/*` / `config.py` | `ui/` 里任何东西 |
 
-判断标准：**「只有一端需要不同」→ chrome；「两端应该一起变」→ 共享文件。**
+判断标准：**「只有一端需要不同」→ chrome 字段；「这一端独有的实现」→ 自己那棵树；
+「两端必须一模一样」→ 写进设计文档，两边各自实现。**
 
 ---
 
 ## 2. 目录
 
 ```
-src/dualswitch/ui/
-├── chrome/                ← 平台外观层（两端各一个文件，互不相干）
-│   ├── base.py            契约定义（Palette 数据类 + 本文档的代码版）
-│   ├── win.py             Windows：自绘标题栏 + 托盘双击 + Win 文案/配色
-│   └── mac.py             macOS：系统标题栏 + 菜单栏 NSStatusItem + 应用菜单 + Mac 文案/配色
-├── theme.py               组装 token 与 QSS（配色来自 chrome.PALETTE，无平台分支）
-├── widgets.py             共享自绘控件：Led / DeviceCard / HeroCard / ListRow / Combo / ToggleSwitch …
-├── window.py              主窗口骨架（问 chrome 要标题栏，没有就用系统的）
-├── settings.py            设置窗口：常规 / 热键 / 显示器 / 高级
-├── statusitem.py          菜单条目的数据模型（MenuEntry + build_menu_entries，纯函数）
-├── runner.py              接线：QApplication + 常驻入口 + 热键 + SwitchController + 轮询
-└── assets/                windows-logo(-dim).png / apple-logo(-dim).png / menubar.png / screen-switch.ico
+src/dualswitch/
+├── clipboard_feed.py       没有同步引擎时的本机记录源（mac 写，win 只读）
+├── ui/
+│   ├── __init__.py         唯一接缝：platform_ui() 按平台返回 mac / win 包（冻结）
+│   ├── chrome/             ← 平台外观契约（两端各一个文件，互不相干）
+│   │   ├── base.py         契约定义（Palette 数据类 + 本文档的代码版）
+│   │   ├── win.py          Windows：自绘标题栏 + 托盘双击 + Win 文案/配色
+│   │   └── mac.py          macOS：系统标题栏 + 菜单栏 NSStatusItem + 应用菜单 + Mac 文案/配色
+│   ├── mac/                ← **macOS 整套界面，只归 macOS 端改**
+│   │   ├── theme.py        组装 token 与 QSS（配色来自 chrome.PALETTE）
+│   │   ├── widgets.py      Led / DeviceCard / HeroCard / ListRow / Combo / ToggleSwitch …
+│   │   ├── window.py       主窗口骨架（系统标题栏）
+│   │   ├── settings.py     设置页（内嵌为主窗口的一页）
+│   │   ├── statusitem.py   菜单条目（MenuEntry + build_menu_entries）
+│   │   ├── clipboard_page.py  剪贴板页（双击预览图 → 系统看图软件）
+│   │   ├── runner.py       接线：QApplication + 菜单栏 + 热键 + SwitchController + 轮询
+│   │   └── focus_style.py  焦点虚线框治理（mac 侧未安装，保留模块以便接口对齐）
+│   ├── win/                ← **Windows 整套界面，只归 Windows 端改**（同名八件，实现独立）
+│   │   └── …（clipboard_page 走应用内全屏预览 + ←/→ 翻页；设置页用 page_header）
+│   ├── {theme,widgets,window,settings,statusitem,clipboard_page,runner,focus_style}.py
+│   │                       兼容垫片：只做 `sys.modules` 换绑，**冻结，谁都不许加实现**
+│   └── assets/            windows-logo(-dim).png / apple-logo(-dim).png / menubar.png / screen-switch.ico
 ```
+
+为什么垫片还在：`tests/` 与 `tools/` 里 40 多处写着 `from dualswitch.ui.window import MainWindow`
+这类路径，垫片让它们继续指向"当前平台那棵树"，不用全改。它只做一件事：把
+`dualswitch.ui.<name>` 换成 `dualswitch.ui.{mac,win}.<name>` 的**同一个模块对象**。
 
 ---
 
@@ -73,7 +107,8 @@ src/dualswitch/ui/
 | `INLINE_SETTINGS_ROW` | bool | `False` | `True` | 主窗口内容区是否放「设置…」行 |
 | `SETTINGS_IN_WINDOW` | bool | `True` | `True` | 设置是否为主窗口内的一页（「‹ 返回」回主页面，不另开窗口） |
 | `SETTINGS_ROW_HINT` | str | `""` | `"⌘ ,"` | 设置行右侧提示 |
-| `CLICK_HINT` | str | `"双击图标切换"` | `"单击图标打开菜单"` | 常驻图标提示、菜单里的说明 |
+| `CLICK_HINT` | str | `"双击图标打开主界面"` | `"单击图标打开菜单"` | 常驻图标提示、菜单里的说明（**必须与本端实际行为一致**） |
+| `STATUS_ACTIVATE` | str | `"show_main"` | `"switch"` | 点常驻图标干什么。Windows 双击只摊开主界面（切屏不可逆，不绑双击）；mac 的菜单栏左右键都弹菜单，所以 mac 这个值目前不会被真正的点击触发 |
 | `REOPEN_ON_ACTIVATE` | bool | `False` | `True` | 点 Dock / Cmd+Tab 回来时自动展开窗口 |
 | `DOCK_FOLLOWS_WINDOW` | bool | `False` | `True` | 窗口收起后程序坞图标是否消失（mac 用 `NSApplicationActivationPolicy` 切换，菜单栏图标不受影响） |
 | `STRICT_BACKEND` | str | `"hook"` | `"auto"` | 勾选「只认右 Alt/Option」时写入的 `hotkey_backend` |
@@ -87,7 +122,7 @@ src/dualswitch/ui/
 | 函数 | 返回 | 说明 |
 |---|---|---|
 | `titlebar(title, show_settings=True)` | `QWidget \| None` | Windows 返回自绘标题栏；mac 返回 `None`（用系统标题栏） |
-| `build_status_item(icon, on_click)` | 状态项对象 | Windows → `QtStatusItem`（双击触发）；mac → `MacStatusItem`（单击触发） |
+| `build_status_item(icon, on_click)` | 状态项对象 | Windows → `QtStatusItem`（双击摊开主界面）；mac → `MacStatusItem`（左右键都弹菜单） |
 | `build_app_menu(runner)` | `QMenuBar \| None` | mac 返回全局菜单栏；Windows 返回 `None` |
 | `activate(window)` | None | 把窗口抢到前台（mac 必须显式 activate） |
 | `set_dock_visible(visible)` | None | 显示/隐藏程序坞图标（mac 切激活策略；Windows 空实现） |

@@ -71,16 +71,12 @@ FUNCS = [
 
 HOTKEY_KEYS = {"strict_title", "strict_desc", "tray_title", "tray_desc", "swallow_desc"}
 
-# 这些文件是两端共享的，不允许出现平台判断
-SHARED_FILES = [
-    "theme.py",
-    "widgets.py",
-    "window.py",
-    "settings.py",
-    "runner.py",
-    "statusitem.py",
-]
-FORBIDDEN = ("sys.platform", "platform.system(", "IS_MAC")
+# 两端各一棵界面树（2026-10-20 起）：不许互相 import，公开 API 必须对齐
+TREES = ("mac", "win")
+
+
+def _tree_sources(name: str) -> list[Path]:
+    return sorted((Path(ui_pkg.__file__).parent / name).glob("*.py"))
 
 
 @pytest.mark.parametrize("name", CHROME_MODULES)
@@ -197,16 +193,61 @@ def test_chrome_selector_imports_statically():
     assert {"mac", "win"} <= imported, "两个平台模块都要写成静态 `from . import ...`"
 
 
-def test_shared_ui_has_no_platform_branch():
-    """共享文件里出现平台分支，就等于把两端的改动重新绑回同一个文件。"""
-    ui_dir = Path(ui_pkg.__file__).parent
+@pytest.mark.parametrize("name", TREES)
+def test_ui_tree_does_not_import_the_other(name: str):
+    """两棵界面树互不引用：一旦互相 import，就又变回「一个文件两个作者」。"""
+    other = "win" if name == "mac" else "mac"
     offenders: list[str] = []
-    for filename in SHARED_FILES:
-        source = (ui_dir / filename).read_text(encoding="utf-8")
-        for needle in FORBIDDEN:
+    for path in _tree_sources(name):
+        source = path.read_text(encoding="utf-8")
+        for needle in (f"from ..{other} import", f"from .{other} import", f"dualswitch.ui.{other}"):
             if needle in source:
-                offenders.append(f"{filename}: {needle}")
-    assert not offenders, "共享 UI 文件出现平台分支：" + "；".join(offenders)
+                offenders.append(f"{name}/{path.name}: {needle}")
+    assert not offenders, "界面树互相引用：" + "；".join(offenders)
+
+
+def test_ui_trees_expose_the_same_api():
+    """两棵树必须提供同名模块 + 同名公开接口。
+
+    这条是 58ecb42 的教训：合并时 `ClipboardPage(open_external=...)` 这种
+    「共享控件签名变了、调用方自动合并且无冲突」会一路合到启动才崩
+    （`TypeError: unexpected keyword argument`）。把 API 钉住，签名漂移在测试里就红。
+    """
+    import inspect
+
+    from dualswitch.ui import mac, win
+
+    for mod_name in ("theme", "widgets", "window", "settings", "clipboard_page",
+                     "statusitem", "runner", "focus_style"):
+        assert hasattr(mac, mod_name) and hasattr(win, mod_name), f"两棵树都要有 {mod_name}"
+
+    # 页面 / 窗口 / 设置页的信号与关键方法必须同名（值类型不比，只看存在性）
+    checks = [
+        (mac.clipboard_page.ClipboardPage, win.clipboard_page.ClipboardPage,
+         ["backRequested", "copyRequested", "retryRequested", "cleared"],
+         ["refresh", "_copy", "_retry", "_drop", "_clear"]),
+        (mac.window.MainWindow, win.window.MainWindow,
+         ["switchRequested", "openSettingsRequested", "openClipboardRequested", "probeRequested"],
+         ["set_state", "set_busy", "set_foot", "show_clipboard_page", "show_main_page"]),
+        (mac.settings.SettingsWindow, win.settings.SettingsWindow,
+         ["saved", "clipboardRequested", "recordingChanged", "backRequested"],
+         ["_save", "_reset"]),
+    ]
+    problems: list[str] = []
+    for left, right, signals, methods in checks:
+        for attr in signals + methods:
+            if not hasattr(left, attr):
+                problems.append(f"mac.{left.__name__} 缺 {attr}")
+            if not hasattr(right, attr):
+                problems.append(f"win.{right.__name__} 缺 {attr}")
+
+    # run_ui 的调用签名必须一致（cli.py 只写一次，两棵树都得接得住）
+    lsig = inspect.signature(mac.runner.run_ui)
+    wsig = inspect.signature(win.runner.run_ui)
+    assert list(lsig.parameters) == list(wsig.parameters), (
+        f"run_ui 签名不一致：mac={list(lsig.parameters)} win={list(wsig.parameters)}"
+    )
+    assert not problems, "两棵树的公开接口对不齐：\n" + "\n".join(problems)
 
 
 def test_menu_entries_are_platform_agnostic():

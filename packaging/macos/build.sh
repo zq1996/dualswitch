@@ -46,6 +46,7 @@ ICON_ARGS=()
     --hidden-import "Foundation" \
     --hidden-import "dualswitch.ui.chrome.mac" \
     --hidden-import "dualswitch.ui.chrome.win" \
+    --hidden-import "dualswitch.ui.mac" \
     --add-data "$ROOT/src/dualswitch/ui/assets:dualswitch/ui/assets" \
     "${ICON_ARGS[@]}" \
     --distpath "$ROOT/dist" \

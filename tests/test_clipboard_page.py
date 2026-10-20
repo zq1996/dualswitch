@@ -1,14 +1,26 @@
 """剪贴板页离屏测试：不需要显示器，也不需要真实剪贴板。
 
 覆盖三件事：
-1. 页面本身（列表 / 选中 / 空态 / 删除 / 重发 / 复制）
+1. 页面本身（列表 / 选中 / 空态 / 删除 / 重发 / 复制）—— **两端同一份骨架**
 2. 主窗口里的接线（列表入口、翻页、高度、返回）
 3. chrome 契约的两个新字段（两端都要有）
+
+> 2026-10-20 起两端界面代码物理分开（`ui/mac/` 与 `ui/win/`），所以这个文件里
+> 少数几条用例按平台分叉 —— 它们描述的是**两端本来就不同**的呈现：
+>
+> | 行为 | mac（`ui/mac/`） | Windows（`ui/win/`） |
+> |---|---|---|
+> | 双击预览图 | 写临时 PNG 交给系统看图软件 | 应用内全屏窗口 + ←/→ 翻页 |
+> | 页头 | 自带一条（返回 / 居中标题 / 状态） | `widgets.page_header`（两侧等宽格，严格居中） |
+> | 空态 | 保留底部操作条 | 收起列表/预览/操作条 |
+>
+> 分叉写法是刻意的：用同一份断言去套两端，只会逼着某一端改回另一端的形态。
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -24,10 +36,14 @@ from dualswitch.clipboard import make_image, make_text  # noqa: E402
 from dualswitch.clipboard.mock import MockBackend  # noqa: E402
 from dualswitch.config import ClipboardConfig, Config  # noqa: E402
 from dualswitch.sync.engine import SyncEngine  # noqa: E402
-from dualswitch.ui import theme  # noqa: E402
-from dualswitch.ui.clipboard_page import ClipboardPage  # noqa: E402
-from dualswitch.ui.widgets import page_header  # noqa: E402
-from dualswitch.ui.window import MainWindow  # noqa: E402
+from dualswitch.ui import platform_ui, theme  # noqa: E402
+from dualswitch.ui.chrome import current as chrome  # noqa: E402
+
+UI = platform_ui()
+ClipboardPage = UI.clipboard_page.ClipboardPage
+MainWindow = UI.window.MainWindow
+
+IS_WIN = chrome().NAME == "windows"
 
 
 @pytest.fixture(scope="module")
@@ -162,7 +178,6 @@ def _png(w: int = 24, h: int = 16) -> bytes:
 
 def test_text_thumb_uses_platform_logo(page, engine, app):
     """缩略图画**来源端**的图标：对端来的画对端标，本机复制出来的画本机标。"""
-    from dualswitch.ui.chrome import current as chrome
     from dualswitch.ui.clipboard_page import Thumb
 
     engine._add(make_text("本机复制的"), source="local", state="ok")
@@ -174,32 +189,52 @@ def test_text_thumb_uses_platform_logo(page, engine, app):
     thumb_local = page._rows[local.id].findChild(Thumb)
     thumb_remote = page._rows[remote.id].findChild(Thumb)
     assert thumb_local is not None and thumb_remote is not None
+    assert thumb_local._pix is not None and thumb_remote._pix is not None
 
-    assert thumb_local._kind == "text" and thumb_local._pix is None      # 走图标分支
-    assert thumb_local._logo_kind == theme.PLATFORM_LOGO == chrome().PLATFORM_LOGO
-    assert thumb_remote._logo_kind == theme.PEER_LOGO == chrome().PEER_LOGO
-    assert theme.PEER_LOGO != theme.PLATFORM_LOGO
+    if IS_WIN:
+        # Windows 版把「画哪个图标」记在 _logo_kind 上，图标自身延迟绘制
+        assert thumb_local._logo_kind == theme.PLATFORM_LOGO == chrome().PLATFORM_LOGO
+        assert thumb_remote._logo_kind == theme.PEER_LOGO == chrome().PEER_LOGO
+        assert theme.PEER_LOGO != theme.PLATFORM_LOGO
+    else:
+        # mac 版直接渲染成 pixmap（按 SYSTEM_LOGO 取本机/对端那张），没有 _logo_kind
+        assert theme.SYSTEM_LOGO in ("apple", "windows")
+        assert not hasattr(thumb_local, "_logo_kind")
+        assert thumb_local._pix.toImage() != thumb_remote._pix.toImage(), (
+            "本机与对端的缩略图应画不同系统的图标"
+        )
 
 
 def test_page_head_is_shared_and_centered(page, app):
-    """返回 / 页名 / 连接状态同一水平线，页名在整页正中（设置页同理）。"""
-    bar = page.header
-    assert bar.objectName() == "pageHead"
-    title = bar.findChild(QLabel, "pageTitle")
-    assert title is not None and title.text() == "剪贴板"
+    """返回 / 页名 / 连接状态同一水平线；Windows 还要求页名严格居中。"""
+    if IS_WIN:
+        bar = page.header
+        assert bar.objectName() == "pageHead"
+        title = bar.findChild(QLabel, "pageTitle")
+        assert title is not None and title.text() == "剪贴板"
 
-    def center_y(widget: QWidget) -> int:
-        return widget.mapTo(bar, QPoint(0, widget.height() // 2)).y()
+        def center_y(widget: QWidget) -> int:
+            return widget.mapTo(bar, QPoint(0, widget.height() // 2)).y()
 
-    back_center = center_y(bar.back_btn)
-    title_center = center_y(title)
-    assert abs(back_center - title_center) <= 2, "返回键和页名不在同一水平线"
+        back_center = center_y(bar.back_btn)
+        title_center = center_y(title)
+        assert abs(back_center - title_center) <= 2, "返回键和页名不在同一水平线"
 
-    bar.resize(440, 40)
-    app.processEvents()
-    # QRect.center() 是 (x + (w-1)/2) 的整数除，直接比会有 1px 抖动，用浮点中心比
-    title_center = title.x() + title.width() / 2
-    assert abs(title_center - bar.width() / 2) <= 1, "页名没居中"
+        bar.resize(440, 40)
+        app.processEvents()
+        # QRect.center() 是 (x + (w-1)/2) 的整数除，直接比会有 1px 抖动，用浮点中心比
+        title_center = title.x() + title.width() / 2
+        assert abs(title_center - bar.width() / 2) <= 1, "页名没居中"
+        return
+
+    # mac 版：页头是页面自己排的一条（返回靠左、标题靠中间、状态靠右）
+    assert page.back.text() == "\u2039 返回"
+    titles = [lb for lb in page.findChildren(QLabel) if lb.text() == "剪贴板"]
+    assert titles, "页头里找不到「剪贴板」标题"
+    title = titles[0]
+    assert abs(title.mapTo(page, QPoint()).y() - page.back.mapTo(page, QPoint()).y()) <= 10, (
+        "返回键和页名不在同一水平线"
+    )
 
 
 def test_image_thumb_decodes_png(page, engine, app):
@@ -213,7 +248,10 @@ def test_image_thumb_decodes_png(page, engine, app):
 
 
 def test_double_click_preview_opens_viewer(page, engine, app):
-    """预览写着「双击全屏预览」，双击就得真能全屏（顶层窗口，不是页面内的小遮罩）。"""
+    """Windows：预览写着「双击全屏预览」，双击就得真全屏（顶层窗口，不是页面内小遮罩）。"""
+    if not IS_WIN:
+        pytest.skip("mac 版双击预览图走系统看图软件，见下一条用例")
+
     engine._add(make_image(_png(64, 48), 64, 48), source="local", state="ok")
     page.refresh()
     app.processEvents()
@@ -233,7 +271,31 @@ def test_double_click_preview_opens_viewer(page, engine, app):
     assert not page.viewer.isVisible()
 
 
+def test_double_click_preview_opens_system_viewer(page, engine, app, monkeypatch):
+    """mac：双击预览图 → 把原图写成临时 PNG，交给系统默认看图软件打开。"""
+    if IS_WIN:
+        pytest.skip("Windows 版双击预览图走应用内全屏预览，见上一条用例")
+
+    engine._add(make_image(_png(64, 48), 64, 48), source="local", state="ok")
+    page.refresh()
+    app.processEvents()
+    page._select(engine.records()[0].id)
+    assert page.preview.hint.text() == "双击查看原图"
+
+    opened: list[str] = []
+    monkeypatch.setattr(page, "_open_external", opened.append, raising=False)
+    page.preview.imageActivated.emit(engine.records()[0])
+    app.processEvents()
+
+    assert len(opened) == 1, "双击没有交给系统看图"
+    target = Path(opened[0])
+    assert target.suffix == ".png" and target.exists(), "交给系统的应是一张落盘的 PNG"
+    assert target.read_bytes().startswith(b"\x89PNG")
+
+
 def test_empty_state_hides_action_bar(page, app):
+    if not IS_WIN:
+        pytest.skip("mac 版空态保留底部操作条（旧版行为，未跟进收起）")
     page.refresh()
     app.processEvents()
     assert page.footer.isVisibleTo(page) is False

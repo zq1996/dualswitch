@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6", reason="未安装 PySide6，跳过界面测试")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget  # noqa: E402
 
 from dualswitch.config import Config, load  # noqa: E402
 from dualswitch.ui import theme  # noqa: E402
@@ -120,15 +120,30 @@ def test_settings_in_window_on_both_platforms():
 
 
 def test_embedded_settings_has_back_bar(app, tmp_path: Path):
-    """内嵌进主窗口时：没有自绘标题栏、不画第二圈外框，返回按钮能回主页面。"""
+    """内嵌进主窗口时：没有自绘标题栏、不画第二圈外框，返回按钮能回主页面。
+
+    两棵树的实现不同（Windows：`rootEmbedded` + `widgets.page_header`；
+    mac：`root` + 自带的 `backBar`），所以断言按平台分叉 —— 共同点是
+    「不再叠一层窗口投影」和「返回键真的能发出 backRequested」。
+    """
+    from dualswitch.ui.chrome import current as chrome
+
     win = SettingsWindow(Config(), tmp_path / "config.json", "Alt+Space", "v1.0.0", embedded=True)
     assert win.titlebar is None
-    assert win.root.objectName() == "rootEmbedded"
     assert win.root.graphicsEffect() is None        # 页面里不能再叠一层窗口投影
 
     fired: list[int] = []
     win.backRequested.connect(lambda: fired.append(1))
-    win.back_btn.click()
+    if chrome().NAME == "windows":
+        assert win.root.objectName() == "rootEmbedded"
+        win.back_btn.click()
+    else:
+        assert win.root.objectName() == "root"
+        bar = win.findChild(QWidget, "backBar")
+        assert bar is not None, "mac 内嵌设置页应有 backBar"
+        btn = bar.findChild(QPushButton)
+        assert btn is not None and btn.text() == "\u2039 返回"
+        btn.click()
     assert fired == [1]
 
 
@@ -402,8 +417,13 @@ def test_pystray_menu_from_entries(app):
 
 
 def test_status_click_routes_by_platform(app):
-    """点常驻图标：Windows 双击摊开主页面，mac 单击切换（由 chrome.STATUS_ACTIVATE 决定）。"""
-    from dualswitch.ui import theme
+    """点常驻图标的路由由 `chrome.STATUS_ACTIVATE` 决定（Windows 双击摊开主页面）。
+
+    注意 mac 的菜单栏实现（`MacStatusItem`）左右键都只弹菜单、从不调这个回调，
+    所以 mac 的 `switch` 分支实际不会被走到；这里只守住「路由函数本身
+    跟着契约字段变」这件事，别让它退化成写死的一端。
+    """
+    from dualswitch.ui.chrome import current as chrome
     from dualswitch.ui.runner import UiRunner
 
     class _Stub:
@@ -418,7 +438,7 @@ def test_status_click_routes_by_platform(app):
 
     stub = _Stub()
     UiRunner._on_status_click(stub)
-    if theme.STATUS_ACTIVATE == "show_main":
+    if chrome().STATUS_ACTIVATE == "show_main":
         assert (stub.opened, stub.switched) == (1, 0)
     else:
         assert (stub.opened, stub.switched) == (0, 1)

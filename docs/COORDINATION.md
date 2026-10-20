@@ -9,14 +9,21 @@
 
 | 类别 | 文件 | 唯一作者 | 另一端 |
 |---|---|---|---|
-| **共享语义** | `app.py`、`config.py`、`ddc/base.py`、`ddc/__init__.py`、`sync/*`、`ui/{theme,widgets,window,settings,runner,statusitem,clipboard_page,clipboard_feed}.py`、`clipboard/base.py`、`clipboard/mock.py` | **macOS 端** | 只读，等 pull |
+| **共享语义** | `app.py`、`config.py`、`ddc/base.py`、`ddc/__init__.py`、`sync/*`、`ui/clipboard_feed.py`、`clipboard/base.py`、`clipboard/mock.py` | **macOS 端** | 只读，等 pull |
+| **界面（两端各一套，物理分开）** | `ui/mac/**` ↔ `ui/win/**`（各含 theme / widgets / window / settings / statusitem / clipboard_page / runner / focus_style） | **各写各的** | 互不读 |
 | **平台实现** | `ddc/macos.py`、`hotkey/macos.py`、`clipboard/macos.py`、`ui/chrome/mac.py`、`packaging/macos/` ↔ `ddc/windows.py`、`hotkey/windows.py`、`clipboard/windows.py`、`ui/chrome/win.py`、`packaging/windows/` | 各写各的 | 互不读 |
+| **冻结（谁都不许改）** | `ui/__init__.py`（选路）、`ui/{theme,widgets,window,settings,statusitem,clipboard_page,runner,focus_style}.py`（兼容垫片） | — | — |
 | **契约** | `sync/protocol.py` 的常量与字节格式、`ui/chrome/base.py` 的字段表、`clipboard/base.py::ClipItem` | 变更须双端确认 | 见第 4 节 |
 
 **判据**：如果 Windows 端为了修一个 bug 需要改共享文件 —— 说明这个 bug 该由 macOS 端修，
 Windows 端等 pull。**两端各改一遍不是"并行"，是在制造 merge 冲突**：
 2026-10-18 两次合并都留下过同名的两份 `attach_clipboard` / `show_clipboard`，
 `tests/test_no_duplicate_defs.py` 就是为这件事存在的。
+
+**2026-10-20 起界面不再共享**：合并历史里 UI 层两端撞过 14 次、业务后台只撞过 1 次 ——
+后台不冲突靠的就是上面这条「一个文件一个作者」，现在 UI 也照同一条边界拆成了两棵树。
+界面改动只动自己那棵树；**共享行为（视觉规范、交互语义）靠 `docs/UI-DESIGN*.md` 约束**。
+`ui/{theme,widgets,…}.py` 那八个文件是**兼容垫片**，只做平台选路，谁都不许往里加实现。
 
 ---
 
