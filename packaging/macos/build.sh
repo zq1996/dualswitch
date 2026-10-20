@@ -31,6 +31,17 @@ fi
 ICON_ARGS=()
 [[ -f "$ICNS" ]] && ICON_ARGS=(--icon "$ROOT/$ICNS")
 
+# 兼容垫片（ui/theme.py 等 8 个）：界面拆成 ui/mac 与 ui/win 两棵树之后，
+# 除了 cli.py 与 tests 几乎没有地方**静态** import 它们（树内引用的是
+# dualswitch.ui.mac.*），PyInstaller 会漏收。2026-10-20 实测：只有
+# theme / widgets / runner 三个靠间接引用进了包，window / settings / statusitem /
+# clipboard_page / focus_style 全缺，产物 `--selfcheck` 直接报 ModuleNotFoundError。
+# 所以这里逐个显式收进来 —— 少一个，双击就是闪退。
+SHIM_ARGS=()
+for _shim in theme widgets window settings statusitem clipboard_page runner focus_style; do
+    SHIM_ARGS+=(--hidden-import "dualswitch.ui.$_shim")
+done
+
 # 注意：带 --specpath 时，PyInstaller 会把 --add-data / 入口脚本的相对路径
 # 解析成「相对 spec 所在目录」，所以这里一律用绝对路径，避免 build/src/... 找不到。
 "$PYTHON" -m PyInstaller \
@@ -47,6 +58,7 @@ ICON_ARGS=()
     --hidden-import "dualswitch.ui.chrome.mac" \
     --hidden-import "dualswitch.ui.chrome.win" \
     --hidden-import "dualswitch.ui.mac" \
+    "${SHIM_ARGS[@]}" \
     --add-data "$ROOT/src/dualswitch/ui/assets:dualswitch/ui/assets" \
     "${ICON_ARGS[@]}" \
     --distpath "$ROOT/dist" \
