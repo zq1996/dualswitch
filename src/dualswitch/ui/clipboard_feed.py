@@ -77,10 +77,9 @@ class LocalClipFeed:
 
     def _to_record(self, item: ClipItem) -> ClipRecord:
         image = item.image
-        kind = "image" if image is not None else "text"
         return ClipRecord(
             id=item.digest,
-            kind=kind,
+            kind=item.kind,             # text / image / mixed（mixed = 图片文件：文件名 + 缩略图）
             text=item.text,
             png=image.png if image is not None else None,
             width=image.width if image is not None else 0,
@@ -91,6 +90,12 @@ class LocalClipFeed:
             state="local",              # 没有对端：只在本机
             progress=0.0,
             size=item.wire_size(),
+            # 文件记录的三件套（引擎那条路早就带上了，这里以前漏了 —— 结果是没有引擎时
+            # 文件行既没有文件名/目录，也点不了「在资源管理器中显示」）
+            path=item.path,
+            file_size=item.file_size,
+            app=item.app,
+            app_id=item.app_id,
         )
 
     # ------------------------------------------------------------------ 查询

@@ -14,6 +14,7 @@ import time
 import pytest
 
 from dualswitch.clipboard import make_image, make_text
+from dualswitch.clipboard.base import make_file
 from dualswitch.clipboard.mock import MockBackend
 from dualswitch.config import ClipboardConfig
 from dualswitch.sync import protocol as P
@@ -103,6 +104,43 @@ def test_image_disabled_locally_records_without_sending(pair):
     assert not backend_b.written
     rec = engine_a.records()[0]
     assert rec.state == "local" and "图片" in rec.detail
+
+
+def test_file_record_stays_local(pair, tmp_path):
+    """文件记录只在本机留一条，**不发给对端**（`path` 不上网，契约 P2）。"""
+    engine_a, backend_a, _engine_b, backend_b = pair
+    target = tmp_path / "报告.pdf"
+    target.write_bytes(b"%PDF-1.4 fake")
+    item = make_file(str(target), size=target.stat().st_size)
+    assert item is not None
+
+    backend_a.feed(item)
+    engine_a.push_now()
+    time.sleep(0.4)
+
+    assert not backend_b.written, "文件本身不该跨端"
+    rec = engine_a.records()[0]
+    assert rec.path == str(target)
+    assert rec.file_size == target.stat().st_size
+    assert rec.state == "local"
+
+
+def test_image_file_syncs_image_but_not_path(pair, tmp_path):
+    """图片文件：图片照常同步（对端能看到图），路径只留在本机。"""
+    engine_a, backend_a, engine_b, backend_b = pair
+    png = b"\x89PNG\r\n\x1a\n" + bytes(64)
+    target = tmp_path / "湖畔.png"
+    target.write_bytes(png)
+    item = make_file(str(target), png=png, width=8, height=8, size=len(png))
+    assert item is not None and item.image is not None
+
+    backend_a.feed(item)
+    engine_a.push_now()
+
+    assert _wait_until(lambda: bool(backend_b.written)), "图片文件里的图没有同步过去"
+    assert backend_b.written[-1].image is not None
+    assert backend_b.written[-1].path == "", "路径不该上网"
+    assert engine_b.records()[0].path == ""
 
 
 def test_duplicate_digest_applied_once(pair):

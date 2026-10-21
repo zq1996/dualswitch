@@ -478,6 +478,7 @@ dualswitch clip selftest               # 本机格式矩阵
 | 2026-10-21 | macOS | `ClipItem` 增加**可选**字段 `path`（**不上网**，只在生成端有意义） | 访达复制的文件只有 file-url：后端读文件抽缩略图当预览，`path` 记原文件位置，用于「用预览打开 / 在访达中显示」；对端拿到路径没意义，所以 `item_to_message` 不传 | 已实现（mac） |
 | 2026-10-21 | macOS | `ClipItem` 增加**可选**字段 `file_size`（**不上网**） | 列表/预览要显示文件真实大小（849 KB / 3 MB），而 `wire_size()` 是入库字节数（文件名几个字节），两者不能混用。同样不参与跨端 | 已实现（mac） |
 | 2026-10-21 | macOS | **文件条目的语义**：`path` 非空 = 本机文件 | 没有图片数据的文件条目**永不发送**（文件本身传不过去，P2）；带 png 的图片文件仍按 `kind=mixed` 正常同步。Windows 端不必实现文件采集，收到也不是自己的路径 | 已实现（mac） |
+| 2026-10-21 | windows | 无契约字段变更；`clipboard/windows.py` 落地 `CF_HDROP` 读写（第 70 行里程碑 P2 的 Windows 半边） | 用户反馈「复制本地文件后列表里没有这条」。资源管理器复制文件时剪贴板里只有 `CF_HDROP`（`CF_UNICODETEXT` 只是文件名），不解析就等于整条丢掉。读：路径 → `make_file()`（图片文件抽缩略图，其它只要名字/目录/字节数；8.3 短名转长名；文件不在则退回文本；多选取第一个）。写：`item.path` 存在时同时写 `CF_HDROP` + 文本，粘到资源管理器是文件、粘到输入框是名字 | 已实现（windows）。**未改 `base.py` 任何字段**，也没动 mac 的文件；`ui/clipboard_feed.py` 顺带补上 `path/file_size/app/app_id` 透传（以前只有引擎那条路有，没有引擎时文件行点不开） |
 
 格式：`| 2026-10-19 | windows | ClipItem 增加 files 字段 | P2 需要传目录 | 待 macOS 端评估 |`
 

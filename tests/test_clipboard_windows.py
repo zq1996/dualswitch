@@ -9,11 +9,12 @@
    而"跑测试把用户剪贴板里的图弄丢"这件事本身没法优雅处理 —— 别在复制重要图片时跑）。
 
 契约本身由 `tests/test_clipboard_contract.py` 守护，这个文件只测 Windows 侧特有的东西：
-DIB 的位深/行序/填充、`HTML Format` 的字节偏移、Win32 敏感标记、`CF_HDROP` 只列不传。
+DIB 的位深/行序/填充、`HTML Format` 的字节偏移、Win32 敏感标记、`CF_HDROP` → 文件记录。
 """
 
 from __future__ import annotations
 
+import os
 import struct
 import sys
 import time
@@ -30,6 +31,7 @@ from dualswitch.clipboard.base import (
     ClipItem,
     ClipboardError,
     ImageData,
+    make_file,
     make_image,
     make_text,
 )
@@ -525,13 +527,154 @@ def test_can_include_in_history_one_allows(backend):
     assert item is not None and item.text == "可以记"
 
 
-def test_hdrop_is_listed_in_probe_but_not_synced(backend):
-    """P2 才做文件：现在 probe 要能看到 CF_HDROP，poll 必须返回 None。"""
-    _clip_write([(win.CF_HDROP, _hdrop([r"C:\temp\a.txt", r"C:\temp\b.txt"]))])
-    assert backend.poll() is None
+def test_hdrop_file_becomes_local_file_record(backend, tmp_path):
+    """资源管理器复制文件 → 文件记录（路径 + 文件名 + 字节数），不再被当成空内容丢掉。"""
+    target = tmp_path / "说明.txt"
+    target.write_text("hi", encoding="utf-8")
+    _clip_write([(win.CF_HDROP, _hdrop([str(target)]))])
+
+    item = backend.poll()
+    assert item is not None, "CF_HDROP 没有被解析成记录"
+    assert item.kind == "text"
+    assert item.path == str(target)
+    assert item.text == "说明.txt"
+    assert item.file_size == target.stat().st_size
+    assert item.image is None, "普通文件不该带图片"
+
+
+def test_hdrop_image_file_gets_thumbnail(backend, tmp_path):
+    """图片文件要抽缩略图：列表能看到内容、预览窗能给「用默认图片查看器打开」。"""
+    target = tmp_path / "湖畔 🎉.png"
+    target.write_bytes(_tiny_png(6, 4))
+    _clip_write([(win.CF_HDROP, _hdrop([str(target)]))])
+
+    item = backend.poll()
+    assert item is not None
+    assert item.kind == "mixed", "图片文件 = 文件名 + 缩略图"
+    assert item.path == str(target)
+    assert item.text == "湖畔 🎉.png"
+    assert item.image is not None
+    assert item.image.png.startswith(win._PNG_SIG)
+    assert (item.image.width, item.image.height) == (6, 4)
+
+
+def test_hdrop_missing_file_falls_back_to_text(backend, tmp_path):
+    """文件已被删掉：不要留一条点不开的文件卡，退回文件名文本。"""
+    missing = tmp_path / "已经删了.pdf"
+    _clip_write([
+        (win.CF_HDROP, _hdrop([str(missing)])),
+        (win.CF_UNICODETEXT, "已经删了.pdf\x00".encode("utf-16-le")),
+    ])
+    item = backend.poll()
+    assert item is not None
+    assert item.path == "", "不存在的路径不该留在记录里"
+    assert item.text == "已经删了.pdf"
+
+
+def test_hdrop_multi_select_takes_first(backend, tmp_path):
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_text("a", encoding="utf-8")
+    second.write_text("b", encoding="utf-8")
+    _clip_write([(win.CF_HDROP, _hdrop([str(first), str(second)]))])
+    item = backend.poll()
+    assert item is not None and item.path == str(first)
+
+
+def test_file_item_can_be_copied_back(backend, tmp_path):
+    """点文件行的「复制」要把**文件**放回剪贴板（只写文件名等于复制了个寂寞）。"""
+    target = tmp_path / "报告.pdf"
+    target.write_bytes(b"%PDF-1.4 fake")
+    item = make_file(str(target), size=target.stat().st_size)
+    assert item is not None
+
+    backend.write(item)
     info = backend.probe()
+    if info.get("state") == "ok":
+        assert info["has_files"] == "yes", "写完剪贴板里应该有 CF_HDROP"
+
+    back = _read_back(backend)
+    assert back is not None
+    assert back.path == str(target)
+    assert back.text == "报告.pdf", "纯文本仍是文件名（粘到输入框里的行为）"
+
+
+def test_build_hdrop_roundtrip():
+    paths = [r"C:\a\b.txt", r"C:\c\湖畔.png"]
+    assert win._parse_hdrop(win._build_hdrop(paths)) == paths
+
+
+def test_probe_reports_file_count(backend, tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("a", encoding="utf-8")
+    _clip_write([(win.CF_HDROP, _hdrop([str(target)]))])
+    info = backend.probe()
+    if info.get("state") != "ok":
+        pytest.skip(f"剪贴板被占用（state={info.get('state')}）")
     assert info["has_files"] == "yes"
-    assert "CF_HDROP" in info["formats"]
+    assert info["files"] == "1"
+
+
+# --------------------------------------------------------------------------- #
+# 七、CF_HDROP 解析（纯函数）
+# --------------------------------------------------------------------------- #
+def test_parse_hdrop_wide():
+    raw = _hdrop([r"C:\a\b.txt", r"C:\c\d.png"])
+    assert win._parse_hdrop(raw) == [r"C:\a\b.txt", r"C:\c\d.png"]
+
+
+def test_parse_hdrop_ansi():
+    head = struct.pack("<Iiiii", 20, 0, 0, 0, 0)      # fWide = 0
+    body = ("C:\\a\\b.txt\x00\x00").encode("mbcs")
+    assert win._parse_hdrop(head + body) == ["C:\\a\\b.txt"]
+
+
+def test_parse_hdrop_broken_offset_uses_header():
+    head = struct.pack("<Iiiii", 0, 0, 0, 0, 1)       # pFiles = 0（少数实现这么写）
+    body = "C:\\x.txt\x00\x00".encode("utf-16-le")
+    assert win._parse_hdrop(head + body) == ["C:\\x.txt"]
+
+
+def test_parse_hdrop_short_or_empty():
+    assert win._parse_hdrop(b"") == []
+    assert win._parse_hdrop(b"\x00" * 8) == []
+
+
+# --------------------------------------------------------------------------- #
+# 九、来源应用（前台进程 → 显示名 + exe 路径）
+# --------------------------------------------------------------------------- #
+def test_file_description_reads_localized_names():
+    """`FileDescription` 是本地化名字（「Windows 资源管理器」「记事本」），
+    比 exe 主名（explorer/notepad）更适合放进列表。"""
+    assert win._file_description(r"C://Windows//explorer.exe") == "Windows 资源管理器"
+    assert win._file_description(r"C://Windows//System32//notepad.exe") == "记事本"
+    assert win._file_description("") == ""
+
+
+def test_app_display_name_falls_back_to_stem(monkeypatch):
+    monkeypatch.setattr(win, "_file_description", lambda path: "")
+    assert win._app_display_name(r"C://app//zzq.exe") == "zzq"
+
+
+def test_screenshot_tools_are_named_screenshot():
+    """截图工具（Win+Shift+S）的前台是截图面板，按 mac 口径统称「截图」。"""
+    assert win._app_display_name(r"C://Windows//SystemApps//ScreenClipper.exe") == "截图"
+
+
+def test_foreground_app_skips_own_process(monkeypatch):
+    monkeypatch.setattr(win, "_foreground_pid", lambda: os.getpid())
+    assert win._foreground_app() == ("", ""), "自己不能当来源应用"
+
+
+def test_foreground_app_reads_process_image(monkeypatch):
+    monkeypatch.setattr(win, "_foreground_pid", lambda: 4242)
+    monkeypatch.setattr(win, "_process_image_path", lambda pid: r"C://Windows//explorer.exe")
+    assert win._foreground_app() == ("Windows 资源管理器", r"C://Windows//explorer.exe")
+
+
+def test_foreground_app_blank_when_no_window(monkeypatch):
+    monkeypatch.setattr(win, "_foreground_pid", lambda: 0)
+    assert win._foreground_app() == ("", "")
 
 
 def test_probe_required_keys(backend):

@@ -59,6 +59,55 @@
 
 ---
 
+## ISSUE-003 切换页「运行中」药丸是方的（圆角没生效）
+
+- **owner**: mac
+- **影响**: 仅 mac（**Windows 端已修**，2026-10-21）
+- **现象**: 切换页 hero 右上角的「运行中」标签是直角矩形，和设计稿的胶囊形不符。
+- **根因**: `ui/mac2/theme.py` 里 `#pillRun` / `#pillWarn` / `#devTagOn` / `#devTagOff` / `#chip` 写的是
+  `border-radius: 999px`。**Qt QSS 对超过控件半高的圆角是整条忽略**（不是夹紧到半高），
+  于是变成方角。浏览器里 `999px` 是标准胶囊写法，Qt 不是。
+- **期望**: **别调 QSS 圆角参数，直接自绘**。2026-10-21 Windows 端实测：19px 高的控件上，
+  `border-radius` 写 9/10/999 **全是方角**（同高度 21px 的设备标签用 10px 却正常），调参是碰运气。
+  建议照 Windows 的做法加一个自绘 `Pill`（`paintEvent` 里半径取「高度/2」），顺手把
+  chip（24 高，12px）、设备标签（21 高，10px）也改成具体值。
+- **验收**:
+  1. `grep -c "999px" src/dualswitch/ui/mac2/theme.py` 输出 `0`
+  2. `QT_QPA_PLATFORM=offscreen python tools/shots_v2.py` 出图，`v2-switch` 里「运行中」是胶囊形
+  3. 新增一条守卫用例：自绘 pill 抓图后**角落像素 ≠ 中心像素**（方角时两者相同）
+  4. `pytest -q` 全绿
+- **状态**: 待做
+  · Windows 参考实现：`src/dualswitch/ui/win2/widgets.py::Pill`（自绘）+ `theme.py`（chip 12 / 标签 10）
+    + `tests/test_ui_win2.py::test_pill_is_drawn_with_rounded_corners` 与 `test_qss_has_no_oversized_radius`
+
+---
+
+## ISSUE-004 预览气泡：白卡片贴白窗口没有阴影 / 长 URL 被裁掉半截
+
+- **owner**: mac
+- **影响**: 仅 mac（**Windows 端已修**，2026-10-21）
+- **现象**:
+  1. 鼠标悬停缩略图弹出的预览气泡是白底卡片，压在白色主窗口上完全分不出边界（用户原话「融到一起了」）；
+  2. 链接记录的预览只显示 `https://www.bilibili.com/?`，后面半截没了。
+- **根因**:
+  1. 设计 §6.6 要求「圆角 13，三层阴影」，实现里只有 QSS 背景色，**没有画任何投影**；
+     气泡是 `WA_TranslucentBackground` 顶层窗口，卡片铺满整个窗口，没有留出画阴影的边。
+  2. 正文高度用 `QFontMetrics.boundingRect(..., TextWordWrap)` 量，它的折行规则和
+     `QTextLayout` 不一致：长 URL 被算成 1 行，实际排了 2 行，第二行被固定高度裁掉。
+- **期望**:
+  1. 气泡窗口四周留 14px 透明边，`paintEvent` 里画递减透明度的圆角矩形当投影（卡片内缩 14）；
+     定位时按**卡片边**算与缩略图的间距，别把阴影算进 12px 里。
+  2. 量高改用 `QLabel.heightForWidth(宽度)`（和实际排版同一个引擎），URL 能折几行就留几行。
+- **验收**:
+  1. `QT_QPA_PLATFORM=offscreen python tools/shots_v2.py`：`v2-preview-bubble` 四周能看到投影；
+     再造一条 `https://www.bilibili.com/?spm_id_from=333.1007.0.0` 的链接记录，气泡里 URL 完整可见
+  2. `pytest -q` 全绿（建议补两条：气泡窗口比卡片大一圈；链接标签 `height() >= heightForWidth(width)`）
+- **状态**: 待做
+  · Windows 参考实现：`src/dualswitch/ui/win2/preview.py`（`SHADOW=14` / `paintEvent` 画阴影 /
+    `_measure_body_child` 用 `heightForWidth`）+ `tests/test_ui_win2.py` 的两条用例
+
+---
+
 ## 待登记
 
 新问题先在对话里描述清楚「什么现象 + 期望什么」，再按上面格式补一条，
