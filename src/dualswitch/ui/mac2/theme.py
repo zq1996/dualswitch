@@ -41,7 +41,7 @@ KEY_FONT_PX = 10
 
 THUMB = 46                       # 剪贴板缩略图
 THUMB_R = 10
-BADGE = 19                       # 来源系统角标
+BADGE = 22                       # 来源系统角标（19 太小看不清，用户 2026-10-21 要求放大）
 ROW_H = 68                       # 剪贴板行高（46 图 + 两行字 + padding）
 TOOL_ROW_H = 44
 SEARCH_H = 34
@@ -53,6 +53,10 @@ PV_OPEN_DELAY_MS = 450           # 只悬停缩略图才计时
 PV_CLOSE_DELAY_MS = 220
 PV_IMG_MAX_W, PV_IMG_MAX_H = 412, 330
 PV_TXT_MAX_W, PV_TXT_MAX_H = 392, 270
+#: 预览窗正文最多渲染多少字。**不是视觉截断**：正常长度的文本一律完整显示
+#: （超长时预览窗长到屏幕高度、内部可滚动）；只有超过这个量级才切掉，
+#: 免得几 MB 的日志让 QLabel 排版把机器拖卡。
+PV_TEXT_MAX_CHARS = 20000
 PV_CODE_MAX_W, PV_CODE_MAX_H = 400, 290
 PV_CARD_MAX_W = 380
 PV_RADIUS = 13
@@ -222,6 +226,34 @@ def qcolor(value: str, alpha: float | None = None):
         return QColor(text)
 
 
+#: 剪贴板类型瓷砖配色（取自 Frset `clipboard_type_text/url/color` 的实色底 + 白字形）。
+#: text=靛蓝 #657DFF、url=雾蓝 #6B7BD3、color=桃红 #FF55AA；file/unknown 是浅灰底灰字形。
+TYPE_TILES = {
+    "light": {
+        "text": ("#657DFF", "#FFFFFF"),
+        "code": ("#7A5AF8", "#FFFFFF"),
+        "link": ("#6B7BD3", "#FFFFFF"),
+        "image": ("#4E87FF", "#FFFFFF"),
+        "file": ("#E9ECF3", "#8A93A3"),
+        "unknown": ("#E9ECF3", "#8A93A3"),
+    },
+    "dark": {
+        "text": ("#5A70E8", "#FFFFFF"),
+        "code": ("#6D4EE0", "#FFFFFF"),
+        "link": ("#5C6BC0", "#FFFFFF"),
+        "image": ("#3F76E0", "#FFFFFF"),
+        "file": ("#2A313D", "#8B95A5"),
+        "unknown": ("#2A313D", "#8B95A5"),
+    },
+}
+
+
+def type_tile(kind: str) -> tuple[str, str]:
+    """类型 → (底色, 字形色)。"""
+    table = TYPE_TILES.get(_CURRENT.name, TYPE_TILES["light"])
+    return table.get(kind, table["unknown"])
+
+
 # --------------------------------------------------------------------------- #
 # 字体（像素尺度）
 # --------------------------------------------------------------------------- #
@@ -381,9 +413,9 @@ def qss(t: Tokens | None = None) -> str:
         color: {t.ink3}; font-size: 11px; font-weight: 650; letter-spacing: 0.6px;
     }}
     #heroName {{ color: {t.ink}; font-size: 27px; font-weight: 700; }}
-    #heroSub {{ color: {t.ink3}; font-size: 12px; }}
+    #heroSub {{ color: {t.ink2}; font-size: 12px; }}
     #heroNoteOk {{ color: {t.ok}; font-size: 11px; }}
-    #heroNoteDim {{ color: {t.ink3}; font-size: 11px; }}
+    #heroNoteDim {{ color: {t.ink2}; font-size: 11px; }}
     #heroNoteBad {{ color: {t.danger}; font-size: 11px; }}
     QPushButton#primary {{
         background: {t.accent}; color: {t.on_accent}; border: 0;
@@ -391,14 +423,24 @@ def qss(t: Tokens | None = None) -> str:
     }}
     QPushButton#primary:hover {{ background: {t.accent_deep}; }}
     QPushButton#primary:pressed {{ background: {t.accent_deep}; }}
-    QPushButton#primary:disabled {{ background: {t.idle_bg}; color: {t.ink3}; }}
+    QPushButton#primary:disabled {{
+        background: {t.card3}; color: {t.ink2}; border: 1px solid {t.line};
+    }}
     QPushButton#ghostBtn {{
         background: {t.card}; color: {t.ink2}; border: 1px solid {t.line};
         border-radius: {RADIUS_CTRL}px; font-size: 12.5px; font-weight: 600;
         padding: 0 16px;
     }}
     QPushButton#ghostBtn:hover {{ border-color: {t.accent}; color: {t.accent_deep}; }}
-    QPushButton#ghostBtn:disabled {{ color: {t.ink3}; border-color: {t.line_soft}; }}
+    QPushButton#dangerBtn {{
+        background: {t.danger}; color: #FFFFFF; border: 0;
+        border-radius: {RADIUS_CTRL}px; font-size: 12px; font-weight: 650; padding: 0 14px;
+    }}
+    QPushButton#dangerBtn:hover {{ background: {t.danger}; }}
+    QPushButton#dangerBtn:pressed {{ background: {t.danger}; }}
+    QPushButton#ghostBtn:disabled {{
+        color: {t.ink3}; border-color: {t.line_soft}; background: {t.card};
+    }}
 
     /* ---------- 药丸 ---------- */
     #pillRun {{ background: {t.ok_bg}; color: {t.ok}; border-radius: 999px;
@@ -431,8 +473,9 @@ def qss(t: Tokens | None = None) -> str:
     }}
     #devOff:hover {{ border-color: {t.accent}; }}
     #devName {{ color: {t.ink}; font-size: 13.5px; font-weight: 650; }}
-    #devNameDim {{ color: {t.ink3}; font-size: 13.5px; font-weight: 650; }}
+    #devNameDim {{ color: {t.ink2}; font-size: 13.5px; font-weight: 650; }}
     #devSub {{ color: {t.ink3}; font-size: 11px; }}
+    #devSubDim {{ color: {t.ink3}; font-size: 11px; opacity: 0.9; }}
     #devTagOn {{ background: {t.accent_soft}; color: {t.accent_deep};
         border-radius: 999px; font-size: 10px; font-weight: 650; padding: 3px 8px; }}
     #devTagOff {{ background: {t.idle_bg}; color: {t.ink3};
@@ -517,7 +560,13 @@ def qss(t: Tokens | None = None) -> str:
         font-size: 10.5px; font-family: "{MONO_FAMILIES[0]}";
     }}
     #pvFileCard {{ background: {t.card2}; border: 1px solid {t.line_soft};
-        border-radius: 11px; }}
+        border-radius: 12px; }}
+    #pvFileName {{ color: {t.ink}; font-size: 12px; font-weight: 650; }}
+    /* 预览窗正文滚动条：白底上 handle 用 ink3，不然 line 那种浅灰等于看不见 */
+    #pvScroll {{ background: transparent; border: 0; }}
+    #pvScroll QScrollBar:vertical {{ width: 7px; background: transparent; }}
+    #pvScroll QScrollBar::handle:vertical {{ background: {t.ink3}; border-radius: 3.5px; }}
+    #pvFileDir {{ color: {t.ink3}; font-size: 10px; }}
     #pvFoot {{ background: {t.card2}; border-top: 1px solid {t.line_soft};
         border-bottom-left-radius: {PV_RADIUS}px;
         border-bottom-right-radius: {PV_RADIUS}px; }}
@@ -552,6 +601,14 @@ def qss(t: Tokens | None = None) -> str:
         color: {t.ink2}; font-size: 11px; padding: 0 10px;
     }}
     QPushButton#recordBtn:hover {{ border-color: {t.accent}; color: {t.accent_deep}; }}
+
+    /* ---------- 数字框（存储上限） ---------- */
+    QLineEdit#numEdit {{
+        background: {t.card}; border: 1px solid {t.line}; border-radius: 8px;
+        color: {t.ink}; font-size: 11.5px; font-family: "{MONO_FAMILIES[0]}";
+        padding: 0 8px;
+    }}
+    QLineEdit#numEdit:focus {{ border-color: {t.accent}; }}
 
     /* ---------- 底栏 ---------- */
     #footer {{ background: {t.card2}; border-top: 1px solid {t.line_soft}; }}

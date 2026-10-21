@@ -2,8 +2,9 @@
 
 | 类型 | 动作 | 实现 |
 |---|---|---|
-| 图片 | 用图片预览打开 | Preview.app（`open -a Preview`，payload 先落临时 PNG） |
-| 文件 | 在访达中显示 | `NSWorkspace.activateFileViewerSelecting` |
+| 截图（内存图片，无文件） | 预览 | Preview.app（payload 先落临时 PNG）；**没有「打开文件」** |
+| 图片文件（访达复制） | 预览 + 打开文件 | 预览开原图；打开文件 = 在访达中显示 |
+| 普通文件 | 打开文件 | 在访达中显示；**没有「预览」** |
 | 链接 | 打开链接 | `NSWorkspace.open` |
 | 文字 | 仅复制 | 写回剪贴板（调用方处理） |
 
@@ -25,7 +26,8 @@ URL_RE = re.compile(r"^(https?|ftp)://\S+$", re.IGNORECASE)
 
 #: 行内/预览窗按钮集合（按类型）
 ACTIONS_BY_KIND = {
-    "image": ("preview", "copy", "finder"),
+    # 截图没有文件可打开（用户 2026-10-21：截图有预览、没有打开文件）
+    "image": ("preview", "copy"),
     "file": ("finder", "copy"),
     "link": ("openlink", "copy"),
     "text": ("copy",),
@@ -33,8 +35,14 @@ ACTIONS_BY_KIND = {
 }
 
 
-def classify_record(kind: str, text: str | None) -> str:
-    """ClipRecord.kind（text/image/mixed）→ UI 类型（text/code/image/link/file）。"""
+def classify_record(kind: str, text: str | None, path: str = "") -> str:
+    """ClipRecord.kind（text/image/mixed）+ path → UI 类型（text/code/image/link/file）。
+
+    **`path` 优先**：从访达复制的文件（含图片文件）都是「文件」卡片；
+    `path` 为空才是截图 / 网页图片 / 纯文本。这是 Frset 的分类法，用户 2026-10-21 指定。
+    """
+    if path:
+        return "file"
     if kind in ("image", "mixed"):
         return "image"
     body = (text or "").strip()
@@ -88,6 +96,11 @@ class MacOpeners:
         target = d / name
         target.write_bytes(png)
         return target
+
+    def open_image_path(self, path: str) -> str:
+        """原图就在本机（访达复制的图片文件）→ 直接交给 Preview，不落临时文件。"""
+        self._run(["open", "-a", "Preview", str(path)])
+        return str(path)
 
     # ---- 文件 ----
     def reveal_in_finder(self, path: str) -> str:

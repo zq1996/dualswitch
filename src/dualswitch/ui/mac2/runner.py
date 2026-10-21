@@ -86,7 +86,8 @@ class UiRunner2(QObject):
         font.setFamilies(theme.FONT_FAMILIES)
         font.setPixelSize(int(round(theme.APP_FONT_PX)))
         self.app.setFont(font)
-        theme.set_appearance(getattr(cfg, "appearance", "system"))
+        # 外观固定浅色：用户 2026-10-21 明确不要深色模式（设置页已移除该项）
+        theme.set_appearance("light")
         self.app.setStyleSheet(theme.qss())
 
         self.icon = QIcon(str(theme.asset("screen-switch.ico")))
@@ -126,6 +127,9 @@ class UiRunner2(QObject):
         self.clipboard_page.pausedChanged.connect(self._on_clip_paused)
         self.settings_page.toastRequested.connect(self.toast.show_text)
         self.settings_page.saved.connect(self.on_config_saved)
+        self.settings_page.clearRequested.connect(
+            self.clipboard_page.clear_records_with_confirm
+        )
         self.settings_page.recordingChanged.connect(self._on_recording_changed)
 
         # 首帧就用控制器已经确认过的状态
@@ -184,7 +188,9 @@ class UiRunner2(QObject):
 
     def _build_status(self) -> None:
         icon_path = theme.asset("menubar.png")
-        self.status = statusmenu.build_status_item(icon_path, self._on_status_click)
+        self.status = statusmenu.build_status_item(
+            icon_path, self._on_status_click, self.show_window
+        )
         if self.status is not None:
             self.status.set_tooltip(f"屏幕切换 · {self._hotkey_label()}（单击图标打开菜单）")
         else:
@@ -500,7 +506,8 @@ class UiRunner2(QObject):
         self.controller.cfg = cfg
         self.switch_page.cfg = cfg
         self.settings_page.cfg = cfg
-        theme.set_appearance(getattr(cfg, "appearance", "system"))
+        # 外观固定浅色：用户 2026-10-21 明确不要深色模式（设置页已移除该项）
+        theme.set_appearance("light")
         from . import icons
 
         icons.clear_cache()

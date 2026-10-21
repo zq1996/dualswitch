@@ -24,6 +24,8 @@ LUCIDE = [
     "trash-2", "copy", "image", "file-text", "link-2", "folder-open", "x",
     "external-link", "check", "monitor", "app-window", "power", "download",
     "chevron-right", "eye", "scan-eye", "folder", "type", "code",
+    # 文件卡片 / 文件缩略图（按扩展名分派：普通 / 图片 / 压缩包）
+    "file", "file-image", "file-archive", "file-down", "hard-drive",
 ]
 
 FILLED = {

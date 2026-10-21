@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QBuffer, QIODevice, Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtGui import QColor, QImage, QPainter  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -71,20 +72,39 @@ class FakeEngine:
 
 
 def records() -> list[ClipRecord]:
+    long_text = (
+        "验证：全量 pytest 169 例全绿；界面测试补了文件分类、标题、目录、按钮组合、文件卡、"
+        "扩展名字形、引擎不发文件、单击复制的真实鼠标事件。文档同步了 INTERACTIONS-v2.md、"
+        "UI-MAC2-IMPLEMENTATION.md 与契约第 11 节，原型 index-v2.html 也按新规则改了。"
+        "这一段故意写长，用来确认预览窗会把文字完整显示出来：气泡跟着长高，超屏才内部滚动，一个字都不裁。"
+    ) * 3
     return [
-        ClipRecord(id="i1", kind="image", png=png_bytes(96, 64, "#83A8FF"),
-                   width=96, height=64, size=1_820_000, state="ok"),
+        ClipRecord(id="l2", kind="text", text=long_text,
+                   size=len(long_text.encode()), state="local", app="WorkBuddy"),
+        ClipRecord(id="i1", kind="image", png=png_bytes(640, 400, "#83A8FF"),
+                   width=640, height=400, size=1_820_000, state="ok", app="截图"),
         ClipRecord(id="t1", kind="text", text="明天下午三点，会议室 B，记得带转接头和 HDMI 线",
-                   size=36, state="ok"),
+                   size=36, state="ok", app="微信", app_id="com.tencent.xinWeChat"),
         ClipRecord(id="l1", kind="text", text="https://github.com/zq1996/dualswitch",
-                   size=38, state="ok", source="remote", peer_name="Windows"),
+                   size=38, state="ok", source="remote", peer_name="Windows", app="Chrome"),
         ClipRecord(id="c1", kind="text",
                    text="git rebase -i HEAD~3 && git push --force-with-lease origin main",
-                   size=64, state="pend", progress=0.58),
-        ClipRecord(id="f1", kind="text", text="需求评审纪要 v3.docx",
-                   detail="~/Documents/需求评审纪要 v3.docx", size=248 * 1024, state="local"),
+                   size=64, state="pend", progress=0.58, app="Terminal",
+                   app_id="com.apple.Terminal"),
+        # 访达复制的「图片文件」：缩略图是图片内容，标题是文件名，元信息给目录
+        ClipRecord(id="f1", kind="mixed", text="同景不同高度：湖畔 pagoda 拼贴画.png",
+                   png=png_bytes(420, 280, "#F0E6D2"),
+                   width=1086, height=1448, size=248 * 1024, file_size=3 * 1048576,
+                   state="local", path="/Users/zhqi/Downloads/照片/同景不同高度：湖畔 pagoda 拼贴画.png",
+                   app="访达", app_id="com.apple.finder"),
+        # 访达复制的普通文件：缩略图是文件瓷砖，标题是文件名
+        ClipRecord(id="f2", kind="text", text="ChatGPTInstaller.dmg",
+                   size=15, file_size=849 * 1024, state="local",
+                   path="/Users/zhqi/Downloads/ChatGPTInstaller.dmg",
+                   app="访达", app_id="com.apple.finder"),
         ClipRecord(id="t2", kind="text", text='{ "hotkey": "alt+space", "sync_clipboard": true }',
-                   size=62, state="fail"),
+                   size=62, state="fail", app="VS Code",
+                   app_id="com.microsoft.VSCode"),
     ]
 
 
@@ -95,7 +115,7 @@ def main() -> int:
         OUT.mkdir(parents=True)
     cfg = platform_defaults()
 
-    for mode in ("light", "dark"):
+    for mode in ("light",):   # 只有浅色（用户 2026-10-21 去掉深色模式）
         theme.set_appearance(mode)
         icons.clear_cache()
         app.setStyleSheet(theme.qss())
@@ -134,10 +154,44 @@ def main() -> int:
             row._acts_effect.setOpacity(1.0)
             row._set_hover(1.0)
             app.processEvents()
+            QTest.qWait(220)
             cp.preview_controller.open_now(row.record, row.ui_kind, row.thumb)
             app.processEvents()
             win.grab().save(str(OUT / "v2-clipboard-hover.png"))
             cp.preview_controller.bubble.grab().save(str(OUT / "v2-preview-bubble.png"))
+            cp.preview_controller.hide_now()
+
+            # 文件行 hover：三个按钮组合（截图=预览 / 图片文件=预览+打开 / 文件=打开）
+            row._fade_acts(0.0)          # 先把上一步 t1 的 hover 撤掉
+            row._set_hover(0.0)
+            for rid in ("f1", "f2"):
+                crow = cp._rows[rid]
+                crow._fade_acts(1.0)
+                crow._acts_effect.setOpacity(1.0)
+                crow._set_hover(1.0)
+            app.processEvents()
+            QTest.qWait(220)      # 等淡入动画跑完再截（否则按钮都是半透明）
+            win.grab().save(str(OUT / "v2-clipboard-filehover.png"))
+
+            # 文件卡：访达复制的图片文件 / 普通文件（照 Frset 的文件卡）
+            for rid, name in (("f1", "v2-preview-fileimg"), ("f2", "v2-preview-filedoc")):
+                crow = cp._rows[rid]
+                crow._fade_acts(1.0)
+                crow._acts_effect.setOpacity(1.0)
+                crow._set_hover(1.0)
+                cp.preview_controller.open_now(crow.record, crow.ui_kind, crow.thumb)
+                app.processEvents()
+                win.grab().save(str(OUT / f"{name}.png"))
+                cp.preview_controller.bubble.grab().save(str(OUT / f"{name}.png"))
+                cp.preview_controller.hide_now()
+                crow._fade_acts(0.0)
+                crow._set_hover(0.0)
+
+            # 长文本预览：截断 + 省略号（不能压到底栏）
+            lrow = cp._rows["l2"]
+            cp.preview_controller.open_now(lrow.record, lrow.ui_kind, lrow.thumb)
+            app.processEvents()
+            cp.preview_controller.bubble.grab().save(str(OUT / "v2-preview-longtext.png"))
             cp.preview_controller.hide_now()
 
             # 空态

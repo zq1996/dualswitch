@@ -6,7 +6,7 @@
 布局：
 
     ┌───────────────────────────────────────────────┐
-    │ 系统标题栏（红绿灯+居中「屏幕切换」）   [剪贴板][设置] │
+    │ 系统标题栏（红绿灯 + 居中「屏幕切换」）              │
     ├──────────┬────────────────────────────────────┤
     │ 侧栏188px │ 内容区（切换页/剪贴板页/设置页）      │
     │ 核心      │                                    │
@@ -21,8 +21,12 @@
     │ 底栏 30px：对端连接状态 · 版本号                 │
     └───────────────────────────────────────────────┘
 
-标题栏右侧工具钮：macOS 原生标题栏内放不了自绘控件 —— 先尝试
-`NSTitlebarAccessory`（全尺寸内容 + 透明标题栏），失败时退回内容区右上角。
+标题栏不放自绘工具钮（用户 2026-10-21 明确：右上角两个图标按钮不要了）：窗口直接
+用系统标题栏，侧栏从标题栏下沿开始。页面切换只靠侧栏与菜单栏菜单。
+
+**不要再开 full-size content view**：那样内容会铺到标题栏底下，侧栏/内容区会吃掉
+标题栏的拖拽区域 → 窗口拖不动（用户 2026-10-21 报的 bug）。标题栏里也不再有自绘
+控件，没有理由让内容顶上去。
 """
 
 from __future__ import annotations
@@ -40,12 +44,9 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
-from .widgets import IconButton, KeyCaps, NavButton, dot, label
+from .widgets import KeyCaps, NavButton, dot, label
 
 PAGE_SWITCH, PAGE_CLIP, PAGE_SETTINGS = 0, 1, 2
-
-ToolButton = IconButton          # 兼容旧名（标题栏工具钮）
-
 
 class MainWindow(QWidget):
     switchRequested = Signal()
@@ -65,7 +66,6 @@ class MainWindow(QWidget):
         self.setWindowTitle("屏幕切换")
         self.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.setFixedSize(theme.WIN_W, theme.WIN_H)
-        self._transparent_titlebar = False   # showEvent 里再尝试透明标题栏
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -78,20 +78,7 @@ class MainWindow(QWidget):
         root_lay.setContentsMargins(0, 0, 0, 0)
         root_lay.setSpacing(0)
 
-        # ---- 标题栏右侧工具条（系统标题栏覆盖其上；红绿灯在左侧）----
-        tools_bar = QWidget()
-        tools_bar.setFixedHeight(theme.TOOLBAR_H)
-        tl = QHBoxLayout(tools_bar)
-        tl.setContentsMargins(12, 0, 12, 0)
-        tl.setSpacing(4)
-        tl.addStretch(1)
-        self.tool_clip = IconButton("clip", "剪贴板", "ghost")
-        self.tool_set = IconButton("settings", "设置", "ghost")
-        tl.addWidget(self.tool_clip)
-        tl.addWidget(self.tool_set)
-        root_lay.addWidget(tools_bar)
-
-        # ---- 侧栏 + 内容 ----
+        # ---- 侧栏 + 内容（从标题栏下沿直接开始，不再占一条工具条）----
         body = QWidget()
         body_lay = QHBoxLayout(body)
         body_lay.setContentsMargins(0, 0, 0, 0)
@@ -171,8 +158,6 @@ class MainWindow(QWidget):
         self.nav_switch.clicked.connect(lambda: self.show_page(PAGE_SWITCH))
         self.nav_clip.clicked.connect(lambda: self.show_page(PAGE_CLIP))
         self.nav_settings.clicked.connect(lambda: self.show_page(PAGE_SETTINGS))
-        self.tool_clip.clicked.connect(lambda: self.show_page(PAGE_CLIP))
-        self.tool_set.clicked.connect(lambda: self.show_page(PAGE_SETTINGS))
         self._page = PAGE_SWITCH
 
     # ------------------------------------------------------------------ 页面
@@ -195,10 +180,6 @@ class MainWindow(QWidget):
         self.nav_settings.setChecked(index == PAGE_SETTINGS)
         for btn in (self.nav_switch, self.nav_clip, self.nav_settings):
             btn.update()
-        self.tool_clip.setChecked(index == PAGE_CLIP)
-        self.tool_set.setChecked(index == PAGE_SETTINGS)
-        self.tool_clip.update()
-        self.tool_set.update()
         title = {PAGE_SWITCH: "屏幕切换", PAGE_CLIP: "剪贴板", PAGE_SETTINGS: "设置"}[index]
         self.setWindowTitle(f"屏幕切换 · {title}" if index != PAGE_SWITCH else "屏幕切换")
         if index != PAGE_CLIP:
@@ -235,49 +216,6 @@ class MainWindow(QWidget):
         self.foot_dot.setStyleSheet(
             f"background:{t.ok if ok else t.idle};border-radius:3px;border:0;"
         )
-
-    # ------------------------------------------------------------------ 平台外观
-    def showEvent(self, event):  # noqa: N802
-        super().showEvent(event)
-        if not getattr(self, "_transparent_titlebar", False):
-            self._try_transparent_titlebar()
-
-    def _try_transparent_titlebar(self) -> None:
-        """标题栏透明 + 全尺寸内容区（工具钮贴到标题栏高度内）。失败就当普通窗口。
-
-        必须等真正 show 过（NSWindow 已建）再做；offscreen 测试平台 winId 无效，
-        硬包指针会直接段错误，所以先判平台。
-        """
-        self._transparent_titlebar = False
-        import sys
-
-        if sys.platform != "darwin":
-            return
-        try:
-            from PySide6.QtGui import QGuiApplication
-
-            if QGuiApplication.platformName() == "offscreen":
-                return
-        except Exception:  # noqa: BLE001
-            return
-        try:
-            import objc
-            from AppKit import NSWindowStyleMaskFullSizeContentView
-
-            wid = int(self.winId())
-            if wid == 0:
-                return
-            ns_view = objc.objc_object(c_void_p=wid)
-            ns_window = ns_view.window()
-            if ns_window is None:
-                return
-            ns_window.setTitlebarAppearsTransparent_(True)
-            ns_window.setStyleMask_(
-                ns_window.styleMask() | NSWindowStyleMaskFullSizeContentView
-            )
-            self._transparent_titlebar = True
-        except Exception:  # noqa: BLE001 - 不同 Qt/pyobjc 版本路径不同，失败就退回
-            self._transparent_titlebar = False
 
     # ------------------------------------------------------------------ 事件
     def closeEvent(self, event: QCloseEvent):  # noqa: N802

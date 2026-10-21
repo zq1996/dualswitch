@@ -27,6 +27,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+from PySide6.QtCore import Qt
+
 from . import theme
 
 PORT = {"windows": "HDMI", "mac": "USB-C"}
@@ -107,6 +109,37 @@ def macos_available() -> bool:
     return True
 
 
+#: 菜单行不再放图标（用户 2026-10-21：菜单上的图标删掉，行会太高）。
+#: 状态行前面那盏小灯保留 —— 它表示「画面在哪台机器」，不是装饰。
+MENU_ICONS: dict[str, str] = {}
+
+
+def _png_bytes(pixmap) -> bytes:  # noqa: ANN001
+    """QPixmap → PNG 字节（给 NSImage 用）。"""
+    from PySide6.QtCore import QBuffer, QIODevice
+
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    pixmap.save(buf, "PNG")
+    return bytes(buf.data())
+
+
+def _led_pixmap(ok: bool, size: int = 12):  # noqa: ANN201
+    from PySide6.QtGui import QColor, QPainter, QPixmap
+
+    from . import theme
+
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setPen(Qt.NoPen)
+    p.setBrush(theme.qcolor(theme.tokens().ok if ok else theme.tokens().idle))
+    p.drawEllipse(2, 2, size - 4, size - 4)
+    p.end()
+    return pm
+
+
 _TARGET_CLASS = None
 
 
@@ -140,11 +173,13 @@ class MacStatusItem:
 
     kind = "menubar"
 
-    def __init__(self, icon_path, on_click=None):  # noqa: ANN001
+    def __init__(self, icon_path, on_click=None, on_open=None):  # noqa: ANN001
         from AppKit import NSImage, NSStatusBar, NSVariableStatusItemLength
         from Foundation import NSMakeSize
 
         self._on_click = on_click
+        self._on_open = on_open
+        self._pending_click = None      # 单击延迟弹菜单用的 QTimer
         self._handlers: dict[int, Callable[[], None]] = {}
         self._next_tag = 200
         self._menu = None
@@ -174,7 +209,48 @@ class MacStatusItem:
 
     # ------------------------------------------------------------------ 回调
     def on_status_clicked(self) -> None:
-        self._popup_menu()
+        """单击 = 弹菜单，双击 = 打开主界面（用户 2026-10-21 指定）。
+
+        NSStatusItem 不能只靠 clickCount 区分：单击会立刻弹菜单，第二次点击就落到
+        菜单上了。所以单击延迟 240ms（约一个双击间隔）再弹；双击在窗口期内到达就
+        取消弹菜单、直接开窗口。
+        """
+        clicks = 1
+        try:
+            from AppKit import NSApp
+
+            event = NSApp.currentEvent()
+            if event is not None:
+                clicks = int(event.clickCount())
+        except Exception:  # noqa: BLE001
+            clicks = 1
+        if clicks >= 2:
+            self._cancel_pending_click()
+            if self._on_open is not None:
+                self._on_open()
+            return
+        self._cancel_pending_click()
+        try:
+            from PySide6.QtCore import QTimer
+
+            timer = QTimer(self._button)
+            timer.setSingleShot(True)
+            timer.setInterval(240)
+            timer.timeout.connect(self._popup_menu)
+            timer.start()
+            self._pending_click = timer
+        except Exception:  # noqa: BLE001 - 没 Qt 就退回立刻弹
+            self._popup_menu()
+
+    def _cancel_pending_click(self) -> None:
+        timer = self._pending_click
+        self._pending_click = None
+        if timer is not None:
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except Exception:  # noqa: BLE001
+                pass
 
     def on_menu_action(self, tag: int) -> None:
         handler = self._handlers.get(tag)
@@ -225,6 +301,11 @@ class MacStatusItem:
             if entry.kind in ("label", "status") or entry.action is None:
                 item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(entry.title, None, "")
                 item.setEnabled_(False)
+                if entry.kind == "status":
+                    # 设计稿：状态行前面一个状态灯（本机=绿，另一台/未知=灰）
+                    image = self._nsimage(_led_pixmap(entry.led != "none"), template=False)
+                    if image is not None:
+                        item.setImage_(image)
                 menu.addItem_(item)
                 continue
             tag = self._next_tag
@@ -260,6 +341,30 @@ class MacStatusItem:
         self._menu = menu
         self._item.setMenu_(None)
 
+    @staticmethod
+    def _icon_pixmap(lucide_name: str, size: int = 15):  # noqa: ANN201
+        from . import icons
+
+        return icons.svg_pixmap(lucide_name, size, "#000000", 2.0)
+
+    @staticmethod
+    def _nsimage(pixmap, template: bool = True):  # noqa: ANN001, ANN202
+        """QPixmap → NSImage；template=True 时由系统按菜单明暗自动反色。"""
+        try:
+            from AppKit import NSImage
+            from Foundation import NSData, NSMakeSize
+
+            raw = _png_bytes(pixmap)
+            data = NSData.dataWithBytes_length_(raw, len(raw))
+            image = NSImage.alloc().initWithData_(data)
+            if image is None:
+                return None
+            image.setSize_(NSMakeSize(pixmap.width(), pixmap.height()))
+            image.setTemplate_(bool(template))
+            return image
+        except Exception:  # noqa: BLE001
+            return None
+
     def show(self) -> None:
         self._item.setVisible_(True)
 
@@ -288,11 +393,11 @@ class MacStatusItem:
         logging.getLogger("dualswitch.ui.mac2").info("[通知] %s：%s", title, message)
 
 
-def build_status_item(icon_path, on_click=None):  # noqa: ANN001
+def build_status_item(icon_path, on_click=None, on_open=None):  # noqa: ANN001
     """v2 菜单栏图标；AppKit 不可用时返回 None（v2 不做托盘降级）。"""
     if macos_available():
         try:
-            return MacStatusItem(icon_path, on_click)
+            return MacStatusItem(icon_path, on_click, on_open)
         except Exception:  # noqa: BLE001
             import logging
 

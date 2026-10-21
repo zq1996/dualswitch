@@ -10,10 +10,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -138,6 +140,7 @@ class HotkeyKeycaps(QWidget):
 # --------------------------------------------------------------------------- #
 class SettingsPage(QWidget):
     saved = Signal(object)            # Config
+    clearRequested = Signal()         # 「存储上限」旁边的清理按钮
     recordingChanged = Signal(bool)   # 热键录制中 → 调用方暂停全局热键
     toastRequested = Signal(str)
 
@@ -172,16 +175,10 @@ class SettingsPage(QWidget):
         self.sw_notify.clicked.connect(self._apply)
         self.sw_tray = ToggleSwitch(self.cfg.tray)
         self.sw_tray.clicked.connect(self._apply)
-        self.seg_appearance = Segmented(
-            [("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")],
-            getattr(self.cfg, "appearance", "system"),
-        )
-        self.seg_appearance.changed.connect(self._apply)
         lay.addWidget(self._section("通用", [
             settings_row("切换模式", "标准 = 先本地后请对端代发；强制 = 直接发 Set", self.seg_policy),
             settings_row("切换完成通知", "切换成功后弹出系统通知", self.sw_notify),
             settings_row("关闭窗口后仍在菜单栏运行", "mac 端默认开启", self.sw_tray),
-            settings_row("外观", "跟随系统 / 浅色 / 深色", self.seg_appearance),
         ]))
 
         # ---- 剪贴板 ----
@@ -189,19 +186,19 @@ class SettingsPage(QWidget):
         self.sw_clip.clicked.connect(self._apply)
         self.sw_hover = ToggleSwitch(getattr(self.cfg.clipboard, "hover_preview", True))
         self.sw_hover.clicked.connect(self._apply)
-        retention = getattr(self.cfg.clipboard, "retention_days", 30)
-        self.seg_retention = Segmented(
-            [("7", "7 天"), ("30", "30 天"), ("0", "不限")],
-            str(retention),
-        )
-        self.seg_retention.changed.connect(self._apply)
-        self.val_storage = label("", "setVal")
+        # 用 QLineEdit 而不是 QSpinBox：QSpinBox 一旦被 QSS 改边框，内部输入框宽度
+        # 会被算成 1px（文字完全看不见）。这里自己校验范围，改动后回车/失焦即保存。
+        self.edit_storage = QLineEdit(str(int(getattr(self.cfg.clipboard, "storage_limit_mb", 200))))
+        self.edit_storage.setObjectName("numEdit")
+        self.edit_storage.setFixedSize(62, 28)
+        self.edit_storage.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.edit_storage.setValidator(QIntValidator(10, 5000, self))
+        self.edit_storage.editingFinished.connect(self._apply)
         self._refresh_storage()
         lay.addWidget(self._section("剪贴板", [
             settings_row("启用跨端剪贴板", "文字与图片自动同步到另一台", self.sw_clip),
             settings_row("悬浮预览", "鼠标悬浮在缩略图上时展开预览窗", self.sw_hover),
-            settings_row("保留历史", "超期条目自动清理", self.seg_retention),
-            settings_row("存储上限", "超限后丢弃最旧的记录", self.val_storage),
+            settings_row("存储上限", "超过上限自动丢弃最旧的记录", self._storage_control()),
         ]))
 
         # ---- 热键 ----
@@ -228,6 +225,7 @@ class SettingsPage(QWidget):
         ]))
 
         lay.addStretch(1)
+        self._refresh_storage()
         scroll.setWidget(host)
         outer.addWidget(scroll, 1)
 
@@ -255,6 +253,35 @@ class SettingsPage(QWidget):
         col.addWidget(card)
         return wrap
 
+    def _storage_limit_value(self) -> int:
+        """存储上限输入框 → 整数（非法/越界就夹到 10–5000）。"""
+        try:
+            value = int(str(self.edit_storage.text()).strip() or 0)
+        except ValueError:
+            value = getattr(self.cfg.clipboard, "storage_limit_mb", 200)
+        return max(10, min(5000, value))
+
+    def _storage_control(self) -> QWidget:
+        """存储上限：可编辑的数字框 + 旁边一个「清理」按钮。"""
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        self.btn_clean = QPushButton("清理")
+        self.btn_clean.setObjectName("ghostBtn")
+        self.btn_clean.setFixedSize(56, 28)
+        self.btn_clean.setFont(theme.qfont(11.5, 600))
+        self.btn_clean.setCursor(Qt.PointingHandCursor)
+        self.btn_clean.setToolTip("清空本机剪贴板记录")
+        self.btn_clean.clicked.connect(self.clearRequested)
+        self.lbl_used = label("", "setVal")
+        unit = label("MB", "setVal")
+        row.addWidget(self.lbl_used, 0, Qt.AlignVCenter)
+        row.addWidget(self.edit_storage, 0, Qt.AlignVCenter)
+        row.addWidget(unit, 0, Qt.AlignVCenter)
+        row.addWidget(self.btn_clean, 0, Qt.AlignVCenter)
+        return box
+
     def _refresh_storage(self) -> None:
         used = 0.0
         try:
@@ -262,8 +289,10 @@ class SettingsPage(QWidget):
                 used += getattr(rec, "size", 0) or 0
         except Exception:  # noqa: BLE001
             pass
-        limit = getattr(self.cfg.clipboard, "storage_limit_mb", 200)
-        self.val_storage.setText(f"当前 {used / 1048576:.1f} MB / {limit} MB")
+        self.used_mb = used / 1048576
+        lbl = getattr(self, "lbl_used", None)
+        if lbl is not None:
+            lbl.setText(f"已用 {self.used_mb:.1f} MB")
 
     def set_engine_records(self, records) -> None:  # noqa: ANN001
         self._records = records
@@ -295,7 +324,8 @@ class SettingsPage(QWidget):
                 switch_policy=self.seg_policy.value(),
                 notify=self.sw_notify.isChecked(),
                 tray=self.sw_tray.isChecked(),
-                appearance=self.seg_appearance.value(),
+                # 外观固定浅色（用户 2026-10-21：不要深色模式）
+                appearance="light",
                 hotkey=hotkey,
                 hotkey_backend="auto",
                 clipboard_hotkey=overrides.get("clipboard_hotkey", self.hk_clip.spec()),
@@ -304,7 +334,7 @@ class SettingsPage(QWidget):
             clip.update(
                 enabled=self.sw_clip.isChecked(),
                 hover_preview=self.sw_hover.isChecked(),
-                retention_days=int(self.seg_retention.value()),
+                storage_limit_mb=self._storage_limit_value(),
             )
             data["clipboard"] = clip
             validated = from_dict(data)

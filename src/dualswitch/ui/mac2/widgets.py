@@ -65,11 +65,14 @@ def nav_pixmap(name: str, size: int = 17, color: str | None = None) -> QPixmap:
     return icons.svg_pixmap(NAV_ICONS.get(name, name), size, color or theme.tokens().ink3)
 
 
-def type_pixmap(kind: str, size: int = theme.THUMB) -> QPixmap:
-    """剪贴板类型缩略图（圆角瓷砖 + 类型图标）。"""
-    t = theme.tokens()
-    fg = t.accent if kind in ("image", "link") else t.ink2
-    return icons.type_tile_pixmap(kind, size, t.card2, t.line_soft, fg)
+def type_pixmap(kind: str, size: int = theme.THUMB, path: str = "") -> QPixmap:
+    """剪贴板类型缩略图：实色圆角瓷砖 + 白色类型字形（照 Frset 的观感）。
+
+    `path` 只对「文件」有用：按扩展名换成 `file-image` / `file-archive` 字形。
+    """
+    bg, fg = theme.type_tile(kind)
+    glyph = icons.file_glyph(path) if kind == "file" else ""
+    return icons.type_tile_pixmap(kind, size, bg, None, fg, glyph_override=glyph)
 
 
 def badge_pixmap(source_system: str, size: int = theme.BADGE) -> QPixmap:
@@ -457,16 +460,20 @@ class MetaLine(QWidget):
     DOT = 2.5
     GAP = 5
 
+    ICON = 14
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._parts: list[tuple[str, bool]] = []
+        self._icons: dict[int, QPixmap] = {}
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setFixedHeight(14)
+        self.setFixedHeight(16)
 
-    def set_parts(self, parts: list[tuple[str, bool]]) -> None:
-        """parts: [(文本, 是否加粗)]"""
+    def set_parts(self, parts: list[tuple[str, bool]], icons: dict[int, QPixmap] | None = None) -> None:
+        """parts: [(文本, 是否加粗)]；icons: {段下标: 图标}（画在该段文字前面）。"""
         self._parts = [(p, b) for p, b in parts if p]
+        self._icons = dict(icons or {})
         self.updateGeometry()
         self.update()
 
@@ -477,7 +484,7 @@ class MetaLine(QWidget):
         return " · ".join(p for p, _ in self._parts)
 
     def sizeHint(self):  # noqa: N802
-        return QSize(self._measure(), 14)
+        return QSize(self._measure(), 16)
 
     def _fonts(self) -> tuple:
         return theme.qfont(theme.META_FS, 700), theme.qfont(theme.META_FS, 400)
@@ -487,6 +494,8 @@ class MetaLine(QWidget):
         width = 0
         for i, (text, strong) in enumerate(self._parts):
             fm = QFontMetrics(bold if strong else normal)
+            if i in self._icons:
+                width += self.ICON + 4
             width += fm.horizontalAdvance(text)
             if i:
                 width += self.GAP * 2 + self.DOT
@@ -508,6 +517,10 @@ class MetaLine(QWidget):
                 cy = self.height() / 2 - self.DOT / 2 + 0.5
                 p.drawEllipse(int(x), int(cy), int(self.DOT * 1.6), int(self.DOT * 1.6))
                 x += self.DOT * 1.6 + self.GAP
+            icon = self._icons.get(i)
+            if icon is not None:
+                p.drawPixmap(int(x), int((self.height() - self.ICON) / 2), icon)
+                x += self.ICON + 4
             p.setFont(f)
             p.setPen(theme.qcolor(t.ink2 if strong else t.ink3))
             w = fm.horizontalAdvance(text)

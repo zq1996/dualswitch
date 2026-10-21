@@ -44,6 +44,36 @@ PLATE_GRADIENT = {
     "apple": ("#6B7484", "#3D4450"),
 }
 
+#: 扩展名分类 → 文件字形。Frset 的文件卡就是按这个分派的：
+#: `.png` 是「文档 + 小图」，`.dmg` 是「文档 + 拉链/箭头」，其余是空白文档。
+IMAGE_EXTS = {
+    "png", "jpg", "jpeg", "heic", "heif", "gif", "webp", "tif", "tiff",
+    "bmp", "ico", "jfif", "svg", "avif", "psd",
+}
+ARCHIVE_EXTS = {
+    "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "dmg", "pkg",
+    "iso", "jar", "apk", "ipa", "deb", "rpm",
+}
+
+
+def ext_of(path_or_name: str) -> str:
+    """`/a/b/ChatGPTInstaller.dmg` → `dmg`（小写，无点；没有扩展名返回空串）。"""
+    name = (path_or_name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    if "." not in name:
+        return ""
+    return name.rsplit(".", 1)[-1].strip().lower()
+
+
+def file_glyph(path_or_name: str) -> str:
+    """扩展名 → Lucide 字形名（`file-image` / `file-archive` / `file`）。"""
+    ext = ext_of(path_or_name)
+    if ext in IMAGE_EXTS:
+        return "file-image"
+    if ext in ARCHIVE_EXTS:
+        return "file-archive"
+    return "file"
+
+
 _cache: dict[tuple, QPixmap] = {}
 
 
@@ -116,15 +146,27 @@ def clear_cache() -> None:
 # --------------------------------------------------------------------------- #
 # 平台牌 / 角标
 # --------------------------------------------------------------------------- #
-def _plate(system: str, size: int, radius: float, dim: float = 1.0) -> tuple[QPixmap, float]:
+def _canvas(size: int):
+    """按 DPR 建画布，并**先设 DPR 再画**：之后所有坐标都是逻辑像素。
+
+    这是修「角标只有四分之一有内容」的关键 —— 之前先画后设 DPR，嵌套 pixmap 的
+    逻辑尺寸会被当成设备像素，位置和大小全错。
+    """
     ratio = _ratio()
     px = max(1, int(round(size * ratio)))
     pm = QPixmap(px, px)
     pm.fill(Qt.transparent)
+    pm.setDevicePixelRatio(ratio)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing, True)
+    p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    return pm, p
+
+
+def _plate_bg(p: QPainter, system: str, size: float, radius: float, dim: float = 1.0) -> None:
+    """在给定画布上画渐变圆角底（逻辑坐标）。"""
     top, bottom = PLATE_GRADIENT.get(system, PLATE_GRADIENT["windows"])
-    grad = QLinearGradient(QPointF(0, 0), QPointF(px, px))
+    grad = QLinearGradient(QPointF(0, 0), QPointF(size, size))
     c1, c2 = QColor(top), QColor(bottom)
     if dim < 1.0:
         c1.setAlphaF(dim)
@@ -132,11 +174,15 @@ def _plate(system: str, size: int, radius: float, dim: float = 1.0) -> tuple[QPi
     grad.setColorAt(0.0, c1)
     grad.setColorAt(1.0, c2)
     path = QPainterPath()
-    path.addRoundedRect(QRectF(0, 0, px, px), radius * ratio, radius * ratio)
+    path.addRoundedRect(QRectF(0, 0, size, size), radius, radius)
     p.fillPath(path, QBrush(grad))
-    p.end()
-    pm.setDevicePixelRatio(ratio)
-    return pm, ratio
+
+
+def _draw_logo(p: QPainter, system: str, size: float, ratio_logo: float) -> None:
+    logo_size = max(6, int(round(size * ratio_logo)))
+    logo = svg_pixmap(system, logo_size, "#FFFFFF")
+    lw = logo.width() / (logo.devicePixelRatio() or 1)
+    p.drawPixmap(QPointF((size - lw) / 2.0, (size - lw) / 2.0), logo)
 
 
 def plate_pixmap(system: str, size: int, radius: float | None = None, dim: float = 1.0) -> QPixmap:
@@ -146,71 +192,58 @@ def plate_pixmap(system: str, size: int, radius: float | None = None, dim: float
     if cached is not None:
         return cached
     r = size * 0.26 if radius is None else radius
-    pm, ratio = _plate(system, size, r, dim)
-    logo_size = max(8, int(round(size * _LOGO_INSET.get(system, 0.86))))
-    logo = svg_pixmap(system, logo_size, "#FFFFFF")
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.SmoothPixmapTransform, True)
-    lp = logo.width() / (logo.devicePixelRatio() or 1)
-    p.drawPixmap(
-        QPointF((size - lp) / 2.0, (size - lp) / 2.0),
-        logo,
-    )
+    pm, p = _canvas(size)
+    _plate_bg(p, system, size, r, dim)
+    _draw_logo(p, system, size, _LOGO_INSET.get(system, 0.86))
     p.end()
     _cache[key] = pm
     return pm
 
 
 def badge_pixmap(system: str, size: int, ring_color: str) -> QPixmap:
-    """缩略图右下角来源系统角标：19px 圆角块 + 1.8px 卡片色描边 + 白 logo。"""
+    """缩略图右下角来源系统角标：圆角块 + 2px 卡片色描边 + 白 logo。
+
+    全部在一张画布上按逻辑坐标画（先设 DPR），不再嵌一层带 DPR 的 pixmap ——
+    之前那版角标只有左上四分之一有内容、其余空白，就是嵌套 pixmap 的 DPR 打架。
+    """
     key = ("badge", system, size, ring_color.lower(), _ratio())
     cached = _cache.get(key)
     if cached is not None:
         return cached
-    ratio = _ratio()
-    ring = 1.8
-    total_n = int(round(size * ratio))
-    inner_n = max(2, int(round((size - ring * 2) * ratio)))
-
-    inner = plate_pixmap(system, size - ring * 2, radius=(size - ring * 2) * 0.29)
-    pm = QPixmap(total_n, total_n)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing, True)
-    ring_px = ring * ratio
-    path = QPainterPath()
-    path.addRoundedRect(
-        QRectF(0, 0, total_n, total_n), size * 0.29 * ratio, size * 0.29 * ratio
-    )
-    p.fillPath(path, _qc(ring_color))
-    p.drawPixmap(QPointF(ring_px, ring_px), inner)
+    ring = 2.0
+    pm, p = _canvas(size)
+    # 外圈（= 卡片色的「描边」，把角标从缩略图上挖出来）
+    p.setPen(Qt.NoPen)
+    p.setBrush(_qc(ring_color))
+    p.drawRoundedRect(QRectF(0, 0, size, size), size * 0.28, size * 0.28)
+    # 内圈渐变底
+    inner = size - ring * 2
+    p.save()
+    p.translate(ring, ring)
+    _plate_bg(p, system, inner, inner * 0.26)
+    _draw_logo(p, system, inner, 0.56)
+    p.restore()
     p.end()
-    pm.setDevicePixelRatio(ratio)
     _cache[key] = pm
     return pm
 
 
-def plain_plate_pixmap(glyph: str, size: int, bg: str, fg: str, radius: float | None = None) -> QPixmap:
+def plain_plate_pixmap(glyph: str, size: int, bg: str, fg: str, radius: float | None = None,
+                       border: str | None = None) -> QPixmap:
     """单色圆角牌 + 单色图标（unknown 态的「未检测到显示器」牌）。"""
-    key = ("plain", glyph, size, bg.lower(), fg.lower(), radius, _ratio())
+    key = ("plain", glyph, size, bg.lower(), fg.lower(), radius, border, _ratio())
     cached = _cache.get(key)
     if cached is not None:
         return cached
-    ratio = _ratio()
-    px = max(1, int(round(size * ratio)))
     r = size * 0.26 if radius is None else radius
-    pm = QPixmap(px, px)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing, True)
+    pm, p = _canvas(size)
     path = QPainterPath()
-    path.addRoundedRect(QRectF(0, 0, px, px), r * ratio, r * ratio)
+    path.addRoundedRect(QRectF(0, 0, size, size), r, r)
     p.fillPath(path, QBrush(_qc(bg)))
-    p.end()
-    pm.setDevicePixelRatio(ratio)
+    if border:
+        p.setPen(_qc(border))
+        p.drawPath(path)
     glyph_pm = svg_pixmap(glyph, max(10, int(round(size * 0.46))), fg)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.SmoothPixmapTransform, True)
     gw = glyph_pm.width() / (glyph_pm.devicePixelRatio() or 1)
     p.drawPixmap(QPointF((size - gw) / 2.0, (size - gw) / 2.0), glyph_pm)
     p.end()
@@ -218,35 +251,83 @@ def plain_plate_pixmap(glyph: str, size: int, bg: str, fg: str, radius: float | 
     return pm
 
 
-def type_tile_pixmap(kind: str, size: int, bg: str, border: str, fg: str) -> QPixmap:
-    """剪贴板类型缩略图：圆角瓷砖 + 居中类型图标（文字/代码/图片/链接/文件）。"""
-    key = ("tile", kind, size, bg.lower(), border.lower(), fg.lower(), _ratio())
+def file_pixmap(path_or_name: str, size: int, fg: str = "", stroke: float = 1.5) -> QPixmap:
+    """文件卡图标：Lucide 文档字形 + 下面一行扩展名（照 Frset 的「文档 + PNG」）。
+
+    `path_or_name` 决定字形（图片文件=文档+小图、压缩/安装包=文档+拉链）和下面印的字。
+    没扩展名时只画文档，不留空行。
+    """
+    ext = ext_of(path_or_name).upper()[:5]
+    glyph_name = file_glyph(path_or_name)
+    from . import theme
+
+    color = fg or theme.tokens().ink2
+    key = ("fileicon", glyph_name, ext, size, color.lower(), stroke, _ratio())
     cached = _cache.get(key)
     if cached is not None:
         return cached
+
     ratio = _ratio()
-    px = max(1, int(round(size * ratio)))
-    pm = QPixmap(px, px)
+    label_h = 13 if ext else 0
+    px_w = max(1, int(round(size * ratio)))
+    px_h = max(1, int(round((size + label_h) * ratio)))
+    pm = QPixmap(px_w, px_h)
     pm.fill(Qt.transparent)
+    pm.setDevicePixelRatio(ratio)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing, True)
-    radius = size * 0.217 * ratio           # 46 → 10
-    path = QPainterPath()
-    path.addRoundedRect(QRectF(0.5, 0.5, px - 1, px - 1), radius, radius)
-    p.fillPath(path, _qc(bg))
-    p.setPen(_qc(border))
-    p.drawPath(path)
-    p.end()
-    pm.setDevicePixelRatio(ratio)
-
-    glyph_name = {
-        "text": "type", "code": "code", "image": "image",
-        "link": "link-2", "file": "file-text",
-    }.get(kind, "type")
-    glyph_size = int(round(size * 0.5))
-    glyph = svg_pixmap(glyph_name, glyph_size, fg, stroke=1.9)
-    p = QPainter(pm)
     p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    glyph = svg_pixmap(glyph_name, size, color, stroke=stroke)
+    gw = glyph.width() / (glyph.devicePixelRatio() or 1)
+    p.drawPixmap(QPointF((size - gw) / 2.0, 0.0), glyph)
+    if ext:
+        from PySide6.QtGui import QFont
+
+        font = QFont()
+        font.setFamilies(theme.MONO_FAMILIES)
+        font.setPixelSize(9)
+        font.setWeight(QFont.DemiBold)
+        font.setLetterSpacing(QFont.AbsoluteSpacing, 0.4)
+        p.setFont(font)
+        p.setPen(_qc(color))
+        p.drawText(
+            QRectF(0, size - 1, size, label_h + 2),
+            int(Qt.AlignHCenter | Qt.AlignTop),
+            ext,
+        )
+    p.end()
+    _cache[key] = pm
+    return pm
+
+
+def type_tile_pixmap(
+    kind: str, size: int, bg: str, border: str | None, fg: str,
+    glyph_override: str = "",
+) -> QPixmap:
+    """剪贴板类型缩略图：圆角瓷砖 + 居中类型图标（文字/代码/图片/链接/文件）。
+
+    `glyph_override` 给「文件」用：按扩展名换成 `file-image` / `file-archive`。
+    """
+    key = ("tile", kind, glyph_override, size, bg.lower(), (border or "").lower(),
+           fg.lower(), _ratio())
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+    pm, p = _canvas(size)
+    radius = size * 0.217           # 46 → 10
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0.5, 0.5, size - 1, size - 1), radius, radius)
+    p.fillPath(path, QBrush(_qc(bg)))
+    if border:
+        p.setPen(_qc(border))
+        p.drawPath(path)
+
+    glyph_name = glyph_override or {
+        "text": "type", "code": "code", "image": "image",
+        "link": "link-2", "file": "file",
+    }.get(kind, "type")
+    glyph_size = int(round(size * 0.52))
+    glyph = svg_pixmap(glyph_name, glyph_size, fg, stroke=2.1)
     gw = glyph.width() / (glyph.devicePixelRatio() or 1)
     p.drawPixmap(QPointF((size - gw) / 2.0, (size - gw) / 2.0), glyph)
     p.end()

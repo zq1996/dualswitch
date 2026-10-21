@@ -11,7 +11,8 @@
 
 交互红线：
   · 悬停**缩略图** 450ms 才弹预览窗（不是整行）
-  · 单击行=预览、双击行=复制、右键=更多操作、失败/仅本机药丸=重试
+  · **单击行 = 直接复制**（2026-10-21 用户要求）、双击行=预览、右键=更多操作、
+    失败/仅本机药丸=重试
   · 「仅本机」≠「失败」：前者不是错误（灰），后者是错误（红）
   · 双态空态分开：真空「剪贴板为空」/ 筛选「当前筛选下暂无内容」
   · 打开方式按类型分派：图片→预览、文件→访达、链接→浏览器、文字→复制
@@ -24,6 +25,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 
 from PySide6.QtCore import (
@@ -50,8 +52,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import icons, openers, theme
-from .preview import PreviewController, meta_line, source_system
+from . import apps, icons, openers, theme
+from .preview import (
+    PreviewController,
+    file_name,
+    meta_line,
+    source_system,
+)
 from .widgets import (
     Chip,
     IconButton,
@@ -102,7 +109,7 @@ class Thumb(QFrame):
             image = QImage()
             if image.loadFromData(record.png, "PNG"):
                 self._image = QPixmap.fromImage(image)
-        self._tile = type_pixmap(ui_kind, theme.THUMB)
+        self._tile = type_pixmap(ui_kind, theme.THUMB, getattr(record, "path", "") or "")
 
     def enterEvent(self, event):  # noqa: N802
         self.thumbHoverEntered.emit()
@@ -154,7 +161,9 @@ class ClipRow(QFrame):
     def __init__(self, record, parent=None):  # noqa: ANN001
         super().__init__(parent)
         self.record = record
-        self.ui_kind = openers.classify_record(record.kind, record.text)
+        self.ui_kind = openers.classify_record(
+            record.kind, record.text, getattr(record, "path", "") or ""
+        )
         self.setObjectName("clipRow")
         self.setFixedHeight(theme.ROW_H)
         self.setCursor(Qt.PointingHandCursor)
@@ -189,7 +198,8 @@ class ClipRow(QFrame):
         text_col.addWidget(self.title)
 
         self.meta = MetaLine()
-        self.meta.set_parts(self._meta_parts(record, self.ui_kind))
+        parts, icons_map = self._meta_parts(record, self.ui_kind)
+        self.meta.set_parts(parts, icons_map)
         text_col.addWidget(self.meta)
 
         # 传输中：行下进度条（2.5px 规格取 2px 整像素）
@@ -233,10 +243,16 @@ class ClipRow(QFrame):
         act_row.setSpacing(3)
         act_row.addWidget(self._act_button("copy", "复制", self.copyRequested))
         if self.ui_kind == "image":
+            # 截图：只有预览（没有文件可打开）
             act_row.addWidget(self._act_button("preview", "用图片预览打开", self.openRequested))
-            act_row.addWidget(self._act_button("finder", "在访达中显示", self.findRequested))
         elif self.ui_kind == "file":
-            act_row.addWidget(self._act_button("finder", "在访达中显示", self.findRequested))
+            if record.png is not None:      # 图片文件：预览 + 打开文件
+                act_row.addWidget(
+                    self._act_button("preview", "用图片预览打开", self.openRequested)
+                )
+            act_row.addWidget(
+                self._act_button("finder", "打开文件（在访达中显示）", self.findRequested)
+            )
         elif self.ui_kind == "link":
             act_row.addWidget(self._act_button("openlink", "打开链接", self.openRequested))
         act_row.addWidget(self._act_button("close", "删除", self.deleteRequested, danger=True))
@@ -308,13 +324,16 @@ class ClipRow(QFrame):
         self._update_progress()
 
     def mousePressEvent(self, event):  # noqa: N802
+        # 单击行 = **直接复制**（用户 2026-10-21：点击就复制，不用再去点复制按钮）。
+        # 预览走「悬停缩略图」或双击，不再占用单击。
         if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.record.id)
+            self.activated.emit(self.record.id)
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event):  # noqa: N802
+        # 双击 = 预览（截图 / 图片文件 / 其它有预览的类型），单击已经复制过了
         if event.button() == Qt.LeftButton:
-            self.activated.emit(self.record.id)
+            self.clicked.emit(self.record.id)
         super().mouseDoubleClickEvent(event)
 
     def contextMenuEvent(self, event):  # noqa: N802
@@ -322,12 +341,18 @@ class ClipRow(QFrame):
         menu.setFont(theme.qfont(12))
         menu.addAction("复制", lambda: self.copyRequested.emit(self.record.id))
         if self.ui_kind == "image":
+            # 截图没有文件可打开
             menu.addAction("用图片预览打开", lambda: self.openRequested.emit(self.record.id))
-            menu.addAction("在访达中显示", lambda: self.findRequested.emit(self.record.id))
         elif self.ui_kind == "link":
             menu.addAction("打开链接", lambda: self.openRequested.emit(self.record.id))
         elif self.ui_kind == "file":
-            menu.addAction("在访达中显示", lambda: self.findRequested.emit(self.record.id))
+            if self.record.png is not None:
+                menu.addAction(
+                    "用图片预览打开", lambda: self.openRequested.emit(self.record.id)
+                )
+            menu.addAction(
+                "打开文件（在访达中显示）", lambda: self.findRequested.emit(self.record.id)
+            )
         menu.addSeparator()
         menu.addAction("删除这一条", lambda: self.deleteRequested.emit(self.record.id))
         menu.exec(event.globalPos())
@@ -341,25 +366,35 @@ class ClipRow(QFrame):
 
     @staticmethod
     def _title(record) -> str:  # noqa: ANN001
+        if getattr(record, "path", ""):
+            return file_name(record)          # 访达复制的文件：标题就是文件名
         if record.kind in ("image", "mixed") and record.png is not None:
+            path = getattr(record, "path", "") or ""
+            if path:
+                return os.path.basename(path)
             return f"图片 {record.width}×{record.height}" if record.width else "图片"
         text = (record.text or "").replace("\n", " ").replace("\t", " ").strip()
         return (text[:160] + ("…" if len(text) > 160 else "")) or "（空）"
 
     @staticmethod
-    def _meta_parts(record, ui_kind: str) -> list[tuple[str, bool]]:  # noqa: ANN001
+    def _meta_parts(record, ui_kind: str):  # noqa: ANN001, ANN201
+        """`Mac · [icon]微信 · 时间 · 大小 · 类型` 的分段（+ 来源应用图标）。"""
         kind_name = {
             "image": "图片", "link": "链接", "code": "代码",
             "text": "纯文本", "file": "文件",
         }.get(ui_kind, ui_kind)
-        parts: list[tuple[str, bool]] = [
-            (meta_line(record, ui_kind).split(" · ")[0], True),
-        ]
-        rest = meta_line(record, ui_kind).split(" · ")[1:]
-        parts.extend((p, False) for p in rest)
-        if not rest or rest[-1] != kind_name:
+        tokens = meta_line(record, ui_kind).split(" · ")
+        parts: list[tuple[str, bool]] = [(tokens[0], True)]
+        app = (getattr(record, "app", "") or "").strip()
+        icons_map: dict[int, object] = {}
+        if app and len(tokens) > 1 and tokens[1] == app:
+            icon = apps.app_icon(getattr(record, "app_id", "") or "", 14)
+            if icon is not None:
+                icons_map[1] = icon
+        parts.extend((tok, False) for tok in tokens[1:])
+        if ui_kind != "file" and (not tokens[1:] or tokens[-1] != kind_name):
             parts.append((kind_name, False))
-        return parts
+        return parts, icons_map
 
 
 # --------------------------------------------------------------------------- #
@@ -398,7 +433,7 @@ class ClearConfirm(QDialog):
         cancel.setCursor(Qt.PointingHandCursor)
         cancel.clicked.connect(self.reject)
         ok = QPushButton("清空")
-        ok.setObjectName("primary")
+        ok.setObjectName("dangerBtn")      # 破坏性操作：红色，不是主色蓝
         ok.setFixedHeight(30)
         ok.setMinimumWidth(72)
         ok.setFont(theme.qfont(12, 650))
@@ -561,7 +596,9 @@ class ClipboardPage(QWidget):
     def _visible_records(self) -> list:
         out = []
         for rec in self._records:
-            ui_kind = openers.classify_record(rec.kind, rec.text)
+            ui_kind = openers.classify_record(
+                rec.kind, rec.text, getattr(rec, "path", "") or ""
+            )
             if not self._match_filter(rec, ui_kind):
                 continue
             if self._query and self._query not in self._row_text(rec, ui_kind):
@@ -580,7 +617,8 @@ class ClipboardPage(QWidget):
 
     @staticmethod
     def _row_text(rec, ui_kind: str) -> str:  # noqa: ANN001
-        return f"{rec.text or ''} {meta_line(rec, ui_kind)}".lower()
+        # 文件能按文件名也能按目录搜到
+        return f"{rec.text or ''} {getattr(rec, 'path', '') or ''} {meta_line(rec, ui_kind)}".lower()
 
     def _rebuild_rows(self) -> None:
         while self.list_lay.count() > 1:
@@ -630,7 +668,9 @@ class ClipboardPage(QWidget):
     def _refresh_chips(self) -> None:
         counts = dict.fromkeys(CHIP_ORDER, 0)
         for rec in self._records:
-            ui_kind = openers.classify_record(rec.kind, rec.text)
+            ui_kind = openers.classify_record(
+                rec.kind, rec.text, getattr(rec, "path", "") or ""
+            )
             counts["all"] += 1
             if rec.state in ("fail", "local"):
                 counts["bad"] += 1
@@ -681,15 +721,12 @@ class ClipboardPage(QWidget):
 
     # ---- 清理历史 ----
     def _clean_history(self) -> None:
-        """清理历史：1 / 7 / 30 天，或清空全部（清空必须二次确认）。"""
-        menu = QMenu(self)
-        menu.setFont(theme.qfont(12))
-        menu.addAction("清理 1 天前的记录", lambda: self._drop_older(1))
-        menu.addAction("清理 7 天前的记录", lambda: self._drop_older(7))
-        menu.addAction("清理 30 天前的记录", lambda: self._drop_older(30))
-        menu.addSeparator()
-        menu.addAction("清空全部…", self._clear_with_confirm)
-        menu.exec(self.btn_clear.mapToGlobal(self.btn_clear.rect().bottomLeft()))
+        """🗑 = 清空列表：先弹确认框，确认后才清（用户 2026-10-21 明确）。
+
+        之前是弹一个 1/7/30 天的小菜单，观感很差，也容易误触。
+        「按时间清理」留在 `_drop_older()` 里，留给以后的设置页入口。
+        """
+        self._clear_with_confirm()
 
     def _drop_older(self, days: int) -> None:
         deadline = time.time() - days * 86400
@@ -703,6 +740,10 @@ class ClipboardPage(QWidget):
         self.toastRequested.emit(
             f"已清理 {dropped} 条历史记录" if dropped else f"{days} 天内没有更早的记录"
         )
+
+    def clear_records_with_confirm(self) -> None:
+        """对外入口（设置页「清理」按钮也走这里）。"""
+        self._clear_with_confirm()
 
     def _clear_with_confirm(self) -> None:
         total = len(self._records)
@@ -723,7 +764,7 @@ class ClipboardPage(QWidget):
         self.toastRequested.emit("已清空本机剪贴板记录")
 
     def _on_row_click(self, record_id: str) -> None:
-        """单击行 = 预览（立即弹，不等 450ms）。"""
+        """双击行 = 预览（立即弹，不等 450ms）。单击已经改成复制了。"""
         row = self._rows.get(record_id)
         if row is None:
             return
@@ -748,9 +789,16 @@ class ClipboardPage(QWidget):
         rec = next((r for r in self._records if r.id == record_id), None)
         if rec is None:
             return
-        kind = openers.classify_record(rec.kind, rec.text)
-        if kind == "image" and rec.png is not None:
-            path = self._opener().open_image_preview(rec.png, f"clip-{rec.id[:8]}.png")
+        kind = openers.classify_record(rec.kind, rec.text, getattr(rec, "path", "") or "")
+        if getattr(rec, "path", "") and kind == "file" and rec.png is not None:
+            # 图片文件：用原图打开（不是拿缩略图再落临时文件）
+            path = self._opener().open_image_path(rec.path)
+            self.toastRequested.emit(f"用图片预览打开：{path}")
+        elif kind == "image" and rec.png is not None:
+            if getattr(rec, "path", ""):
+                path = self._opener().open_image_path(rec.path)
+            else:
+                path = self._opener().open_image_preview(rec.png, f"clip-{rec.id[:8]}.png")
             self.toastRequested.emit(f"用图片预览打开：{path}")
         elif kind == "link":
             self._opener().open_url((rec.text or "").strip())
@@ -764,7 +812,7 @@ class ClipboardPage(QWidget):
         rec = next((r for r in self._records if r.id == record_id), None)
         if rec is None:
             return
-        path = (rec.detail or rec.text or "").strip()
+        path = (getattr(rec, "path", "") or rec.detail or rec.text or "").strip()
         self._opener().reveal_in_finder(path)
         self.toastRequested.emit(f"在访达中显示：{path}")
 

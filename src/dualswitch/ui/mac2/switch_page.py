@@ -110,7 +110,7 @@ class DeviceCard(QFrame):
         self._active = False
         self.setObjectName("devDead")
         self.name.setObjectName("devNameDim")
-        self.logo.setPixmap(plate_pixmap(SYSTEM_OF[self.host], 32, dim=0.30))
+        self.logo.setPixmap(plate_pixmap(SYSTEM_OF[self.host], 32, dim=0.6))
         self.led.setVisible(True)
         self.led.set_active(False)
         self.tag.setText(hint)
@@ -186,7 +186,7 @@ class HeroCard(QFrame):
         self.arrow.setPixmap(icons.svg_pixmap("arrow-left-right", 15, "#FFFFFF", 2.2))
         self.btn_text = label("切换到 Mac")
         self.btn_text.setFont(theme.qfont(13.5, 650))
-        self.btn_text.setStyleSheet("color:#FFFFFF;background:transparent;")
+        self._set_btn_text_color("#FFFFFF")
         self.keys = KeyCaps(["⌥", "Space"], on_accent=True)
         btn_lay.addWidget(self.arrow)
         btn_lay.addWidget(self.btn_text)
@@ -238,6 +238,10 @@ class HeroCard(QFrame):
         p.fillRect(self.rect(), grad)
         p.end()
 
+    def _set_btn_text_color(self, color: str) -> None:
+        """主按钮文案颜色得手动跟：QLabel 不吃 QPushButton 的 :disabled 颜色。"""
+        self.btn_text.setStyleSheet(f"color:{color};background:transparent;")
+
     # ------------------------------------------------------------------ 状态
     def set_state(self, host: str, monitor_line: str) -> None:
         if host == SOURCE_UNKNOWN:
@@ -252,6 +256,7 @@ class HeroCard(QFrame):
         other = "Mac" if host == "windows" else "Windows"
         self._other_title = other
         self.btn_text.setText(f"切换到 {other}")
+        self._set_btn_text_color("#FFFFFF")
         self.button.setEnabled(not self._busy)
         self.force_btn.setEnabled(not self._busy)
         self.pill.setText("运行中")
@@ -281,8 +286,9 @@ class HeroCard(QFrame):
         t = theme.tokens()
         self.plate.setVisible(True)
         self.plate.setPixmap(
-            icons.plain_plate_pixmap("monitor", 62, t.idle_bg, t.ink3)
+            icons.plain_plate_pixmap("monitor", 62, t.card3, t.ink3, border=t.line)
         )
+        self.arrow.setPixmap(icons.svg_pixmap("arrow-left-right", 15, t.ink3, 2.2))
         self.name.setText("未检测到外接显示器")
         self.pill.setText("待确认")
         self.pill.setObjectName("pillWarn")
@@ -299,11 +305,16 @@ class HeroCard(QFrame):
             self.button.setEnabled(False)
             self.set_note("插入显示器后 2–4 秒内自动恢复", ok=False)
         self.force_btn.setEnabled(False)
+        self._set_btn_text_color(t.ink2)     # 禁用态别再用白色字（看不清）
         self.keys.setVisible(False)      # 这时候按热键也切不动，别给键帽暗示
 
     def set_hotkey(self, hotkey_label: str) -> None:
         self.keys.set_keys(theme.keycap_labels(hotkey_label))
         self.keys.setToolTip(hotkey_label)
+        # KeyCaps.set_keys() 结尾会 setVisible(True)：unknown / busy 态要再压回去，
+        # 否则禁用按钮上会浮着一排按不动的键帽。
+        if self._unknown or self._busy:
+            self.keys.setVisible(False)
 
     def set_busy(self, busy: bool, target_label: str = "") -> None:
         self._busy = bool(busy)
@@ -311,6 +322,7 @@ class HeroCard(QFrame):
         self.force_btn.setEnabled(not busy and not self._unknown)
         if busy:
             self.btn_text.setText("切换中…")
+            self._set_btn_text_color("#FFFFFF")
             self.arrow.setPixmap(icons.svg_pixmap("arrow-left-right", 15, "#FFFFFF", 2.2))
             self.keys.setVisible(False)
         else:
