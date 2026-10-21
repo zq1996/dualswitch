@@ -153,13 +153,6 @@ body{
   position:absolute;left:0;right:0;text-align:center;font-size:12.5px;font-weight:650;
   color:var(--ink-2);pointer-events:none;
 }
-.win-tool{margin-left:auto;display:flex;gap:4px;z-index:1}
-.tool-btn{
-  width:28px;height:28px;border:0;border-radius:7px;background:transparent;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;color:var(--ink-3);transition:.14s;
-}
-.tool-btn:hover{background:var(--card-3);color:var(--ink)}
-.tool-btn.on{background:var(--accent-soft);color:var(--accent-deep)}
 
 .win-body{flex:1;display:flex;min-height:0}
 
@@ -355,8 +348,8 @@ body{
 }
 .thumb>img{width:100%;height:100%;object-fit:cover;border-radius:10px;display:block}
 .thumb .app-badge{
-  position:absolute;right:-4px;bottom:-4px;width:19px;height:19px;
-  border-radius:5.5px;border:1.8px solid var(--card);overflow:hidden;
+  position:absolute;right:-4px;bottom:-4px;width:22px;height:22px;
+  border-radius:6px;border:2px solid var(--card);overflow:hidden;
   display:flex;align-items:center;justify-content:center;
   box-shadow:0 1px 3px rgba(16,24,40,.18);
 }
@@ -440,8 +433,10 @@ body{
 }
 .preview-head .pt{font-size:11.5px;font-weight:650;flex:1;min-width:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.005em}
-/* 正文：尺寸随内容（Frset: MainPanelPreviewMeasuredSize），分类给上限 */
-.preview-body{padding:14px;overflow:auto}
+/* 正文：尺寸随内容（Frset: MainPanelPreviewMeasuredSize），分类给上限
+   2026-10-21：文本**不截断** —— 内容多长气泡就多高；到屏幕高度为止后正文内部滚动
+   （对应实现里的 QScrollArea + 屏幕可用高−120） */
+.preview-body{padding:14px;max-height:calc(100vh - 200px);overflow-y:auto;overflow-x:hidden}
 .preview-body img{
   display:block;border-radius:9px;
   box-shadow:0 0 0 .5px rgba(16,24,40,.08);
@@ -451,18 +446,34 @@ body{
 .preview-body .txt{
   font-size:11.5px;line-height:1.8;color:var(--ink-2);white-space:pre-wrap;
   word-break:break-word;letter-spacing:.005em;
-  max-width:392px;max-height:270px;overflow:auto;
+  max-width:392px;
 }
 .preview-body .txt.mono{
   font-family:var(--mono);font-size:10.5px;line-height:1.75;color:var(--ink);
   background:var(--card-2);border:1px solid var(--line-soft);border-radius:9px;
   padding:11px 12px;
-  /* codePreviewMaxWidth≈420 / MaxHeight≈300 */
-  max-width:400px;max-height:290px;overflow:auto;
+  /* codePreviewMaxWidth≈420；高度同样不限制，超屏时由 .preview-body 滚动 */
+  max-width:400px;
 }
 .preview-body .filecard{
-  display:flex;align-items:center;gap:12px;padding:13px;border-radius:11px;
-  background:var(--card-2);border:1px solid var(--line-soft);max-width:380px;
+  display:flex;flex-direction:column;align-items:center;gap:0;padding:20px 16px 18px;
+  border-radius:12px;background:var(--card-2);border:1px solid var(--line-soft);
+  width:340px;
+}
+.preview-body .filecard .fc-ico{
+  display:flex;flex-direction:column;align-items:center;color:var(--ink-2);margin-bottom:9px;
+}
+.preview-body .filecard .fc-ext{
+  font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.4px;
+  color:var(--ink-2);margin-top:-1px;
+}
+.preview-body .filecard .fc-name{
+  font-size:12px;font-weight:650;color:var(--ink);text-align:center;line-height:1.35;
+  max-width:308px;word-break:break-word;
+}
+.preview-body .filecard .fc-dir{
+  font-size:10px;color:var(--ink-3);margin-top:3px;text-align:center;
+  max-width:308px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .preview-body .lnk{
   display:flex;align-items:center;gap:8px;padding:11px 12px;border-radius:9px;
@@ -484,6 +495,7 @@ body{
 .pbtn.pri:hover{background:var(--accent-deep)}
 .pbtn.sec{background:var(--card-3);color:var(--ink-2)}
 .pbtn.sec:hover{background:var(--line)}
+.pbtn.ico{width:26px;height:26px;padding:0;justify-content:center}
 
 /* 空态 */
 .empty{text-align:center;padding:52px 20px 46px;display:none}
@@ -514,6 +526,18 @@ body{
 }
 .toggle.on{background:var(--ok)}
 .toggle.on::after{left:18px}
+.storage-ctl{display:flex;align-items:center;gap:8px}
+.num-input{
+  width:62px;height:28px;text-align:right;padding:0 8px;border-radius:8px;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);
+  font-family:var(--mono);font-size:11.5px;outline:none;
+}
+.num-input:focus{border-color:var(--accent)}
+.clean-btn{
+  height:28px;padding:0 12px;border-radius:8px;border:1px solid var(--line);
+  background:var(--card);color:var(--ink-2);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;
+}
+.clean-btn:hover{border-color:var(--danger);color:var(--danger)}
 .seg-mini{display:inline-flex;background:var(--card-3);border:1px solid var(--line);border-radius:8px;padding:2px}
 .seg-mini button{
   border:0;background:transparent;font:inherit;font-size:10.5px;color:var(--ink-2);
@@ -564,6 +588,11 @@ body{
     <div>
       <h1>屏幕切换 · v2 大刀阔斧版</h1>
       <p>破掉 v1 的卡片堆叠框架：宽窗口 + 侧栏导航。剪贴板页整体移植 Frset 交互（来源系统角标 · 悬浮预览 · 按类型分派打开），<br>菜单栏弹出菜单只保留核心项。核心三功能：切换 / 剪贴板 / 设置。</p>
+      <p style="margin-top:6px;color:var(--ink-3);font-size:11px">
+        2026-10-21 已与实现同步（代码 <code>src/dualswitch/ui/mac2/</code>，规格 <code>INTERACTIONS-v2.md §10/§11</code>）：
+        单击行=复制、双击=预览；文本预览完整显示（超屏滚动，不截断）；
+        文件分「截图 / 图片文件 / 普通文件」三类，按钮组合按类型分派；菜单栏单击弹菜单、双击开主界面。
+      </p>
     </div>
     <div class="badges">
       <span class="badge">侧栏导航</span>
@@ -571,6 +600,7 @@ body{
       <span class="badge">菜单栏弹出菜单</span>
       <span class="badge">悬浮预览窗</span>
       <span class="badge gray">假数据原型</span>
+      <span class="badge">与实现同步</span>
     </div>
   </div>
 
@@ -608,7 +638,7 @@ body{
       </div>
     </div>
     <div class="grp" style="margin-left:auto">
-      <span class="lbl">外观</span>
+      <span class="lbl">原型预览</span>
       <div class="seg" id="segTheme">
         <button data-theme="light" class="on">浅色</button>
         <button data-theme="dark">深色</button>
@@ -619,7 +649,7 @@ body{
   <!-- ══════════ 菜单栏弹出菜单 ══════════ -->
   <div class="menubar-demo">
     <h2>菜单栏弹出菜单</h2>
-    <p class="desc">点菜单栏的「屏幕切换」图标（或上方控制条切「弹出菜单」）→ 弹出菜单。单击图标弹菜单是 macOS 惯例，左右键一致。</p>
+    <p class="desc">点菜单栏的「屏幕切换」图标 → 弹出菜单：<b>单击弹菜单、双击打开主界面</b>（单击延迟 240ms 避开双击）。状态行前面那盏灯表示画面在哪台机器，菜单行不放图标。</p>
 
     <div class="mac-menubar">
       <svg class="apple" viewBox="0 0 14 17" fill="currentColor"><path d="M11.2 9c0-1.8 1.5-2.7 1.6-2.8-.9-1.3-2.2-1.4-2.7-1.5-1.1-.1-2.2.7-2.8.7-.6 0-1.4-.7-2.4-.6-1.2 0-2.3.7-2.9 1.8-1.3 2.1-.3 5.4.9 7.1.6.9 1.3 1.8 2.3 1.8.9 0 1.3-.6 2.4-.6s1.4.6 2.4.6c1 0 1.6-.9 2.2-1.7.5-.7.7-1.4.7-1.4s-1.7-.7-1.7-2.8zM9.5 3.7c.5-.6.8-1.5.7-2.4-.8 0-1.7.5-2.2 1.2-.5.6-.9 1.5-.8 2.3.9.1 1.8-.5 2.3-1.1z"/></svg>
@@ -689,14 +719,6 @@ body{
         <div class="win-bar">
           <div class="lights"><i></i><i></i><i></i></div>
           <div class="win-title">屏幕切换</div>
-          <div class="win-tool">
-            <button class="tool-btn" id="toolClip" title="剪贴板">
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2.5" width="10" height="11" rx="2"/><path d="M5.8 2.5V2a1.2 1.2 0 011.2-1.2h2A1.2 1.2 0 0110.2 2v.5"/></svg>
-            </button>
-            <button class="tool-btn" id="toolSet" title="设置">
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1"/></svg>
-            </button>
-          </div>
         </div>
 
         <div class="win-body">
@@ -858,16 +880,17 @@ body{
                     <button class="toggle on" data-toggle></button>
                   </div>
                   <div class="set-row">
-                    <div class="set-tx"><div class="set-t">悬浮预览</div><div class="set-s">鼠标悬浮在条目上时展开预览窗</div></div>
+                    <div class="set-tx"><div class="set-t">悬浮预览</div><div class="set-s">鼠标悬浮在缩略图上时展开预览窗</div></div>
                     <button class="toggle on" data-toggle></button>
                   </div>
                   <div class="set-row">
-                    <div class="set-tx"><div class="set-t">保留历史</div><div class="set-s">超期条目自动清理</div></div>
-                    <div class="seg-mini" data-seg><button>7 天</button><button class="on">30 天</button><button>不限</button></div>
-                  </div>
-                  <div class="set-row">
-                    <div class="set-tx"><div class="set-t">存储上限</div><div class="set-s">当前 12.4 MB / 200 MB</div></div>
-                    <div class="set-val">200 MB</div>
+                    <div class="set-tx"><div class="set-t">存储上限</div><div class="set-s">超过上限自动丢弃最旧的记录</div></div>
+                    <div class="storage-ctl">
+                      <span class="set-val">已用 12.4 MB</span>
+                      <input class="num-input" value="200" aria-label="存储上限">
+                      <span class="set-val">MB</span>
+                      <button class="clean-btn">清理</button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -918,7 +941,7 @@ body{
           <li><b>窄窗口卡片堆叠 → 宽窗口 + 侧栏导航</b>（macOS System Settings / Frset 设置页范式）</li>
           <li>780×580，三个核心功能各占一页，侧栏带计数与运行状态</li>
           <li>切换页 hero 化：大 logo + 大标题 + 主按钮组</li>
-          <li>标题栏加剪贴板/设置快捷图标</li>
+          <li>标题栏只留系统按钮（红绿灯 + 居中标题），页内不放自绘工具钮</li>
         </ul>
       </div>
 
@@ -926,12 +949,13 @@ body{
         <h3><span class="ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M2.5 6h11"/></svg></span>剪贴板 = Frset 交互全量</h3>
         <ul>
           <li><b>缩略图右下角来源系统角标</b>——从 Mac 复制的显 Mac 角标，Windows 复制的显 Windows 角标</li>
-          <li><b>悬浮预览窗</b>：图片放大、文字/代码全文、文件卡片带路径</li>
-          <li><b>打开方式按类型分派</b>：图片→系统图片预览；文件→访达；文字→复制；链接→打开链接</li>
-          <li>行内 hover 动作：复制 / 预览（图）/ 访达（文件）/ 删除</li>
+          <li><b>悬浮预览窗</b>：图片放大；<b>文字/代码全文显示</b>（超屏内部滚动，不截断）；文件是文件卡（图标+文件名+目录）</li>
+          <li><b>三类分开</b>：截图（内存图片）／图片文件（访达复制，缩略图=图片内容）／普通文件（缩略图=文件瓷砖）</li>
+          <li><b>按钮按类型分派</b>：截图=预览；图片文件=预览+打开文件；普通文件=打开文件；链接=打开链接；都有复制与删除</li>
+          <li><b>单击行 = 直接复制</b>（双击才预览）；重复复制同一条不加行，只把它提到最前</li>
           <li>类型筛选 chips（文字/图片/文件/链接/异常）+ 搜索 + 暂停记录 + 清理历史</li>
           <li>双态空态文案分开（空列表 vs 筛选无结果）</li>
-          <li>元信息行：来源 · 时间 · 大小 · 类型</li>
+          <li>元信息行：<code>来源 · 应用 · 时间 · 大小[·尺寸] · 类型</code>；文件行给的是 <code>来源 · 应用 · 时间 · 目录</code></li>
         </ul>
         <div class="divider"></div>
         <p style="font-size:10.5px;color:var(--ink-3)">同步四态（已同步/传输中/仅本机/失败）保留在右上角药丸 —— 这是 dualswitch 特有，Frset 没有。</p>
@@ -942,8 +966,8 @@ body{
         <ul>
           <li>上方<b>菜单栏弹出菜单</b>：点图标或控制条「弹出菜单」</li>
           <li>侧栏切三页；控制条切画面归属/剪贴板数据/明暗</li>
-          <li>剪贴板<b>鼠标悬浮条目</b> → 预览窗（核心新交互）</li>
-          <li>悬浮后行内出现<b>复制/预览/访达/删除</b>按钮（按类型分派）</li>
+          <li>剪贴板<b>鼠标悬浮缩略图</b> → 预览窗（核心新交互）；<b>单击行 = 复制</b>，双击 = 预览</li>
+          <li>悬浮后行内出现<b>复制 / 预览 / 打开文件 / 删除</b>（按类型出现）</li>
           <li>失败/仅本机药丸点击重试 → 变绿</li>
           <li>切换按钮三段动画；设置开关可点</li>
         </ul>
@@ -970,17 +994,15 @@ body{
     <div class="preview-body" id="pvBody"></div>
     <div class="preview-foot">
     <span class="meta" id="pvMeta"></span>
-    <button class="pbtn sec" id="pvPreview" style="display:none">
-      <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="11" height="9" rx="1.8"/><circle cx="4.8" cy="5.8" r="1"/><path d="M2.5 9.5l2.8-2.6 2 1.8 1.6-1.3 2.6 2.3"/></svg>
-      预览
+    <!-- 全图标按钮（用户要求：剪贴板页不留文字按钮） -->
+    <button class="pbtn sec ico" id="pvPreview" title="用图片预览打开" style="display:none">
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="11" height="9" rx="1.8"/><circle cx="4.8" cy="5.8" r="1"/><path d="M2.5 9.5l2.8-2.6 2 1.8 1.6-1.3 2.6 2.3"/></svg>
     </button>
-    <button class="pbtn sec" id="pvFinder">
-      <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5h10v7H2z"/><path d="M2 4.5l1.5-2.5h7L12 4.5"/></svg>
-      访达
+    <button class="pbtn sec ico" id="pvFinder" title="在访达中显示">
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5h10v7H2z"/><path d="M2 4.5l1.5-2.5h7L12 4.5"/></svg>
     </button>
-    <button class="pbtn pri" id="pvCopy">
-      <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M10 4V2.5A1.5 1.5 0 008.5 1H2.5A1.5 1.5 0 001 2.5v6A1.5 1.5 0 002.5 10H4"/></svg>
-      复制
+    <button class="pbtn pri ico" id="pvCopy" title="复制">
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M10 4V2.5A1.5 1.5 0 008.5 1H2.5A1.5 1.5 0 001 2.5v6A1.5 1.5 0 002.5 10H4"/></svg>
     </button>
     </div>
   </div>
@@ -1044,15 +1066,11 @@ const ICONS = {
     $("#"+({switch:"pageSwitch",clip:"pageClip",set:"pageSet"}[p])).classList.add("on");
     $$(".nav").forEach(n=>n.classList.toggle("on", n.dataset.page===p));
     $$("#segPage button").forEach(b=>b.classList.toggle("on", b.dataset.page===p));
-    $("#toolClip").classList.toggle("on", p==="clip");
-    $("#toolSet").classList.toggle("on", p==="set");
     $(".content").scrollTop=0;
     hidePreview();
   }
   $$(".nav").forEach(n=> n.addEventListener("click", ()=> showPage(n.dataset.page)));
   bindSeg("#segPage", b=> showPage(b.dataset.page));
-  $("#toolClip").addEventListener("click", ()=> showPage("clip"));
-  $("#toolSet").addEventListener("click",  ()=> showPage("set"));
   $$("[data-go]").forEach(r=> r.addEventListener("click", ()=> showPage(r.dataset.go)));
 
   /* ── 平台 SVG ── */
@@ -1069,7 +1087,8 @@ const ICONS = {
 
   /* ── 剪贴板假数据 ── */
   const clips = [
-    { id:1, type:"image", title:"屏幕快照 2026-10-21 09.42.17",
+    { id:1, type:"image", title:"图片 2560×1440",   // 截图：标题按实现写尺寸
+
       thumb:"data:image/svg+xml;utf8,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="92" height="92"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="%2383A8FF"/><stop offset="1" stop-color="%234E87FF"/></linearGradient></defs><rect width="92" height="92" fill="url(%23g)"/><circle cx="31" cy="30" r="10" fill="rgba(255,255,255,.78)"/><path d="M13 70l22-24 15 16 10-9 19 17z" fill="rgba(255,255,255,.55)"/></svg>'),
       app:"screenshot", appName:"截图", src:"Mac", time:"刚刚", size:"1.8 MB", dim:"2560×1440", kind:"图片", state:"ok" },
 
@@ -1082,16 +1101,34 @@ const ICONS = {
     { id:4, type:"text", mono:true, title:"git rebase -i HEAD~3 && git push --force-with-lease origin main",
       app:"terminal", appName:"终端", src:"Windows", time:"25 分钟前", size:"64 B", kind:"纯文本", state:"run", prog:58 },
 
-    { id:5, type:"file", title:"需求评审纪要 v3.docx",
-      file:{icon:"word"}, app:"finder", appName:"访达", src:"Mac", time:"1 小时前", size:"248 KB", kind:"文件", state:"idle",
-      path:"~/Documents/需求评审纪要 v3.docx" },
+    // 访达复制的「普通文件」：缩略图是文件瓷砖，标题是文件名，元信息给目录
+    { id:5, type:"file", title:"ChatGPTInstaller.dmg", ext:"DMG",
+      app:"finder", appName:"访达", src:"Mac", time:"6 秒前", size:"849 KB", state:"idle",
+      dir:"~/Downloads" },
 
-    { id:6, type:"image", title:"设计稿 · 剪贴板行布局.png",
+    // 访达复制的「图片文件」：缩略图是图片内容，但它是文件卡（标题=文件名、元信息=目录）
+    { id:6, type:"file", imgFile:true, title:"同景不同高度：湖畔 pagoda 拼贴画.png", ext:"PNG",
       thumb:"data:image/svg+xml;utf8,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="92" height="92"><rect width="92" height="92" fill="%23F0E6D2"/><rect x="14" y="14" width="64" height="44" rx="5" fill="%23fff"/><rect x="22" y="24" width="32" height="5" rx="2" fill="%23C8B99A"/><rect x="22" y="35" width="46" height="5" rx="2" fill="%23D8CBB0"/><rect x="14" y="64" width="28" height="11" rx="4" fill="%234E87FF"/><rect x="48" y="64" width="30" height="11" rx="4" fill="%23C8B99A"/></svg>'),
-      app:"vscode", appName:"VS Code", src:"Windows", time:"2 小时前", size:"86 KB", dim:"1920×1080", kind:"图片", state:"bad" },
+      app:"finder", appName:"访达", src:"Mac", time:"3 分钟前", size:"3 MB", state:"idle",
+      dir:"~/Downloads/照片" },
 
     { id:7, type:"text", mono:true, title:'{ "hotkey": "alt+space", "backend": "auto", "sync_clipboard": true }',
-      app:"vscode", appName:"VS Code", src:"Mac", time:"昨天", size:"62 B", kind:"纯文本", state:"idle" }
+      app:"vscode", appName:"VS Code", src:"Mac", time:"昨天", size:"62 B", kind:"纯文本", state:"idle" },
+
+    // 长文本样本：预览要**完整显示**（气泡跟着长高，超屏才内部滚动，不截断）
+    { id:8, type:"text", time:"2 天前", size:"1.3 KB", kind:"纯文本", state:"idle",
+      app:"notes", appName:"备忘录", src:"Mac",
+      title: (
+        "验证：全量测试全绿；界面测试补了文件分类、标题、目录、按钮组合、文件卡、扩展名字形、" +
+        "引擎不发文件、单击复制。文档同步了 INTERACTIONS-v2.md、UI-MAC2-IMPLEMENTATION.md 与契约第 11 节，" +
+        "原型 index-v2.html 也按新规则改了。\n\n" +
+        "这一段故意写长，用来确认预览窗会把文字完整显示出来：气泡跟着长高，长到超过屏幕才内部滚动，" +
+        "一个字都不裁，也没有「当前已显示 N 个字符」那种注脚。\n\n" +
+        "只有超过两万字的极端文本才会限制渲染量，并在正文末尾写明「只渲染了前 20000 字」——" +
+        "那是为了保护排版性能，不是视觉裁切；复制永远是全文。\n\n" +
+        "重复写几遍把高度撑起来：预览是看内容，不是摘要。"
+      )
+    }
   ];
   const stateMeta = {
     ok:  {cls:"ok",   tx:"已同步"},
@@ -1105,7 +1142,16 @@ const ICONS = {
   function thumbInner(c){
     if(c.thumb) return `<img src="${c.thumb}" alt="">`;
     if(c.type==="file"){
-      return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 3h8l4 4v14H6z" fill="var(--card-3)" stroke="var(--line)"/><path d="M14 3v4h4" stroke="var(--line)"/><path d="M9 12h6M9 15.5h4" stroke="var(--ink-3)" stroke-width="1.3" stroke-linecap="round"/></svg>`;
+      // 文件瓷砖：浅灰底 + 按扩展名分派的文档字形（对应 icons.file_glyph）
+      const ext = (c.ext||"").toLowerCase();
+      const imgExt = ["png","jpg","jpeg","heic","gif","webp","tif","bmp","svg"];
+      const arcExt = ["zip","rar","7z","tar","gz","dmg","pkg","iso","jar"];
+      const glyph = imgExt.includes(ext)
+        ? `<path d="M6 3h8l4 4v14H6z"/><circle cx="10" cy="13" r="2"/><path d="M20 20l-5-5"/>`
+        : arcExt.includes(ext)
+          ? `<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>`
+          : `<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 15.5h4"/>`;
+      return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--ink-3)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${glyph}</svg>`;
     }
     if(c.type==="link"){
       return `<img src="${ICONS.typeUrl}" width="30" height="30" alt="">`;
@@ -1136,9 +1182,10 @@ const ICONS = {
           <div class="clip-m">
             <span class="src">${c.src}</span><span class="dot"></span>
             <span>${esc(c.appName)}</span><span class="dot"></span>
-            <span>${c.time}</span><span class="dot"></span>
-            <span>${c.size}${c.dim?" · "+c.dim:""}</span><span class="dot"></span>
-            <span>${c.kind}</span>
+            <span>${c.time}</span>
+            ${c.type==="file"
+              ? `<span class="dot"></span><span>${esc(c.dir||"")}</span>`
+              : `<span class="dot"></span><span>${c.size}${c.dim?" · "+c.dim:""}</span><span class="dot"></span><span>${c.kind}</span>`}
           </div>
           ${c.state==="run"?`<div class="clip-prog"><i style="width:${c.prog}%"></i></div>`:""}
         </div>
@@ -1146,7 +1193,8 @@ const ICONS = {
           <div class="stat ${m.cls}" data-id="${c.id}">${m.tx}${c.state==="run"?" "+c.prog+"%":""}</div>
           <div class="clip-acts">
             <button class="act" data-a="copy" title="复制"><svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M10 4V2.5A1.5 1.5 0 008.5 1H2.5A1.5 1.5 0 001 2.5v6A1.5 1.5 0 002.5 10H4"/></svg></button>
-            ${c.type==="file"?`<button class="act" data-a="finder" title="在访达中显示"><svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5h10v7H2z"/><path d="M2 4.5l1.5-2.5h7L12 4.5"/></svg></button>`:""}
+            ${c.type==="file" && c.imgFile?`<button class="act" data-a="preview-open" title="用图片预览打开"><svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="11" height="9" rx="1.8"/><circle cx="4.8" cy="5.8" r="1"/><path d="M2.5 9.5l2.8-2.6 2 1.8 1.6-1.3 2.6 2.3"/></svg></button>`:""}
+            ${c.type==="file"?`<button class="act" data-a="finder" title="打开文件（在访达中显示）"><svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5h10v7H2z"/><path d="M2 4.5l1.5-2.5h7L12 4.5"/></svg></button>`:""}
             ${c.type==="image"?`<button class="act" data-a="preview-open" title="用图片预览打开"><svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="11" height="9" rx="1.8"/><circle cx="4.8" cy="5.8" r="1"/><path d="M2.5 9.5l2.8-2.6 2 1.8 1.6-1.3 2.6 2.3"/></svg></button>`:""}
             ${c.type==="link"?`<button class="act" data-a="open" title="打开链接"><svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 2H2.5v9.5H12V8"/><path d="M8 2h4v4M12 2L6.5 7.5"/></svg></button>`:""}
             <button class="act del" data-a="del" title="删除"><svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button>
@@ -1165,7 +1213,8 @@ const ICONS = {
   function showPreview(c, anchor){
     pvCur=c;
     const m=stateMeta[c.state];
-    $("#pvTitle").textContent = c.title;
+    // 文件卡：标题写「文件」，文件名放卡片里（避免头部正文重复）
+    $("#pvTitle").textContent = (c.type === "file") ? "文件" : c.title;
     $("#pvStat").innerHTML = `<span class="stat ${m.cls}" style="cursor:default">${m.tx}</span>`;
     const pvIcons = {
       image:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="M4 17l5-5 4 4 2.5-2 4.5 4"/></svg>',
@@ -1179,12 +1228,16 @@ const ICONS = {
       body = `<img src="${c.thumb}">` +
              (c.dim ? `<div style="margin-top:9px;font-size:9.5px;color:var(--ink-3)">${c.dim} · ${c.size}</div>` : "");
     } else if(c.type==="file"){
+      // 文件卡：图标（文档 + 扩展名）→ 文件名 → 所在目录，全部居中（照 Frset）
       body = `<div class="filecard">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none"><path d="M6 3h8l4 4v14H6z" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.2"/><path d="M14 3v4h4" stroke="var(--accent)" stroke-width="1.2"/><path d="M9 12h6M9 15.5h4" stroke="var(--accent)" stroke-width="1.3" stroke-linecap="round"/></svg>
-        <div style="min-width:0">
-          <div style="font-size:11.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.title)}</div>
-          <div style="font-size:10px;color:var(--ink-3);margin-top:3px;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.path||"")}</div>
+        <div class="fc-ico">
+          ${c.imgFile
+            ? `<svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V7z"/><path d="M14 2v5h5"/><circle cx="10" cy="13" r="2"/><path d="M20 20l-5-5"/></svg>`
+            : `<svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V7z"/><path d="M14 2v5h5"/></svg>`}
+          <span class="fc-ext">${esc(c.ext||"")}</span>
         </div>
+        <div class="fc-name">${esc(c.title)}</div>
+        <div class="fc-dir">${esc(c.dir||"")}</div>
       </div>`;
     } else if(c.type==="link"){
       body = `<div class="lnk">
@@ -1192,13 +1245,22 @@ const ICONS = {
         ${esc(c.title)}
       </div>`;
     } else {
-      body = `<div class="txt${c.mono?" mono":""}">${esc(c.title)}</div>` +
-             (c.title.length>60 ? `<div style="margin-top:9px;font-size:9.5px;color:var(--ink-3)">当前已显示 60 / ${c.title.length} 个字符</div>` : "");
+      // 文本：完整显示（不截断）；只有超过 2 万字才限制渲染量并写明
+      const CAP = 20000;
+      const shown = c.title.slice(0, CAP);
+      body = `<div class="txt${c.mono?" mono":""}">${esc(shown)}</div>` +
+             (c.title.length > CAP
+               ? `<div style="margin-top:9px;font-size:9.5px;color:var(--ink-3)">文本很长，只渲染了前 ${CAP} 字（共 ${c.title.length} 字）；复制仍是全文</div>`
+               : "");
     }
     $("#pvBody").innerHTML=body;
-    $("#pvMeta").innerHTML = `<b>${c.src}</b> · ${esc(c.appName)} · ${c.time} · ${c.size}`;
+    // 按钮规则：截图→只有预览；图片文件→预览+打开文件；普通文件→只有打开文件
     $("#pvFinder").style.display = (c.type==="file") ? "" : "none";
-    $("#pvPreview").style.display = (c.type==="image") ? "" : "none";
+    $("#pvPreview").style.display =
+      (c.type==="image" || (c.type==="file" && c.imgFile)) ? "" : "none";
+    $("#pvMeta").innerHTML = (c.type==="file")
+      ? `${c.size} · ${c.time}`
+      : `<b>${c.src}</b> · ${esc(c.appName)} · ${c.time} · ${c.size}`;
 
     pv.classList.add("on");
     const r=anchor.getBoundingClientRect();
@@ -1266,7 +1328,7 @@ const ICONS = {
       const c = clips.find(x=>x.id===+row.dataset.id); if(!c) return;
       const a = btn.dataset.a;
       if(a==="copy"){ c.state==="ok" ? toast("已复制") : toast("已重新同步"); if(c.state!=="ok"&&c.state!=="run"){c.state="ok";renderClips();} }
-      if(a==="finder"){ toast("在访达中显示：" + (c.path||c.title)); }
+      if(a==="finder"){ toast("打开文件（在访达中显示）：" + [(c.dir||""), c.title].filter(Boolean).join("/")); }
       if(a==="preview-open"){ toast("用图片预览打开（Preview.app）"); }
       if(a==="open"){ toast("打开链接"); }
       if(a==="del"){ toast("已删除 1 条"); hidePreview(); }
@@ -1284,18 +1346,22 @@ const ICONS = {
       },240);
       return;
     }
-    // Frset 证据："Single-click to preview"（单击或按空格预览）
-    if(row){ showPreview(clips.find(x=>x.id===+row.dataset.id), row.querySelector(".thumb")); }
+    // 单击行 = 直接复制（用户 2026-10-21：不用再去点复制按钮）
+    // 同一条内容不会堆两行：按内容去重，重复复制只把原条目提到最前 + 刷新时间
+    if(row){
+      const idx = clips.findIndex(x=>x.id===+row.dataset.id); if(idx<0) return;
+      const c = clips[idx];
+      if(c.state==="bad"||c.state==="idle"){ toast("已重新同步"); c.state="ok"; }
+      else toast("已复制");
+      c.time = "刚刚";
+      clips.splice(idx,1); clips.unshift(c);
+      renderClips(); hidePreview();
+    }
   });
-  // Frset 证据："Double-click to copy"（双击或按 ↩ 复制）
+  // 双击行 = 预览（单击已经复制过了）
   $("#clipList").addEventListener("dblclick", e=>{
     const row = e.target.closest(".clip"); if(!row || e.target.closest(".act") || e.target.closest(".stat")) return;
-    const c = clips.find(x=>x.id===+row.dataset.id); if(!c) return;
-    if(c.state==="bad"||c.state==="idle"){ c.state="run"; c.prog=25; renderClips();
-      const t=setInterval(()=>{ c.prog+=25;
-        if(c.prog>=100){ clearInterval(t); c.state="ok"; delete c.prog; renderClips(); toast("已复制"); }
-        else renderClips(); },240);
-    } else toast("已复制");
+    showPreview(clips.find(x=>x.id===+row.dataset.id), row.querySelector(".thumb"));
   });
   // Frset 证据："Right-click for more actions"（右键查看更多操作）
   $("#clipList").addEventListener("contextmenu", e=>{
@@ -1327,7 +1393,15 @@ const ICONS = {
     this.classList.toggle("on");
     toast(this.classList.contains("on") ? "已暂停记录剪贴板" : "已恢复记录剪贴板");
   });
-  $("#btnClear").addEventListener("click", ()=> toast("清理 30 天前的历史记录…"));
+  $("#btnClear").addEventListener("click", ()=>{
+    // 设计：点 🗑 先给确认，确认后清空列表（不再弹 1/7/30 天二级菜单）
+    if(!window.confirm("清空本机全部 " + clips.length + " 条记录？\n只清空本机列表，不影响另一台机器；不可撤销。")) return;
+    clips.length = 0;
+    filter = "all";
+    renderClips(); hidePreview();
+    $("#navCnt").textContent = "0"; $("#rowClipCnt").textContent = "0 条";
+    toast("已清空本机剪贴板记录");
+  });
   renderClips();
 
   /* ── 画面归属三态 ── */

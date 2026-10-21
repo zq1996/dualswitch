@@ -1,4 +1,9 @@
-# 剪贴板页 · 界面设计
+# 剪贴板页 · 界面设计（v1 · 已被 v2 取代）
+
+> ⚠️ **2026-10-21：本文件描述的是 v1（440 宽卡片堆叠）的剪贴板页，已不再是现状。**
+> 现行设计以 `design/redesign/INTERACTIONS-v2.md`（§10 修订 + §11 实现对照）与
+> 原型 `design/redesign/index-v2.html` 为准，代码在 `src/dualswitch/ui/mac2/`。
+> 本文仅作历史参考（四态语义、敏感内容不记录等规则仍有效）。
 
 > 2026-10-18 · 应用显示名 **屏幕切换**
 > 可交互稿：`design/clipboard/index.html`
