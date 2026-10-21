@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 
 import pytest
@@ -28,6 +29,16 @@ from dualswitch.ui.mac2.settings_page import HotkeyKeycaps  # noqa: E402
 from dualswitch.ui.mac2.switch_page import SwitchPage  # noqa: E402
 from dualswitch.ui.mac2.widgets import KeyCap, KeyCaps  # noqa: E402
 from dualswitch.ui.mac2.window import PAGE_CLIP, PAGE_SETTINGS, PAGE_SWITCH, MainWindow  # noqa: E402
+
+
+# 这棵 UI 树是 macOS 端的，但用例在 Windows 开发机上也要能跑：
+# 来源系统 / 家目录缩写都跟着运行平台走，所以期望值不能写死成 Mac。
+IS_MAC = sys.platform == "darwin"
+LOCAL_SYS = "Mac" if IS_MAC else "Windows"     # 本机平台名（来源角标 / meta 首段）
+PEER_SYS = "Windows" if IS_MAC else "Mac"      # 对端平台名
+LOCAL_LOGO = "apple" if IS_MAC else "windows"  # 角标用 PLATFORM_LOGO 口径
+PEER_LOGO = "windows" if IS_MAC else "apple"
+HOME = os.path.expanduser("~")
 
 
 @pytest.fixture(scope="module")
@@ -186,7 +197,7 @@ def test_menu_unknown_uses_remote_text(app, cfg):
     actions = {"remote_ready": lambda: True}
     entries = statusmenu.build_menu_entries(cfg, SOURCE_UNKNOWN, "alt+space", actions)
     switch_row = [e for e in entries if e.kind == "item" and "切过来" in e.title][0]
-    assert switch_row.title == "从 Windows 切过来"
+    assert switch_row.title == f"从 {PEER_SYS} 切过来"
     assert switch_row.enabled
     actions_off = {"remote_ready": lambda: False}
     entries2 = statusmenu.build_menu_entries(cfg, SOURCE_UNKNOWN, "alt+space", actions_off)
@@ -299,9 +310,9 @@ def test_source_badge_follows_origin_system(app, cfg):
 
     local = ClipRecord(id="a", kind="text", text="x", source="local")
     remote = ClipRecord(id="b", kind="text", text="y", source="remote", peer_name="Windows")
-    # mac 端：本机复制 = Mac 角标；remote = Windows 角标（来源系统，不是来源应用）
-    assert source_system(local) == "apple"
-    assert source_system(remote) == "windows"
+    # 本机复制 = 本机系统角标；remote = 对端系统角标（来源系统，不是来源应用）
+    assert source_system(local) == LOCAL_LOGO
+    assert source_system(remote) == PEER_LOGO
     thumb_local = Thumb(local, "text")
     thumb_remote = Thumb(remote, "text")
     assert thumb_local._badge.cacheKey() != thumb_remote._badge.cacheKey()
@@ -312,11 +323,11 @@ def test_row_shows_source_in_meta(app, cfg):
     page = ClipboardPage(FakeEngine(make_records()))
     page.refresh()
     meta = page._rows["l1"].meta.text()
-    assert meta.startswith("Mac")
+    assert meta.startswith(LOCAL_SYS)
     assert "链接" in meta
     remote = ClipRecord(id="r1", kind="text", text="x", source="remote", state="ok")
     row = ClipRow(remote)
-    assert row.meta.text().startswith("Windows")
+    assert row.meta.text().startswith(PEER_SYS)
 
 
 # --------------------------------------------------------------------------- #
@@ -667,7 +678,7 @@ def test_meta_line_parts_have_dots(app, cfg):
     page = ClipboardPage(FakeEngine(make_records()))
     page.refresh()
     parts = page._rows["l1"].meta.parts()
-    assert parts[0] == ("Mac", True)
+    assert parts[0] == (LOCAL_SYS, True)
     assert parts[-1][0] == "链接"
     assert " · " in page._rows["l1"].meta.text()
 
@@ -678,10 +689,10 @@ def test_meta_line_includes_source_app(app, cfg):
                      app="微信", app_id="com.tencent.xinWeChat")
     row = ClipRow(rec)
     parts = [p for p, _ in row.meta.parts()]
-    assert parts[:2] == ["Mac", "微信"]
+    assert parts[:2] == [LOCAL_SYS, "微信"]
 
     shot = ClipRecord(id="a2", kind="text", text="hi", source="local", state="ok", app="截图")
-    assert [p for p, _ in ClipRow(shot).meta.parts()][:2] == ["Mac", "截图"]
+    assert [p for p, _ in ClipRow(shot).meta.parts()][:2] == [LOCAL_SYS, "截图"]
 
 
 def test_theme_qcolor_parses_rgba_tokens():
@@ -938,7 +949,7 @@ def test_engine_drops_oldest_when_over_storage_limit(app, cfg):
 # 19. 文件（访达复制）：缩略图 / 标题 / 目录 / 按钮组合（用户 2026-10-21 参考 Frset）
 # --------------------------------------------------------------------------- #
 def _file_rec(rid="fd", name="ChatGPTInstaller.dmg", path=None, png=None):
-    path = path or f"/Users/zhqi/Downloads/{name}"
+    path = path or os.path.join(HOME, "Downloads", name)
     return ClipRecord(
         id=rid, kind="mixed" if png else "text", text=name, png=png,
         width=640 if png else 0, height=400 if png else 0, size=20,
@@ -978,11 +989,11 @@ def test_file_row_title_and_meta_show_name_and_folder(app):
     assert row.title.text() == "ChatGPTInstaller.dmg"
     meta = row.meta.text()
     assert "打开文件" not in meta
-    assert meta.startswith("Mac")
+    assert meta.startswith(LOCAL_SYS)
     assert "访达" in meta
     assert "~/Downloads" in meta, "文件行的元信息要给目录"
     assert not meta.endswith("文件"), "目录已经说明是文件，不要再加类型标签"
-    assert short_dir("/Users/zhqi/Downloads/x.png") == "~/Downloads"
+    assert short_dir(os.path.join(HOME, "Downloads", "x.png")) == "~/Downloads"
 
 
 def test_file_row_buttons_by_type(app, cfg):

@@ -514,6 +514,20 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-21 **[repo] 同步 origin/main 到 `555b884`（v2 界面 mac2 树），并把 7 条「只在 mac 绿」的用例改成平台无关**。
+  · 快进 5 个提交（`ccd3049` → `555b884`，95 文件 +12664/−26）：新增 `ui/mac2/**`（v2 宽窗口 + 侧栏三页）、
+    `ui2` 子命令、文件记录（访达复制）同步、重复复制去重置顶；配置新增 `switch_policy` / `appearance` /
+    `clipboard_hotkey` 与 `hover_preview` / `retention_days` / `storage_limit_mb`（旧配置文件走默认值）。
+  · 全量自测 **347 例（11 skipped）全绿**。刚拉下来时 7 红，全在 `tests/test_ui_mac2.py`，原因都是
+    「用例默认自己在 macOS 上跑」：`cfg = platform_defaults()` 在 Windows 开发机上给的是 Windows，
+    于是 meta 首段平台名、来源角标、菜单「从 Windows 切过来」、`~/Downloads` 全跟期望反了 ——
+    不是代码回归。按 `test_hotkey.py` 的既有写法加 `IS_MAC / LOCAL_SYS / PEER_SYS / LOCAL_LOGO /
+    PEER_LOGO / HOME` 常量，断言改成跟运行平台走；`_file_rec()` 默认路径改成 `HOME/Downloads`。
+  · 顺带修掉一个真 bug：`ui/mac2/preview.short_dir()` 用 `os.sep` 拼 `~`，Windows 上出反斜杠形式的目录，
+    设计稿要求 `~/Downloads`。改成两侧都先归一成 `/`（mac 上 `os.sep` 本来就是 `/`，mac 行为零变化）。
+  · **Windows 端行为不变**：新代码全在 `ui/mac2/**`（mac 专用树）；共享层只多了配置字段，
+    `switch_policy` 默认 `standard` 就是原来的「本地优先、失败才请对端代发」。
+
 - 2026-10-20 **[packaging] 界面拆两棵树之后，Windows 侧补上垫片 hidden-import + 修掉一条只在 Windows 红的用例**。
   · pull 到 `5a76c19` + `0d14345`（`ui/mac` + `ui/win` 两棵树）后先全量自测：**274 passed / 8 skipped**。
   · **打包会失败**：8 个兼容垫片里除了 `runner`（`cli.py` 引用）都没有静态 import，PyInstaller 只靠间接

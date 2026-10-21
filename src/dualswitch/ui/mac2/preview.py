@@ -65,12 +65,16 @@ def clock(ts: float) -> str:
 
 
 def short_dir(path: str) -> str:
-    """文件所在目录（家目录缩成 `~`，跟访达/终端一致）。"""
+    """文件所在目录（家目录缩成 `~`，跟访达/终端一致）。
+
+    分隔符一律按 `/` 显示：mac 上本来就是 `/`，Windows 开发机上跑用例时
+    也不该冒出反斜杠形式的目录（设计稿写的是 `~/Downloads`）。
+    """
     if not path:
         return ""
-    folder = os.path.dirname(path) or "/"
-    home = os.path.expanduser("~")
-    if home and (folder == home or folder.startswith(home + os.sep)):
+    folder = (os.path.dirname(path) or "/").replace(os.sep, "/")
+    home = os.path.expanduser("~").replace(os.sep, "/")
+    if home and (folder == home or folder.startswith(home + "/")):
         folder = "~" + folder[len(home):]
     return folder
 
