@@ -1,0 +1,1063 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>屏幕切换 · 页面重做原型（参照 Frset 设计理念）</title>
+<style>
+/* ============================================================
+   设计令牌
+   借自 Frset 解析结论（design/frset-ref/DESIGN-REFERENCE.md）：
+   - 单强调色 #4E87FF，不搞渐变按钮
+   - 图标三档：20（工具行）/ 24（强调）/ 44（列表类型图标）
+   - 亮暗靠 CSS 变量切换（对应 NSAppearance）
+   装的是 dualswitch 的功能，不是 Frset 的功能。
+   ============================================================ */
+:root{
+  --accent:#4E87FF; --accent-deep:#2E63E8; --accent-soft:rgba(78,135,255,.12);
+  --ink:#11151C; --ink-2:#4B5566; --ink-3:#818B9C;
+  --line:#E5E9F1; --line-soft:#EEF1F6;
+  --bg:#F4F6FA; --card:#FFFFFF; --card-2:#F8FAFC;
+  --ok:#0E7C4A;   --ok-bg:rgba(14,124,74,.10);
+  --run:#2E63E8;  --run-bg:rgba(46,99,232,.10);
+  --idle:#7C8698; --idle-bg:rgba(124,134,152,.12);
+  --danger:#A82B2B; --danger-bg:rgba(168,43,43,.10);
+  --warn:#B4690E; --warn-bg:rgba(180,105,14,.10);
+  --r-win:14px; --r-card:12px; --r-ctrl:10px; --r-pill:6px;
+  --sh-win:0 1px 2px rgba(16,24,40,.06),0 24px 56px -20px rgba(16,24,40,.32);
+  --sh-card:0 1px 2px rgba(16,24,40,.05);
+  --sh-pop:0 8px 24px -8px rgba(16,24,40,.18);
+  --font:-apple-system,"SF Pro Text","PingFang SC","Helvetica Neue",system-ui,sans-serif;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,monospace;
+}
+[data-theme="dark"]{
+  --accent:#6E9BFF; --accent-deep:#8FB4FF; --accent-soft:rgba(110,155,255,.16);
+  --ink:#E9EDF3; --ink-2:#B0B8C6; --ink-3:#7A8494;
+  --line:#2A313C; --line-soft:#222833;
+  --bg:#151920; --card:#1D232C; --card-2:#242B35;
+  --ok:#4FD18B;   --ok-bg:rgba(79,209,139,.14);
+  --run:#7FA8FF;  --run-bg:rgba(127,168,255,.14);
+  --idle:#8B95A5; --idle-bg:rgba(139,149,165,.16);
+  --danger:#F08585; --danger-bg:rgba(240,133,133,.14);
+  --warn:#E2B566; --warn-bg:rgba(226,181,102,.14);
+  --sh-win:0 1px 2px rgba(0,0,0,.4),0 24px 56px -20px rgba(0,0,0,.6);
+  --sh-card:0 1px 2px rgba(0,0,0,.3);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  font-family:var(--font); color:var(--ink); background:var(--bg);
+  -webkit-font-smoothing:antialiased; padding:36px 24px 80px;
+  transition:background .25s,color .25s;
+}
+.wrap{max-width:1160px;margin:0 auto}
+.head{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap;margin-bottom:26px}
+.head h1{margin:0;font-size:23px;font-weight:650;letter-spacing:-.01em}
+.head p{margin:5px 0 0;font-size:12.5px;color:var(--ink-3);line-height:1.7}
+.head .badges{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap}
+.badge{font-size:11px;padding:4px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent-deep);font-weight:550}
+.badge.gray{background:var(--idle-bg);color:var(--ink-2)}
+
+/* ── 控制条 ─────────────────────────────── */
+.toolbar{
+  display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+  padding:11px 14px;margin-bottom:24px;box-shadow:var(--sh-card);
+}
+.toolbar .grp{display:flex;align-items:center;gap:8px}
+.toolbar .lbl{font-size:11px;color:var(--ink-3);font-weight:550;letter-spacing:.02em}
+.seg{display:inline-flex;background:var(--card-2);border:1px solid var(--line);border-radius:8px;padding:2px;gap:2px}
+.seg button{
+  border:0;background:transparent;color:var(--ink-2);font:inherit;font-size:11.5px;
+  padding:5px 11px;border-radius:6px;cursor:pointer;white-space:nowrap;transition:.15s;
+}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(16,24,40,.10)}
+[data-theme="dark"] .seg button.on{background:var(--accent-soft);color:var(--accent-deep)}
+
+/* ── 舞台与窗口 ───────────────────────────── */
+.stage{display:flex;gap:30px;align-items:flex-start;flex-wrap:wrap}
+.stage-main{flex:1;min-width:520px;display:flex;justify-content:center}
+
+.win{
+  width:440px;background:var(--card);border-radius:var(--r-win);
+  box-shadow:var(--sh-win);overflow:hidden;border:1px solid var(--line);
+  display:flex;flex-direction:column;height:600px;
+}
+.win-bar{
+  height:38px;display:flex;align-items:center;padding:0 13px;flex-shrink:0;
+  border-bottom:1px solid var(--line-soft);position:relative;background:var(--card);
+}
+.lights{display:flex;gap:7px}
+.lights i{width:11px;height:11px;border-radius:50%;display:block}
+.lights i:nth-child(1){background:#FF5F57}
+.lights i:nth-child(2){background:#FEBC2E}
+.lights i:nth-child(3){background:#28C840}
+.win-title{
+  position:absolute;left:0;right:0;text-align:center;font-size:12.5px;font-weight:600;
+  color:var(--ink-2);pointer-events:none;letter-spacing:.01em;
+}
+.win-back{
+  position:absolute;left:46px;border:0;background:transparent;color:var(--accent);
+  font:inherit;font-size:12px;cursor:pointer;padding:3px 6px;border-radius:6px;display:none;
+}
+.win-back:hover{background:var(--accent-soft)}
+.win[data-page="main"] .win-back{display:none}
+.win[data-page="clip"] .win-back,.win[data-page="set"] .win-back{display:block}
+
+.win-body{flex:1;overflow-y:auto;overscroll-behavior:contain}
+.win-body::-webkit-scrollbar{width:8px}
+.win-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+.page{display:none;padding:14px 16px 18px;animation:fade .22s ease}
+.page.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+.win-foot{
+  height:30px;flex-shrink:0;border-top:1px solid var(--line-soft);
+  display:flex;align-items:center;justify-content:space-between;padding:0 15px;
+  font-size:10.5px;color:var(--ink-3);background:var(--card);
+}
+.foot-dot{width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block;margin-right:5px}
+.foot-dot.idle{background:var(--idle)}
+
+/* ── 状态卡（主页面头）───────────────────── */
+.status{
+  border-radius:var(--r-card);padding:17px 17px 15px;background:var(--card-2);
+  border:1px solid var(--line-soft);margin-bottom:13px;
+}
+.status-top{display:flex;align-items:center;gap:8px;margin-bottom:11px}
+.status-label{font-size:11px;color:var(--ink-3);font-weight:550;letter-spacing:.02em}
+.pill{
+  margin-left:auto;font-size:10px;font-weight:600;padding:3px 8px;border-radius:999px;
+  letter-spacing:.02em;
+}
+.pill.run{background:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.status-main{display:flex;align-items:center;gap:13px;margin-bottom:4px}
+.status-logo{
+  width:44px;height:44px;border-radius:11px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+}
+.status-logo.win{background:#3B7CE8}
+.status-logo.mac{background:#5A6270}
+.status-logo.none{background:var(--idle-bg)}
+.status-name{font-size:20px;font-weight:670;letter-spacing:-.01em;line-height:1.15}
+.status-sub{font-size:11.5px;color:var(--ink-3);margin-top:3px}
+.status-act{margin-top:13px}
+.btn-primary{
+  width:100%;height:38px;border:0;border-radius:var(--r-ctrl);background:var(--accent);
+  color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:7px;transition:.15s;
+}
+.btn-primary:hover{background:var(--accent-deep)}
+.btn-primary:active{transform:scale(.985)}
+.btn-primary[disabled]{background:var(--idle-bg);color:var(--ink-3);cursor:not-allowed}
+.btn-primary.busy{background:var(--accent-deep)}
+.kbd{
+  display:inline-flex;align-items:center;height:19px;padding:0 6px;margin-left:auto;
+  border-radius:5px;background:rgba(255,255,255,.22);font-family:var(--mono);
+  font-size:10px;font-weight:600;
+}
+.btn-primary[disabled] .kbd{background:var(--line);color:var(--ink-3)}
+.status-note{
+  margin-top:9px;font-size:10.5px;color:var(--ok);display:flex;align-items:center;gap:5px;
+}
+.status-note.dim{color:var(--ink-3)}
+.status-note.bad{color:var(--danger)}
+
+/* ── 设备卡 ─────────────────────────────── */
+.devs{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:16px}
+.dev{
+  border:1px solid var(--line);border-radius:var(--r-card);padding:12px 12px 11px;
+  background:var(--card);cursor:pointer;transition:.15s;position:relative;
+}
+.dev:hover{border-color:var(--accent);box-shadow:var(--sh-card)}
+.dev.active{border-color:var(--accent);background:var(--accent-soft)}
+.dev.dead{opacity:.55;cursor:not-allowed}
+.dev-top{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.dev-logo{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.dev-logo.win{background:#3B7CE8}.dev-logo.mac{background:#5A6270}
+.dev-name{font-size:12.5px;font-weight:620}
+.dev-led{width:8px;height:8px;border-radius:50%;margin-left:auto;flex-shrink:0}
+.dev-led.on{background:var(--ok);box-shadow:0 0 0 3px var(--ok-bg)}
+.dev-led.off{background:var(--line)}
+.dev-sub{font-size:10.5px;color:var(--ink-3);line-height:1.5}
+.dev-tag{
+  margin-top:8px;display:inline-block;font-size:9.5px;font-weight:600;padding:2.5px 7px;
+  border-radius:999px;background:var(--accent-soft);color:var(--accent-deep);
+}
+.dev-tag.off{background:var(--idle-bg);color:var(--ink-3)}
+
+/* ── 分组标题 + 行（Frset 式行：图标 + 主文案 + 副行 + 尾注）── */
+.sec{margin:2px 0 7px;font-size:10.5px;font-weight:600;color:var(--ink-3);letter-spacing:.04em}
+.rows{background:var(--card);border:1px solid var(--line-soft);border-radius:var(--r-card);overflow:hidden;margin-bottom:15px}
+.row{
+  display:flex;align-items:center;gap:11px;padding:11px 13px;cursor:pointer;
+  transition:background .13s;position:relative;
+}
+.row + .row{border-top:1px solid var(--line-soft)}
+.row:hover{background:var(--card-2)}
+.row:active{background:var(--accent-soft)}
+.row.dead{opacity:.5;cursor:not-allowed}
+.row.dead:hover{background:transparent}
+.row-ic{
+  width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  color:var(--accent);
+}
+.row-tx{flex:1;min-width:0}
+.row-t{font-size:12.5px;font-weight:550;line-height:1.3}
+.row-s{font-size:10.5px;color:var(--ink-3);margin-top:2px;line-height:1.35}
+.row-hint{font-family:var(--mono);font-size:10px;color:var(--ink-3);flex-shrink:0}
+.row-ch{color:var(--ink-3);flex-shrink:0;opacity:.65}
+.row-count{
+  font-size:10px;font-weight:600;padding:2.5px 7px;border-radius:999px;
+  background:var(--accent-soft);color:var(--accent-deep);flex-shrink:0;
+}
+.row-count.alert{background:var(--danger-bg);color:var(--danger)}
+
+/* ── 剪贴板页 ───────────────────────────── */
+.search{
+  display:flex;align-items:center;gap:7px;height:32px;padding:0 11px;margin-bottom:10px;
+  background:var(--card-2);border:1px solid var(--line);border-radius:9px;
+  color:var(--ink-3);font-size:11.5px;
+}
+.search input{
+  border:0;background:transparent;flex:1;font:inherit;font-size:11.5px;color:var(--ink);
+  outline:none;
+}
+.search input::placeholder{color:var(--ink-3)}
+.chips{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.chip{
+  border:1px solid var(--line);background:var(--card);color:var(--ink-2);
+  font:inherit;font-size:10.5px;font-weight:550;padding:4.5px 10px;border-radius:999px;
+  cursor:pointer;transition:.14s;
+}
+.chip:hover{border-color:var(--accent);color:var(--accent-deep)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+
+.clip-list{
+  background:var(--card);border:1px solid var(--line-soft);border-radius:var(--r-card);
+  overflow:hidden;
+}
+.clip{
+  display:flex;gap:11px;padding:11px 13px;cursor:pointer;transition:background .13s;align-items:flex-start;
+}
+.clip + .clip{border-top:1px solid var(--line-soft)}
+.clip:hover{background:var(--card-2)}
+.clip-ic{
+  width:44px;height:44px;border-radius:9px;flex-shrink:0;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--card-2);border:1px solid var(--line-soft);
+}
+.clip-ic img{width:100%;height:100%;object-fit:cover;display:block}
+.clip-body{flex:1;min-width:0}
+.clip-t{
+  font-size:12px;font-weight:550;line-height:1.4;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+.clip-t.mono{font-family:var(--mono);font-size:10.5px;font-weight:500}
+.clip-m{font-size:10px;color:var(--ink-3);margin-top:4px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.src{font-weight:650;color:var(--ink-2)}
+.clip-m .dot{width:2.5px;height:2.5px;border-radius:50%;background:var(--ink-3);opacity:.55;flex-shrink:0}
+.stat{
+  font-size:9.5px;font-weight:650;padding:3px 7px;border-radius:var(--r-pill);
+  flex-shrink:0;align-self:flex-start;cursor:pointer;letter-spacing:.02em;white-space:nowrap;
+}
+.stat.ok{background:var(--ok-bg);color:var(--ok);cursor:default}
+.stat.run{background:var(--run-bg);color:var(--run);cursor:default}
+.stat.idle{background:var(--idle-bg);color:var(--idle)}
+.stat.bad{background:var(--danger-bg);color:var(--danger)}
+.stat:hover.idle,.stat:hover.bad{filter:brightness(.92)}
+.clip-prog{height:2px;border-radius:2px;background:var(--run-bg);margin-top:6px;overflow:hidden}
+.clip-prog i{display:block;height:100%;background:var(--run);border-radius:2px;transition:width .3s}
+
+/* 空态 / 筛选空态 */
+.empty{
+  text-align:center;padding:42px 20px 38px;display:none;
+}
+.empty.on{display:block}
+.empty-art{
+  width:72px;height:55px;margin:0 auto 15px;color:var(--ink-3);opacity:.65;
+}
+.empty h3{margin:0;font-size:13px;font-weight:600;color:var(--ink-2)}
+.empty p{margin:6px 0 0;font-size:11px;color:var(--ink-3);line-height:1.6}
+
+/* ── 设置页 ─────────────────────────────── */
+.set-sec{margin-bottom:17px}
+.set-hd{font-size:10.5px;font-weight:600;color:var(--ink-3);letter-spacing:.04em;margin:0 0 7px 3px}
+.set-card{background:var(--card);border:1px solid var(--line-soft);border-radius:var(--r-card);overflow:hidden}
+.set-row{
+  display:flex;align-items:center;gap:11px;padding:11px 13px;min-height:46px;
+}
+.set-row + .set-row{border-top:1px solid var(--line-soft)}
+.set-tx{flex:1;min-width:0}
+.set-t{font-size:12.5px;font-weight:550}
+.set-s{font-size:10.5px;color:var(--ink-3);margin-top:2px;line-height:1.45}
+.set-val{font-size:11.5px;color:var(--ink-3);font-family:var(--mono);flex-shrink:0}
+.toggle{
+  width:36px;height:21px;border-radius:999px;background:var(--line);border:0;cursor:pointer;
+  position:relative;transition:.18s;flex-shrink:0;
+}
+.toggle::after{
+  content:"";position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18);transition:.18s;
+}
+.toggle.on{background:var(--ok)}
+.toggle.on::after{left:17px}
+.selectish{
+  display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-2);
+  border:1px solid var(--line);border-radius:8px;padding:5px 9px;cursor:pointer;background:var(--card);
+}
+.selectish:hover{border-color:var(--accent)}
+.seg-mini{display:inline-flex;background:var(--card-2);border:1px solid var(--line);border-radius:8px;padding:2px}
+.seg-mini button{
+  border:0;background:transparent;font:inherit;font-size:10.5px;color:var(--ink-2);
+  padding:4px 9px;border-radius:6px;cursor:pointer;
+}
+.seg-mini button.on{background:var(--accent);color:#fff;font-weight:600}
+
+/* ── 侧栏说明 ───────────────────────────── */
+.side{width:292px;flex-shrink:0}
+.note-card{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+  padding:15px 16px;margin-bottom:13px;box-shadow:var(--sh-card);
+}
+.note-card h3{margin:0 0 10px;font-size:12px;font-weight:650;display:flex;align-items:center;gap:7px}
+.note-card h3 .ic{color:var(--accent);display:flex}
+.note-card ul{margin:0;padding-left:16px}
+.note-card li{font-size:11px;color:var(--ink-2);line-height:1.75;margin-bottom:5px}
+.note-card li b{color:var(--ink);font-weight:600}
+.note-card p{margin:0;font-size:11px;color:var(--ink-2);line-height:1.75}
+.divider{height:1px;background:var(--line-soft);margin:11px 0}
+.tag-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.tag{font-size:9.5px;padding:3px 8px;border-radius:999px;background:var(--card-2);color:var(--ink-2);border:1px solid var(--line-soft)}
+.tag.keep{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.tag.drop{background:var(--danger-bg);color:var(--danger);border-color:transparent}
+.tag.new{background:var(--accent-soft);color:var(--accent-deep);border-color:transparent}
+
+/* toast */
+.toast{
+  position:fixed;left:50%;bottom:32px;transform:translate(-50%,16px);
+  background:var(--ink);color:var(--card);font-size:12px;font-weight:550;
+  padding:10px 17px;border-radius:10px;box-shadow:var(--sh-pop);
+  opacity:0;pointer-events:none;transition:.24s;z-index:99;
+}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+@media (max-width:980px){
+  .stage{flex-direction:column}
+  .side{width:100%;max-width:440px;margin:0 auto}
+  .stage-main{min-width:0}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ══════════ 页头 ══════════ -->
+  <div class="head">
+    <div>
+      <h1>屏幕切换 · mac 端页面重做</h1>
+      <p>设计语言参照 Frset（单强调色 · 图标三档 · 大类型图标行 · 空态插画），装的是 dualswitch 的功能。<br>不是照搬 —— Frset 的 AI 工具/日历/截图/Pro 订阅一律不要。</p>
+    </div>
+    <div class="badges">
+      <span class="badge">Accent #4E87FF</span>
+      <span class="badge">图标 20 / 24 / 44</span>
+      <span class="badge">单窗口翻页</span>
+      <span class="badge gray">假数据原型</span>
+    </div>
+  </div>
+
+  <!-- ══════════ 控制条 ══════════ -->
+  <div class="toolbar">
+    <div class="grp">
+      <span class="lbl">页面</span>
+      <div class="seg" id="segPage">
+        <button data-page="main" class="on">主界面</button>
+        <button data-page="clip">剪贴板</button>
+        <button data-page="set">设置</button>
+      </div>
+    </div>
+    <div class="grp">
+      <span class="lbl">画面归属</span>
+      <div class="seg" id="segSrc">
+        <button data-src="win" class="on">在 Windows</button>
+        <button data-src="mac">在 Mac</button>
+        <button data-src="none">未检测到</button>
+      </div>
+    </div>
+    <div class="grp">
+      <span class="lbl">剪贴板列表</span>
+      <div class="seg" id="segClip">
+        <button data-clip="full" class="on">有数据</button>
+        <button data-clip="empty">空列表</button>
+        <button data-clip="filter">筛选无结果</button>
+      </div>
+    </div>
+    <div class="grp" style="margin-left:auto">
+      <span class="lbl">外观</span>
+      <div class="seg" id="segTheme">
+        <button data-theme="light" class="on">浅色</button>
+        <button data-theme="dark">深色</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <!-- ══════════ 窗口 ══════════ -->
+    <div class="stage-main">
+      <div class="win" id="win" data-page="main">
+        <div class="win-bar">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <button class="win-back" id="winBack">‹ 返回</button>
+          <div class="win-title" id="winTitle">屏幕切换</div>
+        </div>
+
+        <div class="win-body">
+          <!-- ══════ 主界面 ══════ -->
+          <div class="page on" id="pageMain">
+
+            <!-- 状态卡 -->
+            <div class="status" id="statusCard">
+              <div class="status-top">
+                <span class="status-label">当前画面</span>
+                <span class="pill run" id="srcPill">运行中</span>
+              </div>
+              <div class="status-main">
+                <div class="status-logo win" id="srcLogo">
+                  <!-- Windows 四格 -->
+                  <svg width="22" height="22" viewBox="0 0 22 22" fill="#fff"><rect x="1" y="1" width="9" height="9" rx="1.4"/><rect x="12" y="1" width="9" height="9" rx="1.4"/><rect x="1" y="12" width="9" height="9" rx="1.4"/><rect x="12" y="12" width="9" height="9" rx="1.4"/></svg>
+                </div>
+                <div>
+                  <div class="status-name" id="srcName">Windows</div>
+                  <div class="status-sub" id="srcSub">Q2790R3 · HDMI · 输入源 17</div>
+                </div>
+              </div>
+              <div class="status-act">
+                <button class="btn-primary" id="btnSwitch">
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5h10l-2.5-2.5M14 11H4l2.5 2.5"/></svg>
+                  <span id="btnSwitchTx">切换到 Mac</span>
+                  <span class="kbd">⌥␣</span>
+                </button>
+              </div>
+              <div class="status-note" id="srcNote">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5l2.5 2.5L10 3.5"/></svg>
+                上次切换 63.9 ms · 回读已确认
+              </div>
+            </div>
+
+            <!-- 设备卡 -->
+            <div class="devs" id="devCards">
+              <div class="dev active" data-dev="win">
+                <div class="dev-top">
+                  <div class="dev-logo win">
+                    <svg width="11" height="11" viewBox="0 0 22 22" fill="#fff"><rect x="1" y="1" width="9" height="9" rx="1.4"/><rect x="12" y="1" width="9" height="9" rx="1.4"/><rect x="1" y="12" width="9" height="9" rx="1.4"/><rect x="12" y="12" width="9" height="9" rx="1.4"/></svg>
+                  </div>
+                  <div class="dev-name">Windows</div>
+                  <div class="dev-led on"></div>
+                </div>
+                <div class="dev-sub">HDMI · 输入源 17<br>dualswitch-win · 在线</div>
+                <div class="dev-tag">当前画面</div>
+              </div>
+              <div class="dev" data-dev="mac">
+                <div class="dev-top">
+                  <div class="dev-logo mac">
+                    <!-- 简化 Mac 标识 -->
+                    <svg width="12" height="12" viewBox="0 0 22 22" fill="#fff"><path d="M15.6 11.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.8-3-.8c-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.7 2.3 2.9 2.2 1.2 0 1.6-.7 3-.7s1.8.7 3 .7c1.2 0 2-1.1 2.8-2.2.6-.9 1-1.7 1.2-2.1-2.7-1-2.4-4.9-.4-4zM13.4 5.2c.6-.8 1-1.9.9-3-.9 0-2 .6-2.7 1.4-.6.7-1.1 1.8-.9 2.9 1 .1 2-.5 2.7-1.3z"/></svg>
+                  </div>
+                  <div class="dev-name">Mac</div>
+                  <div class="dev-led off"></div>
+                </div>
+                <div class="dev-sub">USB-C · 输入源 18<br>本机 · 可切换</div>
+                <div class="dev-tag off">未使用</div>
+              </div>
+            </div>
+
+            <!-- 操作行 -->
+            <div class="sec">操作</div>
+            <div class="rows">
+              <div class="row" id="rowProbe">
+                <div class="row-ic">
+                  <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="5.2"/><path d="M12 12l3.4 3.4M8 5.6v2.4l1.6 1"/></svg>
+                </div>
+                <div class="row-tx">
+                  <div class="row-t">探测显示器</div>
+                  <div class="row-s">重新枚举 m1ddc 显示器列表</div>
+                </div>
+                <div class="row-hint">只读</div>
+                <div class="row-ch">›</div>
+              </div>
+              <div class="row" id="rowClip">
+                <div class="row-ic">
+                  <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="2.8" width="11.6" height="12.4" rx="2"/><path d="M6.2 2.8V2.2A1.2 1.2 0 017.4 1h3.2a1.2 1.2 0 011.2 1.2v.6"/><path d="M6.4 8h5.2M6.4 11h3.4"/></svg>
+                </div>
+                <div class="row-tx">
+                  <div class="row-t">剪贴板</div>
+                  <div class="row-s">跨端同步文字与图片</div>
+                </div>
+                <div class="row-count" id="clipCount">12</div>
+                <div class="row-ch">›</div>
+              </div>
+              <div class="row" id="rowLog">
+                <div class="row-ic">
+                  <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.6h7l3 3v9.8H4z"/><path d="M11 2.6v3.2h3M6.4 9h5.2M6.4 11.8h3.6"/></svg>
+                </div>
+                <div class="row-tx">
+                  <div class="row-t">查看日志</div>
+                  <div class="row-s">dualswitch.log</div>
+                </div>
+                <div class="row-ch">›</div>
+              </div>
+              <div class="row" id="rowSet">
+                <div class="row-ic">
+                  <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M9 1.8v2M9 14.2v2M1.8 9h2M14.2 9h2M3.9 3.9l1.4 1.4M12.7 12.7l1.4 1.4M14.1 3.9l-1.4 1.4M5.3 12.7l-1.4 1.4"/></svg>
+                </div>
+                <div class="row-tx">
+                  <div class="row-t">设置…</div>
+                  <div class="row-s">切换模式 · 热键 · 显示器</div>
+                </div>
+                <div class="row-hint">⌘,</div>
+                <div class="row-ch">›</div>
+              </div>
+            </div>
+
+            <div class="sec">运行状态</div>
+            <div class="rows">
+              <div class="row dead">
+                <div class="row-ic" style="color:var(--ok)">
+                  <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="13" height="7.5" rx="1.6"/><path d="M6 14.2h6"/></svg>
+                </div>
+                <div class="row-tx">
+                  <div class="row-t">热键已启用</div>
+                  <div class="row-s">⌥ Space · 单击菜单栏图标打开菜单</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ══════ 剪贴板页 ══════ -->
+          <div class="page" id="pageClip">
+            <div class="search">
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2l2.8 2.8"/></svg>
+              <input id="clipSearch" placeholder="搜索剪贴板">
+            </div>
+            <div class="chips" id="clipChips">
+              <button class="chip on" data-f="all">全部</button>
+              <button class="chip" data-f="text">文字</button>
+              <button class="chip" data-f="image">图片</button>
+              <button class="chip" data-f="bad">失败</button>
+            </div>
+
+            <div class="clip-list" id="clipList">
+              <!-- 条目由 JS 注入 -->
+            </div>
+
+            <!-- 空列表 -->
+            <div class="empty" id="emptyAll">
+              <svg class="empty-art" viewBox="0 0 72 55" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="16" y="8" width="40" height="42" rx="5"/>
+                <path d="M28 8V4.5A2.5 2.5 0 0130.5 2h11A2.5 2.5 0 0144 4.5V8"/>
+                <path d="M26 22h20M26 30h13M26 38h16" opacity=".55"/>
+                <circle cx="57" cy="42" r="11" fill="var(--card)" stroke="var(--accent)"/>
+                <path d="M57 37v10M52 42h10" stroke="var(--accent)" opacity=".8"/>
+              </svg>
+              <h3>剪贴板为空</h3>
+              <p>复制内容后会显示在这里，<br>并自动同步到另一台机器</p>
+            </div>
+
+            <!-- 筛选空态（与真空态文案必须分开） -->
+            <div class="empty" id="emptyFilter">
+              <svg class="empty-art" viewBox="0 0 72 55" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="32" cy="24" r="15"/>
+                <path d="M43 35l10 10" stroke="var(--accent)"/>
+                <path d="M26 20h12M26 26h8" opacity=".5"/>
+                <path d="M52 14l6 6M58 14l-6 6" stroke="var(--danger)" opacity=".7"/>
+              </svg>
+              <h3>当前筛选下暂无内容</h3>
+              <p>换个筛选条件试试</p>
+            </div>
+          </div>
+
+          <!-- ══════ 设置页 ══════ -->
+          <div class="page" id="pageSet">
+
+            <div class="set-sec">
+              <div class="set-hd">通用</div>
+              <div class="set-card">
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">切换模式</div>
+                    <div class="set-s">标准 = 先本地后请对端代发</div>
+                  </div>
+                  <div class="seg-mini" id="segMode">
+                    <button class="on">标准</button>
+                    <button>强制</button>
+                  </div>
+                </div>
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">切换完成通知</div>
+                    <div class="set-s">切换成功后弹出系统通知</div>
+                  </div>
+                  <button class="toggle on" data-toggle></button>
+                </div>
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">回读提示</div>
+                    <div class="set-s">回读未确认时在窗口脚注提示</div>
+                  </div>
+                  <button class="toggle on" data-toggle></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="set-sec">
+              <div class="set-hd">热键</div>
+              <div class="set-card">
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">全局热键</div>
+                    <div class="set-s">按下即切换画面</div>
+                  </div>
+                  <div class="set-val">⌥ Space</div>
+                </div>
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">只认右 Option</div>
+                    <div class="set-s">打开后左 Option 不触发</div>
+                  </div>
+                  <button class="toggle" data-toggle></button>
+                </div>
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">关闭窗口后仍在菜单栏运行</div>
+                    <div class="set-s">mac 端默认开启</div>
+                  </div>
+                  <button class="toggle on" data-toggle></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="set-sec">
+              <div class="set-hd">显示器</div>
+              <div class="set-card">
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">显示器匹配</div>
+                    <div class="set-s">按 m1ddc 列出的显示器名匹配</div>
+                  </div>
+                  <div class="set-val">Q2790R3</div>
+                </div>
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">DDC 后端</div>
+                    <div class="set-s">auto 在 mac 上即 m1ddc</div>
+                  </div>
+                  <div class="selectish">auto <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 2.8L4 5.4l2.5-2.6"/></svg></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="set-sec">
+              <div class="set-hd">剪贴板同步</div>
+              <div class="set-card">
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">启用跨端剪贴板</div>
+                    <div class="set-s">文字与图片自动同步到另一台</div>
+                  </div>
+                  <button class="toggle on" data-toggle></button>
+                </div>
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">同步图片</div>
+                    <div class="set-s">关闭后只同步文字</div>
+                  </div>
+                  <button class="toggle on" data-toggle></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="set-sec">
+              <div class="set-hd">外观</div>
+              <div class="set-card">
+                <div class="set-row">
+                  <div class="set-tx">
+                    <div class="set-t">主题</div>
+                    <div class="set-s">跟随系统 = 跟着 macOS 明暗</div>
+                  </div>
+                  <div class="seg-mini" id="segThemeSet">
+                    <button class="on">跟随系统</button>
+                    <button>浅色</button>
+                    <button>深色</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="win-foot">
+          <span id="footLeft"><span class="foot-dot"></span>已连接 Windows · dualswitch-win</span>
+          <span>v1.0.0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ 侧栏说明 ══════════ -->
+    <div class="side">
+      <div class="note-card">
+        <h3><span class="ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 1.5v13M1.5 8h13"/></svg></span>从 Frset 借了什么</h3>
+        <ul>
+          <li><b>单强调色 #4E87FF</b>：去掉渐变按钮，主按钮扁平填充 + hover 加深</li>
+          <li><b>图标三档</b>：20px 工具行 / 24px 强调 / <b>44px 列表类型图标</b></li>
+          <li><b>行的解剖</b>：图标 + 主文案 + 副行（来源·时间·大小·类型，圆点分隔）</li>
+          <li><b>空态插画 + 主副文案</b>，且<b>「筛选无结果」和「本来就是空」文案分开</b></li>
+          <li><b>状态药丸即按钮</b>：失败 / 仅本机态点药丸直接重试</li>
+          <li><b>设置分组标题</b>（通用 / 热键 / 显示器…），不再是平铺长列表</li>
+        </ul>
+      </div>
+
+      <div class="note-card">
+        <h3><span class="ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.2l2 1.2"/></svg></span>功能映射（部分重合）</h3>
+        <div class="tag-row">
+          <span class="tag keep">剪贴板列表 → 保留并升级</span>
+          <span class="tag keep">设置页 → 保留加分组</span>
+          <span class="tag keep">菜单栏常驻 → 一致</span>
+        </div>
+        <div class="tag-row">
+          <span class="tag new">画面归属三态 → 新增状态卡</span>
+          <span class="tag new">设备卡 ×2 → 新增</span>
+          <span class="tag new">远端代发切换 → 按钮里</span>
+        </div>
+        <div class="tag-row">
+          <span class="tag drop">AI 工具 / 搜索引擎 → 不要</span>
+          <span class="tag drop">日历 / 截图 / 取色 → 不要</span>
+          <span class="tag drop">Pro 订阅 → 不要</span>
+          <span class="tag drop">悬浮剪贴板 → 违反单窗口</span>
+        </div>
+      </div>
+
+      <div class="note-card">
+        <h3><span class="ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 8h12M10 4l4 4-4 4"/></svg></span>可点的交互</h3>
+        <ul>
+          <li>上方控制条切<b>页面 / 画面归属 / 列表数据 / 明暗</b></li>
+          <li>主界面点<b>「切换到 Mac」</b>看 切换中 → 成功 三段</li>
+          <li>剪贴板点<b>失败 / 仅本机的药丸</b>会重试并变绿</li>
+          <li>剪贴板<b>筛选 chips</b> 切换，看空态与筛选空态</li>
+          <li>设置页<b>开关</b>、分段控件可点</li>
+        </ul>
+        <div class="divider"></div>
+        <p style="font-size:10.5px;color:var(--ink-3)">
+          保留了既有硬约束：<b style="color:var(--ink-2)">整个应用只有一个窗口</b>（剪贴板/设置都是窗口内翻页，
+          不是独立面板）；画面归属三态的置灰逻辑；「仅本机」与「失败」分开。
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+  const $  = (s,r)=> (r||document).querySelector(s);
+  const $$ = (s,r)=> Array.from((r||document).querySelectorAll(s));
+
+  /* ── toast ───────────────────────────── */
+  let toastTimer;
+  function toast(msg){
+    const t = $("#toast");
+    t.textContent = msg;
+    t.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=>t.classList.remove("on"), 1900);
+  }
+
+  /* ── 分段控件通用绑定 ─────────────────── */
+  function bindSeg(id, cb){
+    const seg = $(id); if(!seg) return;
+    seg.addEventListener("click", e=>{
+      const b = e.target.closest("button"); if(!b) return;
+      $$("button", seg).forEach(x=>x.classList.remove("on"));
+      b.classList.add("on");
+      cb && cb(b);
+    });
+  }
+
+  /* ── 页面切换 ────────────────────────── */
+  const win = $("#win"), winTitle = $("#winTitle");
+  const titles = {main:"屏幕切换", clip:"剪贴板", set:"设置"};
+  function showPage(p){
+    win.dataset.page = p;
+    $$(".page").forEach(el=>el.classList.remove("on"));
+    $("#"+({main:"pageMain",clip:"pageClip",set:"pageSet"}[p])).classList.add("on");
+    winTitle.textContent = titles[p];
+    $$("#segPage button").forEach(b=>b.classList.toggle("on", b.dataset.page===p));
+    $(".win-body").scrollTop = 0;
+  }
+  bindSeg("#segPage", b=> showPage(b.dataset.page));
+  $("#winBack").addEventListener("click", ()=> showPage("main"));
+  $("#rowClip").addEventListener("click", ()=> showPage("clip"));
+  $("#rowSet").addEventListener("click",  ()=> showPage("set"));
+  $("#rowLog").addEventListener("click",  ()=> toast("打开 dualswitch.log"));
+  $("#rowProbe").addEventListener("click",()=> toast("正在探测显示器…（m1ddc）"));
+
+  /* ── 画面归属三态 ────────────────────── */
+  const srcData = {
+    win: {
+      logo:"win", name:"Windows", sub:"Q2790R3 · HDMI · 输入源 17",
+      btn:"切换到 Mac", btnOn:true,
+      note:{cls:"", tx:"上次切换 63.9 ms · 回读已确认"},
+      pill:{cls:"run", tx:"运行中"},
+      foot:'<span class="foot-dot"></span>已连接 Windows · dualswitch-win',
+      devActive:"win"
+    },
+    mac: {
+      logo:"mac", name:"Mac", sub:"Q2790R3 · USB-C · 输入源 18",
+      btn:"切换到 Windows", btnOn:true,
+      note:{cls:"", tx:"上次切换 63.9 ms · 回读已确认"},
+      pill:{cls:"run", tx:"运行中"},
+      foot:'<span class="foot-dot"></span>画面在本机 · 等待切换',
+      devActive:"mac"
+    },
+    none: {
+      logo:"none", name:"未检测到外接显示器", sub:"没接线，或画面在另一台机器上",
+      btn:"未检测到显示器", btnOn:false,
+      note:{cls:"dim", tx:"插入显示器后 2–4 秒内自动恢复"},
+      pill:{cls:"warn", tx:"待确认"},
+      foot:'<span class="foot-dot idle"></span>对端离线 · 仅本机运行',
+      devActive:null
+    }
+  };
+  const logoSvgs = {
+    win:'<svg width="22" height="22" viewBox="0 0 22 22" fill="#fff"><rect x="1" y="1" width="9" height="9" rx="1.4"/><rect x="12" y="1" width="9" height="9" rx="1.4"/><rect x="1" y="12" width="9" height="9" rx="1.4"/><rect x="12" y="12" width="9" height="9" rx="1.4"/></svg>',
+    mac:'<svg width="22" height="22" viewBox="0 0 22 22" fill="#fff"><path d="M15.6 11.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.8-3-.8c-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.7 2.3 2.9 2.2 1.2 0 1.6-.7 3-.7s1.8.7 3 .7c1.2 0 2-1.1 2.8-2.2.6-.9 1-1.7 1.2-2.1-2.7-1-2.4-4.9-.4-4zM13.4 5.2c.6-.8 1-1.9.9-3-.9 0-2 .6-2.7 1.4-.6.7-1.1 1.8-.9 2.9 1 .1 2-.5 2.7-1.3z"/></svg>',
+    none:'<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="var(--ink-3)" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="4" width="18" height="12" rx="2"/><path d="M11 20h0M8 20h6"/></svg>'
+  };
+  let curSrc = "win";
+  function setSrc(k){
+    curSrc = k;
+    const d = srcData[k];
+    const logo = $("#srcLogo");
+    logo.className = "status-logo " + d.logo;
+    logo.innerHTML = logoSvgs[d.logo];
+    $("#srcName").textContent = d.name;
+    $("#srcSub").textContent  = d.sub;
+    const btn = $("#btnSwitch");
+    $("#btnSwitchTx").textContent = d.btn;
+    btn.disabled = !d.btnOn;
+    btn.classList.remove("busy");
+    const pill = $("#srcPill");
+    pill.className = "pill " + d.pill.cls;
+    pill.textContent = d.pill.tx;
+    const note = $("#srcNote");
+    note.className = "status-note " + d.note.cls;
+    note.innerHTML = (d.note.cls==="dim" || d.note.cls==="bad" ? "" :
+      '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5l2.5 2.5L10 3.5"/></svg> ') + d.note.tx;
+    $("#footLeft").innerHTML = d.foot;
+    // 设备卡
+    $$(".dev").forEach(el=>{
+      const active = el.dataset.dev === d.devActive;
+      el.classList.toggle("active", active);
+      el.querySelector(".dev-led").className = "dev-led " + (active ? "on" : "off");
+      el.querySelector(".dev-tag").className = "dev-tag" + (active ? "" : " off");
+      el.querySelector(".dev-tag").textContent = active ? "当前画面" : (d.devActive===null ? "未连接" : "未使用");
+      el.classList.toggle("dead", d.devActive===null);
+    });
+  }
+  bindSeg("#segSrc", b=> setSrc(b.dataset.src));
+
+  /* ── 切换按钮三段 ────────────────────── */
+  $("#btnSwitch").addEventListener("click", function(){
+    if(this.disabled) return;
+    const to = curSrc==="win" ? "mac" : "win";
+    const label = to==="mac" ? "Mac" : "Windows";
+    this.classList.add("busy");
+    $("#btnSwitchTx").textContent = "切换中…";
+    $("#srcNote").className = "status-note dim";
+    $("#srcNote").textContent = "正在发送 DDC Set · 目标 " + label;
+    setTimeout(()=>{
+      setSrc(to);
+      toast("已切换到 " + label);
+    }, 900);
+  });
+  $$(".dev").forEach(el=> el.addEventListener("click", ()=>{
+    if(el.classList.contains("dead")) return;
+    const k = el.dataset.dev;
+    if(k===curSrc){ toast("画面已经在这台机器上"); return; }
+    setSrc(k);
+    toast("已切换到 " + (k==="mac" ? "Mac" : "Windows"));
+  }));
+
+  /* ── 剪贴板列表 ─────────────────────── */
+  // 假数据：状态四态（已同步 / 传输中 / 仅本机 / 失败）
+  // 来源图标：看来源不看本机（Frset + 既有规范一致）
+  const clips = [
+    { id:1, type:"image", title:"截图 2560 × 1440",
+      thumb:"data:image/svg+xml;utf8," + encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="88" height="88"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="%2383A8FF"/><stop offset="1" stop-color="%234E87FF"/></linearGradient></defs><rect width="88" height="88" fill="url(%23g)"/><circle cx="30" cy="30" r="9" fill="rgba(255,255,255,.75)"/><path d="M14 66l20-22 14 15 9-8 17 15z" fill="rgba(255,255,255,.55)"/></svg>'),
+      src:"Windows", time:"2 分钟前", size:"186 KB", kind:"图片", state:"ok" },
+
+    { id:2, type:"text", title:"明天下午三点，会议室 B，记得带转接头",
+      src:"Mac", time:"5 分钟前", size:"34 B", kind:"纯文本", state:"ok" },
+
+    { id:3, type:"text", mono:true, title:"git rebase -i HEAD~3 && git push -f origin main",
+      src:"Windows", time:"12 分钟前", size:"52 B", kind:"纯文本", state:"run", prog:62 },
+
+    { id:4, type:"image", title:"截图 3840 × 2160",
+      thumb:"data:image/svg+xml;utf8," + encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="88" height="88"><defs><linearGradient id="g2" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="%232B3342"/><stop offset="1" stop-color="%235B6B82"/></linearGradient></defs><rect width="88" height="88" fill="url(%23g2)"/><rect x="16" y="18" width="56" height="34" rx="4" fill="rgba(255,255,255,.16)"/><rect x="16" y="58" width="34" height="8" rx="3" fill="rgba(255,255,255,.28)"/><rect x="16" y="70" width="22" height="6" rx="3" fill="rgba(255,255,255,.18)"/></svg>'),
+      src:"Windows", time:"1 小时前", size:"2.1 MB", kind:"图片", state:"bad" },
+
+    { id:5, type:"text", title:"Q2790R3 的 DDC 输入源 17 = HDMI-1，18 = USB-C",
+      src:"Mac", time:"2 小时前", size:"48 B", kind:"纯文本", state:"idle" },
+
+    { id:6, type:"text", mono:true, title:'{ "hotkey": "alt+space", "backend": "auto" }',
+      src:"Windows", time:"昨天", size:"51 B", kind:"纯文本", state:"ok" },
+
+    { id:7, type:"image", title:"设计稿 · 剪贴板页",
+      thumb:"data:image/svg+xml;utf8," + encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="88" height="88"><rect width="88" height="88" fill="%23F0E6D2"/><rect x="14" y="14" width="60" height="42" rx="5" fill="%23fff"/><rect x="22" y="24" width="30" height="5" rx="2" fill="%23C8B99A"/><rect x="22" y="35" width="44" height="5" rx="2" fill="%23D8CBB0"/><rect x="14" y="62" width="26" height="10" rx="4" fill="%234E87FF"/><rect x="46" y="62" width="28" height="10" rx="4" fill="%23C8B99A"/></svg>'),
+      src:"Mac", time:"昨天", size:"328 KB", kind:"图片", state:"ok" }
+  ];
+
+  const stateMeta = {
+    ok:  {cls:"ok",   tx:"已同步"},
+    run: {cls:"run",  tx:"传输中"},
+    idle:{cls:"idle", tx:"仅本机"},
+    bad: {cls:"bad",  tx:"失败"}
+  };
+
+  function renderClips(filter){
+    const list = $("#clipList");
+    const data = clips.filter(c=>{
+      if(filter==="all")   return true;
+      if(filter==="text")  return c.type==="text";
+      if(filter==="image") return c.type==="image";
+      if(filter==="bad")   return c.state==="bad" || c.state==="idle";
+      return true;
+    });
+    list.innerHTML = data.map(c=>{
+      const m = stateMeta[c.state];
+      const thumb = c.thumb
+        ? `<div class="clip-ic"><img src="${c.thumb}" alt=""></div>`
+        : `<div class="clip-ic">${sourceIcon(c.src, 20)}</div>`;
+      return `<div class="clip" data-id="${c.id}">
+        ${thumb}
+        <div class="clip-body">
+          <div class="clip-t${c.mono?" mono":""}">${escapeHtml(c.title)}</div>
+          <div class="clip-m">
+            <span class="src">${c.src}</span>
+            <span class="dot"></span><span>${c.time}</span>
+            <span class="dot"></span><span>${c.size}</span>
+            <span class="dot"></span><span>${c.kind}</span>
+          </div>
+          ${c.state==="run" ? `<div class="clip-prog"><i style="width:${c.prog}%"></i></div>` : ""}
+        </div>
+        <div class="stat ${m.cls}" data-id="${c.id}">${m.tx}${c.state==="run"?" "+c.prog+"%":""}</div>
+      </div>`;
+    }).join("");
+
+    // 空态分流
+    const isFiltered = filter!=="all";
+    $("#emptyAll").classList.toggle("on",   data.length===0 && !isFiltered);
+    $("#emptyFilter").classList.toggle("on",data.length===0 &&  isFiltered);
+    list.style.display = data.length===0 ? "none" : "";
+  }
+
+  function sourceIcon(src, px){
+    if(src==="Windows"){
+      return `<svg width="${px}" height="${px}" viewBox="0 0 22 22" fill="#3B7CE8"><rect x="1" y="1" width="9" height="9" rx="1.4"/><rect x="12" y="1" width="9" height="9" rx="1.4"/><rect x="1" y="12" width="9" height="9" rx="1.4"/><rect x="12" y="12" width="9" height="9" rx="1.4"/></svg>`;
+    }
+    return `<svg width="${px}" height="${px}" viewBox="0 0 22 22" fill="#5A6270"><path d="M15.6 11.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.8-3-.8c-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.7 2.3 2.9 2.2 1.2 0 1.6-.7 3-.7s1.8.7 3 .7c1.2 0 2-1.1 2.8-2.2.6-.9 1-1.7 1.2-2.1-2.7-1-2.4-4.9-.4-4zM13.4 5.2c.6-.8 1-1.9.9-3-.9 0-2 .6-2.7 1.4-.6.7-1.1 1.8-.9 2.9 1 .1 2-.5 2.7-1.3z"/></svg>`;
+  }
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+  }
+
+  let clipFilter = "all";
+  bindSeg("#segClip", b=>{
+    const mode = b.dataset.clip;
+    if(mode==="full"){ renderClips(clipFilter); }
+    else if(mode==="empty"){ renderClips("__none__"); }
+    else { renderClips("__nofiltermatch__"); }
+    $("#clipCount").textContent = mode==="full" ? "12" : "0";
+    $("#clipCount").classList.toggle("alert", mode!=="full");
+  });
+  $("#clipChips").addEventListener("click", e=>{
+    const b = e.target.closest(".chip"); if(!b) return;
+    $$(".chip", $("#clipChips")).forEach(x=>x.classList.remove("on"));
+    b.classList.add("on");
+    clipFilter = b.dataset.f;
+    renderClips(clipFilter);
+    // 同步控制条状态
+    $$("#segClip button").forEach(x=>x.classList.toggle("on", x.dataset.clip==="full"));
+    $("#clipCount").textContent = String(clips.filter(c=>{
+      if(clipFilter==="all") return true;
+      if(clipFilter==="text") return c.type==="text";
+      if(clipFilter==="image") return c.type==="image";
+      return c.state==="bad"||c.state==="idle";
+    }).length);
+    $("#clipCount").classList.remove("alert");
+  });
+  $("#clipSearch").addEventListener("input", e=>{
+    const q = e.target.value.trim();
+    const rows = $$(".clip", $("#clipList"));
+    let shown = 0;
+    rows.forEach(r=>{
+      const hit = !q || r.textContent.includes(q);
+      r.style.display = hit ? "" : "none";
+      if(hit) shown++;
+    });
+    const isFiltered = clipFilter!=="all" || !!q;
+    $("#emptyAll").classList.toggle("on",   shown===0 && !isFiltered);
+    $("#emptyFilter").classList.toggle("on",shown===0 &&  isFiltered);
+  });
+
+  // 药丸 = 重试按钮（失败 / 仅本机）
+  $("#clipList").addEventListener("click", e=>{
+    const p = e.target.closest(".stat"); if(!p) return;
+    const id = +p.dataset.id;
+    const item = clips.find(c=>c.id===id); if(!item) return;
+    if(item.state==="ok" || item.state==="run"){ toast("已复制"); return; }
+    item.state = "run"; item.prog = 30;
+    renderClips(clipFilter);
+    const tick = setInterval(()=>{
+      item.prog += 22;
+      if(item.prog >= 100){
+        clearInterval(tick);
+        item.state = "ok"; delete item.prog;
+        renderClips(clipFilter);
+        toast("已同步");
+      } else {
+        renderClips(clipFilter);
+      }
+    }, 260);
+  });
+
+  renderClips("all");
+
+  /* ── 明暗 ────────────────────────────── */
+  bindSeg("#segTheme", b=>{
+    document.documentElement.dataset.theme = b.dataset.theme;
+    $$("#segThemeSet button").forEach((x,i)=> x.classList.toggle("on", i===(b.dataset.theme==="light"?0:2)));
+  });
+  bindSeg("#segThemeSet", b=>{
+    const map = {"跟随系统":"light","浅色":"light","深色":"dark"};
+    document.documentElement.dataset.theme = map[b.textContent.trim()] || "light";
+    const t = document.documentElement.dataset.theme;
+    $$("#segTheme button").forEach(x=>x.classList.toggle("on", x.dataset.theme===t));
+  });
+
+  /* ── 设置页开关 ─────────────────────── */
+  $$("[data-toggle]").forEach(t=> t.addEventListener("click", ()=>{
+    t.classList.toggle("on");
+  }));
+  bindSeg("#segMode", null);
+
+})();
+</script>
+</body>
+</html>

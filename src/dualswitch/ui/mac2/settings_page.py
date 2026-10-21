@@ -1,0 +1,325 @@
+"""设置页（INTERACTIONS §4）：分组小标题 + 卡片，改动**即时生效**（直接写 config）。
+
+分组：通用 / 剪贴板 / 热键 / 显示器。键帽行点击进入录制态（Esc 取消）。
+存储上限是值显（当前用量 / 上限），不做滑杆 —— §4.1 是「值显」。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ...config import Config, ConfigError, from_dict, save as save_config
+from ...hotkey.base import HotkeyError, parse_hotkey
+from . import theme
+from .widgets import KeyCaps, Segmented, ToggleSwitch, label, settings_row
+
+
+# --------------------------------------------------------------------------- #
+# 键帽录制行
+# --------------------------------------------------------------------------- #
+class HotkeyKeycaps(QWidget):
+    """展示键帽；点击进入录制态，按下组合键即写入，Esc 取消。"""
+
+    captured = Signal(str)            # hotkey spec
+    recordingChanged = Signal(bool)
+
+    _SPECIAL = {
+        Qt.Key_Space: "space", Qt.Key_Return: "enter", Qt.Key_Enter: "enter",
+        Qt.Key_Tab: "tab", Qt.Key_Escape: "escape", Qt.Key_Backspace: "backspace",
+        Qt.Key_Delete: "delete", Qt.Key_Up: "up", Qt.Key_Down: "down",
+        Qt.Key_Left: "left", Qt.Key_Right: "right",
+    }
+
+    def __init__(self, spec: str, parent=None):
+        super().__init__(parent)
+        self._spec = spec
+        self._recording = False
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self._caps = KeyCaps(theme.keycap_labels(self._describe()))
+        self._hint = QLabel("请按下组合键…（Esc 取消）")
+        self._hint.setObjectName("setSub")
+        self._hint.setVisible(False)
+        lay.addWidget(self._caps)
+        lay.addWidget(self._hint)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.ClickFocus)
+
+    def _describe(self) -> str:
+        try:
+            return parse_hotkey(self._spec).describe()
+        except HotkeyError:
+            return self._spec
+
+    def spec(self) -> str:
+        return self._spec
+
+    def set_spec(self, spec: str) -> None:
+        self._spec = spec
+        self._caps.set_keys(theme.keycap_labels(self._describe()))
+
+    def is_recording(self) -> bool:
+        return self._recording
+
+    def stop_recording(self) -> None:
+        self._set_recording(False)
+
+    def _set_recording(self, on: bool) -> None:
+        if on == self._recording:
+            return
+        self._recording = on
+        self._caps.setVisible(not on)
+        self._hint.setVisible(on)
+        if on:
+            self.setFocus(Qt.MouseFocusReason)
+        self.recordingChanged.emit(on)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        self._set_recording(not self._recording)
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if not self._recording:
+            super().keyPressEvent(event)
+            return
+        key = event.key()
+        if key in (Qt.Key_Control, Qt.Key_Alt, Qt.Key_Shift, Qt.Key_Meta):
+            return
+        if key == Qt.Key_Escape:
+            self._set_recording(False)
+            return
+        mods = []
+        m = event.modifiers()
+        if m & Qt.ControlModifier:
+            mods.append("ctrl")
+        if m & Qt.AltModifier:
+            mods.append("alt")
+        if m & Qt.ShiftModifier:
+            mods.append("shift")
+        if m & Qt.MetaModifier:
+            mods.append("win")
+        token = self._SPECIAL.get(key)
+        if token is None:
+            text = event.text().strip().lower()
+            if len(text) == 1 and (text.isalnum() or text in "`-=[]\\;',./"):
+                token = text
+            elif Qt.Key_F1 <= key <= Qt.Key_F24:
+                token = f"f{key - Qt.Key_F1 + 1}"
+        if token is None:
+            return
+        spec = "+".join(mods + [token])
+        try:
+            parse_hotkey(spec)
+        except HotkeyError:
+            self._hint.setText("至少需要一个修饰键" if not mods else "这个组合不支持")
+            QTimer.singleShot(1300, lambda: self._hint.setText("请按下组合键…（Esc 取消）"))
+            return
+        self._spec = spec
+        self._set_recording(False)
+        self.set_spec(spec)
+        self.captured.emit(spec)
+
+
+# --------------------------------------------------------------------------- #
+# 设置页
+# --------------------------------------------------------------------------- #
+class SettingsPage(QWidget):
+    saved = Signal(object)            # Config
+    recordingChanged = Signal(bool)   # 热键录制中 → 调用方暂停全局热键
+    toastRequested = Signal(str)
+
+    def __init__(self, cfg: Config, config_file: Path, parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.config_file = Path(config_file)
+        self._build()
+
+    # ------------------------------------------------------------------ 版面
+    def _build(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(20, 18, 20, 24)
+        lay.setSpacing(20)
+
+        # ---- 通用 ----
+        self.seg_policy = Segmented(
+            [("standard", "标准"), ("force", "强制")],
+            getattr(self.cfg, "switch_policy", "standard"),
+        )
+        self.seg_policy.changed.connect(self._apply)
+        self.sw_notify = ToggleSwitch(self.cfg.notify)
+        self.sw_notify.clicked.connect(self._apply)
+        self.sw_tray = ToggleSwitch(self.cfg.tray)
+        self.sw_tray.clicked.connect(self._apply)
+        self.seg_appearance = Segmented(
+            [("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")],
+            getattr(self.cfg, "appearance", "system"),
+        )
+        self.seg_appearance.changed.connect(self._apply)
+        lay.addWidget(self._section("通用", [
+            settings_row("切换模式", "标准 = 先本地后请对端代发；强制 = 直接发 Set", self.seg_policy),
+            settings_row("切换完成通知", "切换成功后弹出系统通知", self.sw_notify),
+            settings_row("关闭窗口后仍在菜单栏运行", "mac 端默认开启", self.sw_tray),
+            settings_row("外观", "跟随系统 / 浅色 / 深色", self.seg_appearance),
+        ]))
+
+        # ---- 剪贴板 ----
+        self.sw_clip = ToggleSwitch(self.cfg.clipboard.enabled)
+        self.sw_clip.clicked.connect(self._apply)
+        self.sw_hover = ToggleSwitch(getattr(self.cfg.clipboard, "hover_preview", True))
+        self.sw_hover.clicked.connect(self._apply)
+        retention = getattr(self.cfg.clipboard, "retention_days", 30)
+        self.seg_retention = Segmented(
+            [("7", "7 天"), ("30", "30 天"), ("0", "不限")],
+            str(retention),
+        )
+        self.seg_retention.changed.connect(self._apply)
+        self.val_storage = label("", "setVal")
+        self._refresh_storage()
+        lay.addWidget(self._section("剪贴板", [
+            settings_row("启用跨端剪贴板", "文字与图片自动同步到另一台", self.sw_clip),
+            settings_row("悬浮预览", "鼠标悬浮在缩略图上时展开预览窗", self.sw_hover),
+            settings_row("保留历史", "超期条目自动清理", self.seg_retention),
+            settings_row("存储上限", "超限后丢弃最旧的记录", self.val_storage),
+        ]))
+
+        # ---- 热键 ----
+        self.hk_main = HotkeyKeycaps(self.cfg.hotkey)
+        self.hk_main.captured.connect(lambda spec: self._apply(hotkey=spec))
+        self.hk_main.recordingChanged.connect(self.recordingChanged)
+        self.hk_clip = HotkeyKeycaps(getattr(self.cfg, "clipboard_hotkey", "cmd+shift+v"))
+        self.hk_clip.captured.connect(lambda spec: self._apply(clipboard_hotkey=spec))
+        self.hk_clip.recordingChanged.connect(self.recordingChanged)
+        self.sw_strict = ToggleSwitch("ralt" in parse_hotkey(self.cfg.hotkey).modifiers)
+        self.sw_strict.clicked.connect(self._apply)
+        lay.addWidget(self._section("热键", [
+            settings_row("全局热键", "点击键帽后按下新组合键", self.hk_main),
+            settings_row("剪贴板热键", "呼出剪贴板页", self.hk_clip),
+            settings_row("只认右 Option", "打开后左 Option 不触发", self.sw_strict),
+        ]))
+
+        # ---- 显示器 ----
+        val_match = label(self.cfg.monitor_match or "（自动取第一台）", "setVal")
+        val_backend = label(self.cfg.ddc_backend, "setVal")
+        lay.addWidget(self._section("显示器", [
+            settings_row("显示器匹配", "按 m1ddc 列出的显示器名匹配", val_match),
+            settings_row("DDC 后端", "auto 在 mac 上即 m1ddc", val_backend),
+        ]))
+
+        lay.addStretch(1)
+        scroll.setWidget(host)
+        outer.addWidget(scroll, 1)
+
+    @staticmethod
+    def _section(title: str, rows: list[QWidget]) -> QWidget:
+        wrap = QWidget()
+        col = QVBoxLayout(wrap)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(8)
+        head = label(title, "setSec")
+        head.setContentsMargins(4, 0, 0, 0)
+        col.addWidget(head)
+        card = QFrame()
+        card.setObjectName("setCard")
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(0, 0, 0, 0)
+        card_lay.setSpacing(0)
+        for i, row in enumerate(rows):
+            if i:
+                sep = QFrame()
+                sep.setObjectName("setSep")
+                sep.setFixedHeight(1)
+                card_lay.addWidget(sep)
+            card_lay.addWidget(row)
+        col.addWidget(card)
+        return wrap
+
+    def _refresh_storage(self) -> None:
+        used = 0.0
+        try:
+            for rec in getattr(self.engine_records(), "__iter__", lambda: [])():
+                used += getattr(rec, "size", 0) or 0
+        except Exception:  # noqa: BLE001
+            pass
+        limit = getattr(self.cfg.clipboard, "storage_limit_mb", 200)
+        self.val_storage.setText(f"当前 {used / 1048576:.1f} MB / {limit} MB")
+
+    def set_engine_records(self, records) -> None:  # noqa: ANN001
+        self._records = records
+        self._refresh_storage()
+
+    def engine_records(self):  # noqa: ANN202
+        return getattr(self, "_records", [])
+
+    # ------------------------------------------------------------------ 保存
+    @staticmethod
+    def _with_strict_modifier(spec: str, strict: bool) -> str:
+        tokens = [t for t in spec.replace(" ", "").split("+") if t]
+        if strict:
+            return "+".join("ralt" if t.lower() in ("alt", "option", "opt") else t for t in tokens)
+        return "+".join("alt" if t.lower() in ("ralt", "rightalt", "right_option") else t for t in tokens)
+
+    def _apply(self, _checked: bool = False, **overrides) -> None:
+        """任一控件变化 → 拼 dict → 校验 → 落盘 → saved(cfg)。"""
+        self.hk_main.stop_recording()
+        self.hk_clip.stop_recording()
+        try:
+            hotkey = overrides.get(
+                "hotkey",
+                self._with_strict_modifier(self.hk_main.spec(), self.sw_strict.isChecked()),
+            )
+            parse_hotkey(hotkey)
+            data = self.cfg.to_dict()
+            data.update(
+                switch_policy=self.seg_policy.value(),
+                notify=self.sw_notify.isChecked(),
+                tray=self.sw_tray.isChecked(),
+                appearance=self.seg_appearance.value(),
+                hotkey=hotkey,
+                hotkey_backend="auto",
+                clipboard_hotkey=overrides.get("clipboard_hotkey", self.hk_clip.spec()),
+            )
+            clip = dict(data.get("clipboard") or {})
+            clip.update(
+                enabled=self.sw_clip.isChecked(),
+                hover_preview=self.sw_hover.isChecked(),
+                retention_days=int(self.seg_retention.value()),
+            )
+            data["clipboard"] = clip
+            validated = from_dict(data)
+            save_config(validated, self.config_file)
+        except (ConfigError, HotkeyError, ValueError) as exc:
+            self.toastRequested.emit(f"保存失败：{exc}")
+            return
+        self.cfg = validated
+        self.saved.emit(validated)
+
+    def stop_recording(self) -> None:
+        self.hk_main.stop_recording()
+        self.hk_clip.stop_recording()
+
+    def changeEvent(self, event):  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.ActivationChange and not self.isActiveWindow():
+            self.stop_recording()
