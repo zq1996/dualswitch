@@ -691,6 +691,62 @@ def cmd_ui(args) -> int:
                 pass
 
 
+def cmd_ui2(args) -> int:
+    """v2 图形界面（宽窗口 + 侧栏三页）—— 与 `ui` 并行的新树，验收后旧树才删。"""
+    from .ui import available as ui_available
+
+    if not ui_available():
+        print("[FAIL] 未安装 PySide6，无法启动图形界面。")
+        print("       安装：pip install -e \".[gui]\"")
+        return 2
+
+    cfg, cfg_file = _load_config(args, create=True)
+    log_file = _setup_logging(cfg, console=bool(getattr(args, "console", False)))
+    log.info("=" * 62)
+    log.info("dualswitch %s v2 图形界面启动（ui2）", __version__)
+    log.info("可执行文件：%s", _exe_stamp())
+    log.info("日志：%s", log_file)
+    winenv.log_environment(log)
+
+    try:
+        backend = create_backend(cfg)
+    except Exception as exc:
+        log.error("初始化 DDC 后端失败：%s", exc)
+        print(f"[FAIL] 初始化 DDC 后端失败：{exc}")
+        return 2
+
+    controller = SwitchController(cfg, backend)
+
+    warning: str | None = None
+    hotkey = None
+    try:
+        hotkey = create_hotkey(cfg, controller.trigger)
+        hotkey.start()
+        log.info("热键已启用：%s（后端 %s）", hotkey.describe(), hotkey.name)
+    except HotkeyError as exc:
+        warning = str(exc)
+        log.error("热键注册失败：%s", exc)
+        hotkey = None
+
+    controller.start()
+    clip_engine = _start_clip_engine(cfg, cfg_file, controller, backend)
+
+    from .ui.mac2.runner import run_ui2
+
+    try:
+        return run_ui2(cfg, cfg_file, log_file, backend, controller, hotkey, warning,
+                       clip_engine=clip_engine)
+    finally:
+        if clip_engine is not None:
+            clip_engine.stop()
+        controller.stop()
+        if hotkey is not None:
+            try:
+                hotkey.stop()
+            except Exception:  # pragma: no cover
+                pass
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", default=argparse.SUPPRESS, help="配置文件路径")
@@ -715,6 +771,12 @@ def build_parser() -> argparse.ArgumentParser:
     ui_p.add_argument("--console", action="store_true", help="把日志同时输出到控制台")
     ui_p.add_argument("--log-level", default=None, help="DEBUG/INFO/WARNING/ERROR")
     ui_p.set_defaults(func=cmd_ui)
+
+    ui2_p = sub.add_parser("ui2", help="v2 图形界面（宽窗口 + 侧栏导航）", parents=[common])
+    ui2_p.add_argument("--dry-run", action="store_true", help="只记录，不真正发送 Set")
+    ui2_p.add_argument("--console", action="store_true", help="把日志同时输出到控制台")
+    ui2_p.add_argument("--log-level", default=None, help="DEBUG/INFO/WARNING/ERROR")
+    ui2_p.set_defaults(func=cmd_ui2)
 
     sw_p = sub.add_parser("switch", help="立刻切换一次", parents=[common])
     sw_p.add_argument("--to", choices=["other", "windows", "mac", "toggle"], default="other")

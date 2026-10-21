@@ -301,10 +301,19 @@ class SwitchController:
         # 先读剪贴板再切屏（契约 2）：钩子只入队，实测 <1ms，不影响 200ms 目标
         self._run_before_switch(source, target)
 
+        # 切换模式（设置页「切换模式」）：standard = 本地优先、失败才请对端；
+        # force = 跳过远端代发，直接本机发 Set（用户明确要「不绕路」）。
+        policy_force = getattr(self.cfg, "switch_policy", "standard") == "force"
+
         # 从没枚举到过外接屏：本地肯定打不到这块屏，先看对端能不能代发。
         # 对端也没有（没连上 / 版本太旧）才说清楚失败原因 ——
         # m1ddc 的原文 "Could not find a suitable external display" 用户看不懂。
-        if forced_target is None and self._source_checked and not self._ever_seen_monitor:
+        if (
+            forced_target is None
+            and self._source_checked
+            and not self._ever_seen_monitor
+            and not policy_force
+        ):
             if self._try_remote(result, target, value):
                 return result
             result.error = "未检测到外接显示器（可能没接线，或画面在 Windows 那台）"
@@ -318,7 +327,9 @@ class SwitchController:
             result.set_call_ms = (self._clock() - t_send) * 1000.0
         except DDCError as exc:
             # 本地打不到（屏在另一台）→ 请对端代发一次；成功就不再报错
-            if self._try_remote(result, target, value, local_error=str(exc)):
+            if not policy_force and self._try_remote(
+                result, target, value, local_error=str(exc)
+            ):
                 return result
             result.set_call_ms = (self._clock() - t_send) * 1000.0
             result.error = str(exc)

@@ -308,3 +308,28 @@ def test_mac_unknown_state_asks_windows(qt_app):
     win.set_remote_available(True)
     assert win.hero.button.isEnabled() is True
     assert "从 Windows 切过来" in win.hero.btn_text.text()
+
+
+# --------------------------------------------------------------------------- #
+# 设置页「切换模式」= 强制：跳过远端代发，直接发 Set
+# --------------------------------------------------------------------------- #
+def test_switch_policy_force_skips_peer_on_local_failure():
+    backend = MockBackend(current=17, fail_set=True)
+    ctl = SwitchController(make_cfg(switch_policy="force"), backend)
+    called: list[int] = []
+    ctl.remote_switch = lambda value: (called.append(value) or (True, ""))
+    result = ctl.switch_now()
+    assert result.ok is False
+    assert result.via == "local"
+    assert called == [], "强制模式不该再请对端代发"
+
+
+def test_switch_policy_force_sends_set_when_monitor_never_seen():
+    backend = MockBackend(current=17, monitors=[])
+    ctl = SwitchController(make_cfg(switch_policy="force"), backend)
+    ctl.note_scan([])
+    ctl.remote_switch = lambda value: (True, "")
+    result = ctl.switch_now()
+    # 不再走「从未见过 → 请对端」的分支，而是直接本机发一次 Set
+    assert backend.set_calls, "强制模式必须真的发 Set"
+    assert result.via == "local"

@@ -58,6 +58,10 @@ done
     --hidden-import "dualswitch.ui.chrome.mac" \
     --hidden-import "dualswitch.ui.chrome.win" \
     --hidden-import "dualswitch.ui.mac" \
+    --hidden-import "dualswitch.ui.mac2" \
+    --hidden-import "dualswitch.ui.mac2.runner" \
+    --hidden-import "dualswitch.ui.mac2.iconlib" \
+    --hidden-import "PySide6.QtSvg" \
     "${SHIM_ARGS[@]}" \
     --add-data "$ROOT/src/dualswitch/ui/assets:dualswitch/ui/assets" \
     "${ICON_ARGS[@]}" \

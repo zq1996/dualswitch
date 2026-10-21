@@ -93,6 +93,10 @@ class ClipboardConfig:
     max_image_mb: int = 32
     record_limit: int = 10             # 内存里保留的记录条数，退出即清
     debug_plain: bool = False          # 跳过加密（排障用，写配置时记 warning）
+    # ---- v2 设置页（INTERACTIONS §4.1，2026-10-21 新增，旧配置文件默认值兜底）----
+    hover_preview: bool = True         # 缩略图悬停 450ms 弹预览窗
+    retention_days: int = 30           # 保留历史：7 / 30 / 0=不限
+    storage_limit_mb: int = 200        # 存储上限（值显）
 
     def effective_peer_port(self) -> int:
         return int(self.peer_port) or int(self.port)
@@ -130,6 +134,11 @@ class Config:
     tray: bool = True
     notify: bool = True
     log_level: str = "INFO"
+
+    # ---- v2 设置页（INTERACTIONS §4.1 / §0.2，2026-10-21 新增）----
+    switch_policy: str = "standard"    # standard: 先本地后请对端代发；force: 直接发 Set
+    appearance: str = "system"         # system | light | dark（§0.2 明暗主题）
+    clipboard_hotkey: str = "cmd+shift+v"   # 呼出剪贴板页（键帽 ⌘⇧V）
 
     # ---- 剪贴板同步 ----
     clipboard: ClipboardConfig = field(default_factory=ClipboardConfig)
@@ -285,6 +294,10 @@ def _validate_clipboard(cb: ClipboardConfig) -> None:
         raise ConfigError("clipboard.max_image_mb 必须在 1..128 之间")
     if not (1 <= int(cb.record_limit) <= 100):
         raise ConfigError("clipboard.record_limit 必须在 1..100 之间")
+    if int(cb.retention_days) < 0:
+        raise ConfigError("clipboard.retention_days 不能为负（0 = 不限）")
+    if not (1 <= int(cb.storage_limit_mb) <= 4096):
+        raise ConfigError("clipboard.storage_limit_mb 必须在 1..4096 之间")
     if cb.psk and not _is_hex(cb.psk):
         raise ConfigError("clipboard.psk 必须是十六进制字符串")
 
@@ -325,6 +338,10 @@ def validate(cfg: Config) -> None:
         raise ConfigError("switch_mode 只能是 other / toggle")
     if cfg.hotkey_backend not in ("auto", "register", "hook"):
         raise ConfigError("hotkey_backend 只能是 auto / register / hook")
+    if cfg.switch_policy not in ("standard", "force"):
+        raise ConfigError("switch_policy 只能是 standard / force")
+    if cfg.appearance not in ("system", "light", "dark"):
+        raise ConfigError("appearance 只能是 system / light / dark")
     if cfg.ddc_backend not in ("auto", "dxva2", "m1ddc", "command", "mock"):
         raise ConfigError("ddc_backend 只能是 auto / dxva2 / m1ddc / command / mock")
     if cfg.ddc_backend == "command" and "{value}" not in " ".join(cfg.command_template):
@@ -343,6 +360,10 @@ def validate(cfg: Config) -> None:
         parse_hotkey(cfg.hotkey)
     except HotkeyError as exc:
         raise ConfigError(f"hotkey 无法解析: {exc}") from exc
+    try:
+        parse_hotkey(cfg.clipboard_hotkey)
+    except HotkeyError as exc:
+        raise ConfigError(f"clipboard_hotkey 无法解析: {exc}") from exc
 
 
 # --------------------------------------------------------------------------- #

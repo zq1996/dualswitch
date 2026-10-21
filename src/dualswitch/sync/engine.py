@@ -115,6 +115,11 @@ class SyncEngine:
         self._last_applied_digest = ""
         self._last_applied_ts = float(self._clock())
 
+        # 暂停记录（剪贴板页 ⏸）：只停「本机采集」，收发与列表都照常。
+        # 暂停期间照常 poll 后端并丢弃结果 —— 否则恢复第一次 poll 会把暂停期间
+        # 复制的内容当成新内容补发出去。
+        self._paused = False
+
         self.stats = {"sent": 0, "received": 0, "dropped": 0, "failed": 0}
         self.last_error = ""
         self.last_sync_at = 0.0
@@ -376,6 +381,15 @@ class SyncEngine:
     def item(self, record_id: str) -> ClipItem | None:
         return self._items.get(record_id)
 
+    def set_paused(self, paused: bool) -> None:
+        """暂停 / 恢复**本机采集**（不关同步、不影响接收对端内容）。"""
+        self._paused = bool(paused)
+        log.info("剪贴板记录已%s", "暂停" if self._paused else "恢复")
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
     def repush(self, record_id: str) -> None:
         """重发一条（面板上的「重发」/失败药丸）。"""
         with self._lock:
@@ -431,6 +445,7 @@ class SyncEngine:
                 self._pump_local()
                 self._flush_manual()
                 self._expire_pending()
+                self._expire_old()
             except Exception:  # noqa: BLE001 - worker 挂了等于同步死了，必须兜住
                 log.exception("同步 worker 出现未捕获异常")
 
@@ -443,6 +458,10 @@ class SyncEngine:
             log.debug("读剪贴板失败：%s", exc)
             return
         if item is None:
+            return
+        if self._paused:
+            # 消费掉 changeCount，避免恢复后把暂停期间复制的内容补发出去
+            log.debug("已暂停记录，丢弃一条本机剪贴板内容")
             return
         self._send(item)
 
@@ -508,6 +527,32 @@ class SyncEngine:
             self._pending[record_id] = self._clock()
             self._set_state(record_id, "pend", detail="重发中")
             self.stats["sent"] += 1
+
+    def _expire_old(self) -> None:
+        """按「保留历史」设置清理过期条目（设置页 7 天 / 30 天 / 不限）。
+
+        每 60 秒最多扫一次：记录数量本来就少（record_limit 上限），全量比时间戳
+        比引入索引简单得多。保留 0 天 = 不限，直接跳过。
+        """
+        days = int(getattr(self.cfg, "retention_days", 0) or 0)
+        if days <= 0:
+            return
+        now = self._clock()
+        if now - getattr(self, "_last_expire_at", 0.0) < 60.0:
+            return
+        self._last_expire_at = now
+        deadline = now - days * 86400
+        with self._lock:
+            stale = [r.id for r in self._records if r.ts < deadline]
+            if not stale:
+                return
+            for rid in stale:
+                self._items.pop(rid, None)
+                self._pending.pop(rid, None)
+            keep = [r for r in self._records if r.ts >= deadline]
+            self._records.clear()
+            self._records.extend(keep)
+        log.info("按保留 %d 天清理了 %d 条过期记录", days, len(stale))
 
     def _expire_pending(self) -> None:
         now = self._clock()

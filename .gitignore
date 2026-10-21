@@ -22,3 +22,6 @@ config.local.json
 .idea/
 .vscode/
 .DS_Store
+
+# v2 界面出图（tools/shots_v2.py 的产物，随时可重生成）
+outputs/
