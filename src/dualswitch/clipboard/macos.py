@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import html as _html
 import logging
+import os
 import re
 import threading
 import time
@@ -37,6 +38,7 @@ from .base import (
     SKIP_MARKERS_MACOS,
     ClipItem,
     ClipboardError,
+    make_file,
     make_image,
     make_text,
 )
@@ -102,8 +104,9 @@ class MacClipboardBackend:
                 return None
 
             self._last_count = count
+            app_name, app_id = self._frontmost_app()
             try:
-                item = self._read()
+                item = self._read(app=app_name, app_id=app_id)
             except Exception as exc:  # noqa: BLE001 - 剪贴板内容千奇百怪，不能崩
                 log.warning("读取剪贴板失败：%s", exc)
                 return None
@@ -116,7 +119,7 @@ class MacClipboardBackend:
             self._last_kind = item.kind
             return item
 
-    def _read(self) -> ClipItem | None:
+    def _read(self, app: str = "", app_id: str = "") -> ClipItem | None:
         from AppKit import (
             NSPasteboardTypeHTML,
             NSPasteboardTypePNG,
@@ -144,14 +147,32 @@ class MacClipboardBackend:
 
         png = None
         width = height = 0
-        if NSPasteboardTypePNG in types:
-            data = self._pb.dataForType_(NSPasteboardTypePNG)
-            if data is not None:
-                png = bytes(data)
-        elif NSPasteboardTypeTIFF in types:
-            # TIFF / DIB 一律重编码成 PNG，上层只认 PNG
-            png = self._tiff_to_png(self._pb.dataForType_(NSPasteboardTypeTIFF))
-
+        path = ""
+        # 先看是不是「访达里复制的文件」：
+        #   · 图片文件 → 读文件生成预览图（**优先于**粘贴板里的位图 —— Finder 会顺手
+        #     塞一张文件图标的 TIFF，直接用就是一张空白图，这就是「复制图片给我 PNG 空白」）
+        #   · 非图片文件 → 不要图标位图，按文本（路径）处理，文件本身不跨端同步
+        file_path = self._file_url_path(types)
+        if file_path and not os.path.exists(file_path):
+            # 解析出来但文件已经不在（删除/移动/引用失效）→ 当普通文本处理，
+            # 别再生成一张「打不开的文件卡」
+            log.debug("file-url 指向的文件不存在，按文本处理：%s", file_path)
+            file_path = ""
+        if file_path:
+            path = file_path
+            # 图片文件才抽缩略图；其它文件不读内容，只要文件名 + 父目录 + 大小
+            if self._looks_like_image_file(file_path):
+                built = self._preview_of_image_file(file_path)
+                if built is not None:
+                    png, width, height = built
+        else:
+            if NSPasteboardTypePNG in types:
+                data = self._pb.dataForType_(NSPasteboardTypePNG)
+                if data is not None:
+                    png = bytes(data)
+            elif NSPasteboardTypeTIFF in types:
+                # TIFF / DIB 一律重编码成 PNG，上层只认 PNG
+                png = self._tiff_to_png(self._pb.dataForType_(NSPasteboardTypeTIFF))
         if png:
             png, width, height = self._normalize_png(png)
 
@@ -162,17 +183,173 @@ class MacClipboardBackend:
         if not text and markup:
             text = _plain_from_html(markup)   # 只在没有纯文本时兜底
 
+        # 访达里复制的**文件**：文件名当标题，路径/大小给文件卡用（不上网）
+        if path:
+            return self._file_item(path, png, width, height, app, app_id)
+
         if png:
             item = make_image(png, width, height, text=text or None, source=self.host)
             if item is not None:
-                return replace(item, ts=time.time())
+                return replace(item, ts=time.time(), app=app, app_id=app_id)
             # 图片超限：退化只传文字（`make_image` 已记 warning）
             if not text:
                 return None
         if text:
             item = make_text(text, html=markup, source=self.host)
-            return replace(item, ts=time.time())
+            return replace(item, ts=time.time(), app=app, app_id=app_id)
         return None
+
+    def _file_item(self, path: str, png, width: int, height: int, app: str, app_id: str):  # noqa: ANN001, ANN202
+        """把本机文件包成 ClipItem（图片文件带 png，其它只有文件名）。"""
+        size = 0
+        try:
+            size = int(os.path.getsize(path))
+        except OSError as exc:
+            log.debug("读文件大小失败（%s）：%s", path, exc)
+        item = make_file(
+            path, png=png, width=width, height=height,
+            source=self.host, app=app, app_id=app_id, size=size,
+        )
+        if item is None and png:
+            # 图片超限 → 退化成「只有文件名」的文件记录（`make_image` 已记 warning）
+            item = make_file(path, source=self.host, app=app, app_id=app_id, size=size)
+        return replace(item, ts=time.time()) if item is not None else None
+
+    # ------------------------------------------------------------------ 来源应用
+    @staticmethod
+    def _frontmost_app() -> tuple[str, str]:
+        """(显示名, bundle id)。截图时系统前台是「截屏」面板，统一叫「截图」。"""
+        try:
+            from AppKit import NSWorkspace
+
+            app = NSWorkspace.sharedWorkspace().frontmostApplication()
+            if app is None:
+                return "", ""
+            name = str(app.localizedName() or "")
+            bid = str(app.bundleIdentifier() or "")
+            if bid in ("com.apple.screencaptureui", "com.apple.ScreenCaptureUI"):
+                return "截图", bid
+            return name, bid
+        except Exception as exc:  # noqa: BLE001 - 取不到就当没有来源应用
+            log.debug("读取前台应用失败：%s", exc)
+            return "", ""
+
+    # ------------------------------------------------------------------ 图片文件
+    IMAGE_FILE_EXTS = {
+        ".png", ".jpg", ".jpeg", ".heic", ".heif", ".gif", ".webp",
+        ".tif", ".tiff", ".bmp", ".ico", ".jfif",
+    }
+    PREVIEW_MAX_PX = 1600          # 预览图最长边（够看清，又不会把 payload 撑爆）
+
+    def _file_url_path(self, types: list[str]) -> str:
+        """粘贴板里的 `public.file-url` → 本地路径（不是单文件就返回空）。
+
+        ⚠️ 访达有时给的不是普通路径，而是**文件引用 URL**（`file:///.file/id=6571367.29…`）：
+        直接 `urlparse` 会拿到 `/.file/id=6571367.29…`，既打不开也没有扩展名
+        （用户 2026-10-21 看到的「id=6571367.29202959 / .file」就是它）。
+        必须过 NSURL：`filePathURL()` 会按 inode 解析出真实路径。
+        """
+        key = "public.file-url"
+        if key not in types:
+            return ""
+        try:
+            raw = self._pb.stringForType_(key)
+            if not raw:
+                return ""
+            text = str(raw).strip()
+            if not text or "\n" in text:      # 多选文件按文本处理，别猜
+                return ""
+
+            path = self._nsurl_file_path(text)
+            if path is None:
+                # pyobjc 不可用时的兜底：普通 file:// URL 自己解
+                from urllib.parse import unquote, urlparse
+
+                parsed = urlparse(text)
+                if parsed.scheme != "file":
+                    return ""
+                path = unquote(parsed.path)
+            return path or ""
+        except Exception as exc:  # noqa: BLE001
+            log.debug("解析 file-url 失败：%s", exc)
+            return ""
+
+    @staticmethod
+    def _nsurl_file_path(text: str) -> str | None:
+        """用 NSURL 解析文件 URL（含 `/.file/id=…` 引用型）→ 真实路径。"""
+        try:
+            from Foundation import NSURL
+        except Exception:  # noqa: BLE001 - 非 mac / 没装 pyobjc
+            return None
+        url = NSURL.URLWithString_(text)
+        if url is None or not url.isFileURL():
+            return None
+        if url.isFileReferenceURL():
+            resolved = url.filePathURL()
+            if resolved is not None:
+                url = resolved
+        return str(url.path() or "")
+
+    def _looks_like_image_file(self, path: str) -> bool:
+        return path.lower().endswith(tuple(self.IMAGE_FILE_EXTS))
+
+    def _image_from_file_url(self, types: list[str]):  # noqa: ANN202
+        """粘贴板里是图片文件时，读文件生成预览图 → (png, w, h, 原路径)。"""
+        path = self._file_url_path(types)
+        if not path or not self._looks_like_image_file(path):
+            return None
+        built = self._preview_of_image_file(path)
+        if built is None:
+            return None
+        png, width, height = built
+        return png, width, height, path
+
+    def _preview_of_image_file(self, path: str):  # noqa: ANN202
+        """用 ImageIO 抽缩略图（不依赖窗口/绘图上下文，worker 线程安全）。
+
+        访达里复制的图片只有 file-url，没有像素数据；这里把文件读成一张
+        最长边 ≤1600 的 PNG 当预览图，列表/预览窗看到的就是图片内容本身。
+        返回 (png, 原始宽, 原始高)。
+        """
+        if not os.path.exists(path):
+            return None
+        try:
+            from AppKit import NSBitmapImageFileTypePNG, NSBitmapImageRep
+            from Foundation import NSURL
+            from Quartz import (
+                CGImageSourceCopyPropertiesAtIndex,
+                CGImageSourceCreateThumbnailAtIndex,
+                CGImageSourceCreateWithURL,
+                kCGImagePropertyPixelHeight,
+                kCGImagePropertyPixelWidth,
+                kCGImageSourceCreateThumbnailFromImageAlways,
+                kCGImageSourceCreateThumbnailWithTransform,
+                kCGImageSourceThumbnailMaxPixelSize,
+            )
+        except Exception as exc:  # noqa: BLE001 - pyobjc 缺 Quartz 时降级
+            log.debug("ImageIO 不可用：%s", exc)
+            return None
+
+        url = NSURL.fileURLWithPath_(path)
+        source = CGImageSourceCreateWithURL(url, None)
+        if source is None:
+            return None
+        props = CGImageSourceCopyPropertiesAtIndex(source, 0, None) or {}
+        width = int(props.get(kCGImagePropertyPixelWidth) or 0)
+        height = int(props.get(kCGImagePropertyPixelHeight) or 0)
+        options = {
+            kCGImageSourceCreateThumbnailFromImageAlways: True,
+            kCGImageSourceCreateThumbnailWithTransform: True,
+            kCGImageSourceThumbnailMaxPixelSize: self.PREVIEW_MAX_PX,
+        }
+        cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options)
+        if cg is None:
+            return None
+        rep = NSBitmapImageRep.alloc().initWithCGImage_(cg)
+        data = rep.representationUsingType_properties_(NSBitmapImageFileTypePNG, {})
+        if data is None:
+            return None
+        return bytes(data), width or int(cg.width()), height or int(cg.height())
 
     @staticmethod
     def _tiff_to_png(data) -> bytes | None:
@@ -217,6 +394,7 @@ class MacClipboardBackend:
     def write(self, item: ClipItem) -> None:
         """写入系统剪贴板。文本带纯文本，图片同时带 PNG 与 TIFF。"""
         from AppKit import (
+            NSPasteboardTypeFileURL,
             NSPasteboardTypeHTML,
             NSPasteboardTypePNG,
             NSPasteboardTypeString,
@@ -224,9 +402,16 @@ class MacClipboardBackend:
         )
         from Foundation import NSData
 
+        # 文件记录：写回「文件 URL」，这样在访达里能直接粘贴出文件本身；
+        # 纯文本只放文件名，粘到输入框里毫无意义，所以不写 String 类型。
+        file_path = getattr(item, "path", "") or ""
+        write_file = bool(file_path) and os.path.exists(file_path)
+
         types: list[str] = []
-        if item.text:
+        if item.text and not write_file:
             types.append(NSPasteboardTypeString)
+        if write_file:
+            types.append(NSPasteboardTypeFileURL)
         if item.html:
             types.append(NSPasteboardTypeHTML)
         if item.image is not None:
@@ -242,7 +427,14 @@ class MacClipboardBackend:
                     raise ClipboardError("声明剪贴板类型失败")
 
                 ok = True
-                if item.text:
+                if write_file:
+                    from AppKit import NSURL
+
+                    url = NSURL.fileURLWithPath_(file_path)
+                    ok = bool(
+                        self._pb.setString_forType_(url.absoluteString(), NSPasteboardTypeFileURL)
+                    ) and ok
+                if item.text and not write_file:
                     ok = bool(self._pb.setString_forType_(item.text, NSPasteboardTypeString)) and ok
                 if item.html:
                     ok = bool(self._pb.setString_forType_(item.html, NSPasteboardTypeHTML)) and ok

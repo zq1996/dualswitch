@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal, Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
@@ -90,6 +91,12 @@ class ClipItem:
     ts: float = field(default_factory=time.time)
     source: str = ""          # 来源主机：windows / mac / remote
     digest: str = ""          # 空则由 __post_init__ 计算
+    # ---- 来源应用（可选，v2 剪贴板列表要显示「Mac · 微信」）----
+    app: str = ""             # 应用显示名（截图 = "截图"）
+    app_id: str = ""          # 应用 bundle id（本机取图标用；跨端传了也无妨）
+    # ---- 文件来源（可选）----
+    path: str = ""            # 来自本机文件的原始路径；**只在本机有意义，不上网**
+    file_size: int = 0        # 文件本身的字节数（列表显示用；文件不同步，也不参与容量统计）
 
     def __post_init__(self) -> None:
         if not self.digest:
@@ -116,6 +123,10 @@ class ClipItem:
         if self.image is not None:
             h.update(b"\x00i:")
             h.update(self.image.png)
+        if self.path:
+            # 同名文件在不同目录是两条内容，指纹必须带上路径
+            h.update(b"\x00p:")
+            h.update(self.path.encode("utf-8", "replace"))
         return h.hexdigest()
 
     # ---- 诊断用 ----
@@ -142,6 +153,33 @@ def make_text(text: str, *, html: str | None = None, source: str = "") -> ClipIt
         log.warning("文本过大（%d 字节），截断到 %d", len(raw), MAX_TEXT_BYTES)
         text = raw[:MAX_TEXT_BYTES].decode("utf-8", "ignore")
     return ClipItem(kind="text", text=text, html=html, source=source)
+
+
+def make_file(
+    path: str,
+    *,
+    png: bytes | None = None,
+    width: int = 0,
+    height: int = 0,
+    source: str = "",
+    app: str = "",
+    app_id: str = "",
+    size: int = 0,
+) -> ClipItem | None:
+    """访达里复制的**文件**包成 ClipItem。
+
+    · 图片文件（传了 `png`）→ `kind="mixed"`：图片内容照常跨端，`text` 是文件名；
+    · 其它文件 → `kind="text"`：`text` 是文件名，**不上网**（文件本身同步不了），
+      引擎见到 `path` 且没有图片就只在本机留一条。
+    """
+    name = os.path.basename(path) or path
+    if png:
+        item = make_image(png, width, height, text=name, source=source)
+    else:
+        item = make_text(name, source=source)
+    if item is None:
+        return None
+    return replace(item, path=path, file_size=size, app=app, app_id=app_id)
 
 
 def make_image(png: bytes, width: int = 0, height: int = 0, *, text: str | None = None,

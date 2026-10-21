@@ -65,6 +65,10 @@ class ClipRecord:
     progress: float = 0.0
     size: int = 0
     detail: str = ""
+    app: str = ""                # 来源应用名（截图 = "截图"）
+    app_id: str = ""             # 来源应用 bundle id
+    path: str = ""               # 来自本机文件时的原始路径（文件卡用）
+    file_size: int = 0           # 文件本身的字节数（列表显示用；size 仍是入库字节数）
 
     @property
     def is_image(self) -> bool:
@@ -470,6 +474,12 @@ class SyncEngine:
             self.stats["dropped"] += 1
             log.debug("丢弃自写回弹（%s）", item.digest[:8])
             return
+        # 访达里复制的**文件**：文件本身同步不过去（契约 P2），只在本机留一条。
+        # 图片文件带 png，按图片照常同步（内容能过去，文件身份留在本机）。
+        if item.path and item.image is None:
+            self._add(item, source="local", state="local", detail="文件本身不跨端同步")
+            log.debug("本机文件记录（不发送）：%s", item.describe())
+            return
         last = self._sent.get(item.digest)
         if not force and last is not None and self._clock() - last < RESEND_WINDOW_S:
             self.stats["dropped"] += 1
@@ -657,19 +667,50 @@ class SyncEngine:
             progress=1.0 if state == "ok" else 0.0,
             size=item.wire_size(),
             detail=detail,
+            app=item.app,
+            app_id=item.app_id,
+            path=item.path,
+            file_size=item.file_size,
         )
         with self._lock:
-            # 同一条内容重复出现时更新状态，不要堆两行
-            for existing in self._records:
-                if existing.id == rec.id:
-                    existing.state = state
-                    existing.detail = detail
-                    existing.ts = max(existing.ts, rec.ts)
-                    self._items[rec.id] = item
-                    return existing
+            # 同一条内容重复出现时**不新增行**：更新状态 + 时间，并提到最前面
+            # （剪贴板列表按「最近用过」排序，重复复制应该往顶上走，而不是留在原位）。
+            match = next((r for r in self._records if r.id == rec.id), None)
+            if match is not None:
+                match.state = state
+                match.detail = detail
+                match.ts = max(match.ts, rec.ts)
+                match.app = match.app or rec.app
+                match.app_id = match.app_id or rec.app_id
+                self._items[rec.id] = item
+                try:
+                    self._records.remove(match)
+                except ValueError:      # 并发下已被别处移除
+                    pass
+                self._records.appendleft(match)
+                return match
             self._records.appendleft(rec)
             self._items[rec.id] = item
+        self._enforce_storage_limit()
         return rec
+
+    def _enforce_storage_limit(self) -> None:
+        """总大小超过「存储上限」时丢掉最旧的记录（设置页可改，默认 200MB）。
+
+        至少留一条：刚复制进来的那条不能被自己挤掉。
+        """
+        limit_mb = int(getattr(self.cfg, "storage_limit_mb", 0) or 0)
+        if limit_mb <= 0:
+            return
+        limit = limit_mb * 1048576
+        with self._lock:
+            total = sum(max(0, r.size) for r in self._records)
+            while total > limit and len(self._records) > 1:
+                dropped = self._records.pop()      # 最旧
+                total -= max(0, dropped.size)
+                self._items.pop(dropped.id, None)
+                self._pending.pop(dropped.id, None)
+                log.info("超出存储上限 %dMB，丢弃最旧一条（%s）", limit_mb, dropped.id[:8])
 
     def _set_state(self, record_id: str, state: str, detail: str = "") -> None:
         with self._lock:

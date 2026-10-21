@@ -267,6 +267,11 @@ def item_to_message(item: ClipItem) -> tuple[dict[str, Any], bytes]:
         header["text"] = item.text
     if item.html:
         header["html"] = item.html
+    if item.app:
+        header["app"] = item.app
+    if item.app_id:
+        header["app_id"] = item.app_id
+    # path 是本机路径，对端拿到也没用，不传
     payload = b""
     if item.image is not None:
         payload = item.image.png
@@ -302,6 +307,8 @@ def message_to_item(header: dict[str, Any], payload: bytes) -> ClipItem:
         ts=float(header.get("ts") or time.time()),
         source="remote",
         digest=str(header.get("digest") or ""),
+        app=str(header.get("app") or ""),
+        app_id=str(header.get("app_id") or ""),
     )
     return item
 
