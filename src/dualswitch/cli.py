@@ -731,7 +731,12 @@ def cmd_ui2(args) -> int:
     controller.start()
     clip_engine = _start_clip_engine(cfg, cfg_file, controller, backend)
 
-    from .ui.mac2.runner import run_ui2
+    # v2 界面按平台分发：Windows → ui/win2（自绘标题栏 + 托盘），其它 → ui/mac2。
+    # 旧 `ui` 子命令一行不动（两条路并行，验收后旧树才删）。
+    if sys.platform == "win32":
+        from .ui.win2.runner import run_ui2
+    else:
+        from .ui.mac2.runner import run_ui2
 
     try:
         return run_ui2(cfg, cfg_file, log_file, backend, controller, hotkey, warning,

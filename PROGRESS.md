@@ -514,6 +514,107 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-21 **[ui] 补来源应用名与图标 + 修「运行中」药丸圆角（QSS 圆角在 19px 控件上失效）**。
+  · **来源应用**（用户：「取不到图标，有应用名称也行啊」）：`clipboard/windows.py` 读到新内容时抓
+    前台窗口 → 进程 exe 路径 → `FileDescription`（本地化显示名：`Windows 资源管理器` / `记事本` / `微信`），
+    exe 路径填 `app_id`，UI 端 `apps.py` 用 `QFileIconProvider` 取 14px 图标，元信息变成
+    `Windows · [图标]微信 · 3 分钟前 · …`（设计 §6.3）。截图工具按 mac 口径统称「截图」；
+    自己写的剪贴板会被 poll 吞掉，不会把自己记成来源；显示名按 exe 路径缓存。
+    设计 §6.9 的缺口 1 关闭。
+  · **药丸圆角**：上一轮改成 `border-radius: 9px` 后用户实测**仍是方角**。继续挖：19px 高的控件上
+    Qt QSS 会把圆角整条丢掉（同高度 21px 的设备标签却正常，10px 有效），9/10/999 全试过都不圆。
+    改成自绘 `widgets.Pill`（`paintEvent` 用「高度/2」当半径），不再跟 QSS 较劲；`#pillRun/#pillWarn`
+    两条 QSS 规则随之退场。guard 用例改成扫「超过 12px 的圆角」+ 新增一条自绘 pill 的角落像素断言。
+  · 自测：全量 **406 passed / 13 skipped**；`_foreground_app/_file_description` 六个新用例；
+    UI 端新增「元信息带应用名 + 图标」用例；12 张对照图重出（列表元信息现在有应用段）。
+  · ISSUE-003 的处理方式相应改成「两端都自绘 pill」——mac 端可按同样思路改。
+
+- 2026-10-21 **[ui] Windows2 按截图反馈修三处：药丸圆角 / 预览气泡（阴影 + 长 URL）/ 字体可读性**。
+  · **「运行中」是方的**：`border-radius: 999px` 在 Qt QSS 里**整条不生效**（超过控件半高就忽略，
+    不是夹紧）→ 药丸/设备标签改 10px、chip 改 12px；新增守卫用例
+    `test_qss_has_no_oversized_radius`（扫 QSS 里 >12px 的圆角）。**mac2 同一处有问题，已登记 ISSUE-003**。
+  · **预览气泡白贴白**：设计 §6.6 要求「三层阴影」，实现里一个投影都没画。现在窗口四周留 `SHADOW=14`
+    透明边，`paintEvent` 画递减透明度的圆角矩形当投影，卡片内缩 14；定位按卡片边算 12px 间距。
+    `bubble.size()` 因此 = 卡片 + 箭头 12 + 阴影 14×2（尺寸上限说的仍是卡片）。
+  · **链接预览只剩半截**：整条 URL 是一个「词」，`QFontMetrics.boundingRect` 的折行规则和 `QTextLayout`
+    不一致 —— 它算 1 行、实际排 2 行，第二行被固定高度裁掉。量高改用 `QLabel.heightForWidth()`；
+    顺手把链接块的宽度预算补上它自己的 22px 内边距（短 URL 现在能一行放下）。**mac2 同源，已登记 ISSUE-004**。
+  · **字体看不清/发糊**：字体族改成 `Microsoft YaHei UI` 打头（原来 Segoe 打头、中文全靠回退，
+    96dpi 下 12px 的回退字形又细又糊）；字号整体上浮一档（正文 12.5→13、元信息 10→11、药丸 9.5→10…），
+    `qfont()` 的取整改成 `int(px+0.5)`（原来 `round(12.5)=12`、`round(10.5)=10`，两档挤成一档）。
+    设计文档 §3.3 已同步改口径并写明原因。
+  · 自测：全量 **399 passed / 13 skipped**；12 张对照图重出（切换页 / 剪贴板 / 设置 / 托盘菜单 /
+    四类预览气泡）；链接长短两版单独出图核对（`_pv_短/_pv_长`）。
+
+- 2026-10-21 **[clipboard] Windows 端补上「文件记录」（CF_HDROP 读 + 写回）+ Emoji 支持**。
+  · 用户反馈：复制本地图片文件/其它文件后列表里没有这一条。根因是 `clipboard/windows.py`
+    只 `probe()` 出 `CF_HDROP`、`poll()` 直接返回 None（契约里标的是 P2）。
+  · 读：`_parse_hdrop()` 解 `DROPFILES`（宽/ANSI 两种、`pFiles` 越界兜底）→ `make_file()`：
+    图片文件读文件抽缩略图（最长边 ≤1600px，PySide6 → Pillow，都没有就只记文件名）；
+    其它文件只取「文件名 + 目录 + 字节数」；文件已被删掉退回文本（不留点不开的文件卡）；
+    多选取第一个并记 info；8.3 短名（`ADMINI~1`）转长名，`~\Downloads` 缩略与去重指纹才对得上。
+  · 写：`write()` 见到 `item.path` 时同时写 `CF_HDROP` + `CF_UNICODETEXT` ——
+    粘到资源管理器是文件、粘到输入框是文件名（和资源管理器一致）。
+  · `probe()` 增加 `files=N`（排障第一眼：「复制了文件但没记录」时看它解析出几个路径）。
+  · `ui/clipboard_feed.py`：补 `path / file_size / app / app_id / kind` 透传 ——
+    引擎那条路早就有，**没有引擎时的兜底记录源**以前把这几项丢了，文件行既没文件名也点不开。
+  · Emoji：`theme.FONT_FAMILIES` 显式加 `Segoe UI Emoji`（不再依赖 Qt 隐式回退）；
+    `widgets` 新增 `safe_prefix()` + 字素簇安全边界，行标题截断、两行省略、`ElidedLabel`
+    都不再把 `👨‍👩‍👧‍👦` / `🇨🇳` / `👍🏽` 切成碎片（整串就是一个簇时退回硬砍，避免死循环）。
+  · 文件行元信息按原型改成「大小」（目录只留在文件卡里，`design/windows2/index.html` 的 `metaHtml`）。
+  · 自测：新增 16 个用例（剪贴板 10 + win2 6）→ 全量 **392 passed / 13 skipped**；
+    `build/verify_clip_files.py`（临时脚本）用真剪贴板跑通「CF_HDROP → 记录 → 页面 → 点复制回剪贴板」；
+    出图 `win2-clipboard-files-real` / `win2-clipboard-emoji` / `win2-preview-emoji`。
+  · 仍未做：`app / app_id`（来源应用名与 14px exe 图标）——设计 §6.9 里那一半还开着。
+
+- 2026-10-21 **[ui] Windows2 落地：新建 `src/dualswitch/ui/win2/**`（按 `docs/UI-WINDOWS2-DESIGN.md` 实现）**。
+  · 新目录 12 个模块（theme / window / switch_page / clipboard_page / preview / settings_page / tray /
+    openers / apps / widgets / icons / iconlib / runner）：图标库与控件骨架**从 mac2 整树复制**，
+    平台层按设计 §2 差异总表改；`ui/mac2/**` **一行未动**（`git diff` 为空）。
+  · 壳：自绘无边框标题栏 40px（图标 + 「屏幕切换」，右上只有 46×32 最小化/关闭，关闭 hover `#C42B1C` 白叉），
+    窗口圆角 12、1px `rgba(16,24,40,.07)` 描边；侧栏 188 / 底栏 30 / 内容 20·18·24 全部照 §3.1。
+  · 令牌：Segoe UI Variable Text→Segoe UI→Microsoft YaHei UI、等宽 Cascadia Mono、元信息 `#7A8494`（提深一档）、
+    文字键帽（Ctrl/Alt/Shift/Win，单键 22、Space 34）；只做浅色一套（`set_appearance` 恒返回 LIGHT）。
+  · 托盘（§4）：`QSystemTrayIcon` + `QMenu` + `QWidgetAction` 自绘行（240 宽 / 32 行高 / 键帽与窗口一致、
+    hover 主色实底 + 键帽反白）；左键/双击开窗、右键菜单；`DUALSWITCH_NATIVE_MENU=1` 退化为原生 QAction。
+    菜单 8 行 + 4 分隔线，调试三项移进设置 → 高级，退出用普通色。
+  · 剪贴板（§6）：动作分派换 Windows（默认看图 `os.startfile` / `explorer /select,` / `webbrowser.open`）、
+    「在资源管理器中显示」文案、路径缩略 `~\Downloads\照片`；补上 §6.5 的键盘导航（Ctrl+F / ↑↓ 选中 /
+    Enter 复制 / Delete 删除 / Esc 依次关预览→清搜索→取消选中）与选中态（card-3 + 主色左描边 2px）。
+  · 清空确认改成**窗口内遮罩**（§8）：页面只发 `clearConfirmRequested(count)`，runner 画 360 卡片，
+    Esc 取消 / Enter 确认、焦点默认在「取消」，覆盖整窗（含侧栏底栏），不再新建 QDialog。
+  · 设置五组（§7）：通用 / 剪贴板 / 热键 / 显示器 / **高级**（探测显示器·读取输入源 / 查看日志 / 打开配置目录）；
+    显示器匹配与输入源映射可编辑、存储上限可输入、`cmd+shift+v` 自动归一成 `ctrl+shift+v`。
+  · 两个真 bug 顺手修掉：① 工作线程里 `QTimer.singleShot` 回调 UI 永远不执行（线程没事件循环）——
+    强制切 / 探测结果回不到界面，改走 `uiCall` 信号队列连接；② 设计 §12 风险 1：`auto` 只走 RegisterHotKey
+    吞不掉系统菜单，只要开着「阻止 Alt+Space 弹出系统菜单」且热键带 Alt 就改用低级键盘钩子（失败退回并 toast）。
+  · 入口：`cli.cmd_ui2` 按平台分发（win32 → win2，其它 → mac2），旧 `ui` 子命令一行不动。
+  · `start-ui.bat` 改为启动 v2（`python -m dualswitch ui2`）：按 `.venv` → `venv` → 本机 workbuddy 环境 →
+    PATH 的顺序找 `pythonw.exe`，先 `import PySide6` 探一下（缺了直接弹提示，不再双击闪退），
+    参数原样透传（`--dry-run` / `--config` / `--console`；带 `--console` 时改用 `python.exe` 保留日志窗）。
+    旧 v1 仍可 `python -m dualswitch ui`。
+  · 自测：新增 `tests/test_ui_win2.py`（42 例，覆盖 §11 验收清单）→ 全量 **379 passed / 12 skipped**；
+    新增 `tools/shots_win2.py` 出 12 张对照图（`build/win2-shots/`）；另用假后端/假控制器把 runner 真跑一遍
+    （切屏 busy→结果→toast、暂停、遮罩清空、设置落盘、探测、菜单状态），27 项全通过；
+    真机 `python -m dualswitch ui2 --dry-run` 启动验证：托盘注册成功（可见=True）、热键 `Alt+Space` 走 hook 后端。
+  · 未做（按设计留白）：窗口外投影（780×580 无出血边距，会被窗口矩形裁掉，改用 1px 描边）；
+    `app/app_id` 与 `CF_HDROP` 后端补齐（设计 §6.9 已写明退化路径）。
+
+- 2026-10-21 **[design] 出 Windows2 页面设计稿 + 设计文档（骨架照 mac2，壳按 Windows 惯例）**。
+  · 新增 `design/windows2/index.html`（可交互原型：780×580 侧栏三页 + 托盘右键菜单 + 悬停预览气泡 +
+    窗口内清空遮罩 + 任务栏；支持 `?page/?src/?preview/?menu/?confirm/?data/?focus` 直链出图）与
+    `docs/UI-WINDOWS2-DESIGN.md`（差异总表、三态/四态、尺寸令牌、页面规格、`ui/win2/**` 落点、验收清单）。
+  · 与 mac2 的平台化差异（13 处，文档 §2 有总表）：系统标题栏→**自绘标题栏**（只留最小化/关闭，圆角 16→12）；
+    菜单栏图标→**托盘**（左键开窗、右键菜单，不照抄 mac 的单击弹菜单）；`⌥Space`→**Alt+Space**、
+    `⌘⇧V`→**Ctrl+Shift+V**，键帽改文字键（Ctrl/Alt/Shift/Win）；访达→**资源管理器**、Preview.app→**默认看图**、
+    NSWorkspace→**默认浏览器**；bundle id 图标→**exe + QFileIconProvider**；清空确认 QDialog→**窗口内遮罩**；
+    设置页多一个「高级」组（探测 / 日志 / 配置目录从托盘日常菜单移入）；托盘菜单无红字退出项。
+  · 沿用不变：780×580 / 侧栏 188 / 底栏 30、行高 68、缩略图 46、角标 22、工具钮 34、行内动作 25、
+    预览窗 450ms/220ms 与尺寸上限、四态药丸、双态空态、单击复制/双击预览、仅浅色、像素字号。
+  · 设计里写明两个 Windows 后端缺口：`app/app_id` 不填（来源应用图标退化为纯文字）、`CF_HDROP` 未实现
+    （文件记录按契约 P2，文件卡先按设计实现、计数恒 0）。
+  · 本轮**只出设计不改代码**；实现按文档 §10.3 顺序另起（壳 → 切换页 → 剪贴板 → 预览 → 设置 → 托盘 → 后端补 app）。
+
 - 2026-10-21 **[repo] 同步 origin/main 到 `555b884`（v2 界面 mac2 树），并把 7 条「只在 mac 绿」的用例改成平台无关**。
   · 快进 5 个提交（`ccd3049` → `555b884`，95 文件 +12664/−26）：新增 `ui/mac2/**`（v2 宽窗口 + 侧栏三页）、
     `ui2` 子命令、文件记录（访达复制）同步、重复复制去重置顶；配置新增 `switch_policy` / `appearance` /

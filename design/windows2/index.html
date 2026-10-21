@@ -1,0 +1,1606 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>屏幕切换 · Windows2 页面设计</title>
+<style>
+/* ============================================================
+   Windows2 设计稿
+   骨架与 mac2 同源（780×580 / 侧栏 188 / 三页 / 四态药丸）
+   平台化：自绘标题栏、托盘、Alt+Space / Ctrl+Shift+V、资源管理器
+   ============================================================ */
+:root{
+  --accent:#4E87FF; --accent-deep:#2E63E8; --accent-soft:rgba(78,135,255,.13);
+  --ink:#14181F; --ink-2:#4B5566; --ink-3:#7A8494;
+  --line:#E3E7EE; --line-soft:#EDF0F5;
+  --card:#FFFFFF; --card-2:#F7F9FC; --card-3:#F0F3F8;
+  --sidebar:#F7F8FB;
+  --ok:#0E7C4A;   --ok-bg:rgba(14,124,74,.11);
+  --run:#2E63E8;  --run-bg:rgba(46,99,232,.11);
+  --idle:#7C8698; --idle-bg:rgba(124,134,152,.13);
+  --danger:#A82B2B; --danger-bg:rgba(168,43,43,.11);
+  --warn:#B4690E; --warn-bg:rgba(180,105,14,.11);
+  --r-win:12px; --r-card:12px; --r-ctrl:10px;
+  --font:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;
+  --mono:"Cascadia Mono",Consolas,"JetBrains Mono",monospace;
+  --sh-win:0 2px 6px rgba(16,24,40,.06),0 18px 44px -18px rgba(16,24,40,.28);
+  --sh-pop:0 16px 40px -12px rgba(16,24,40,.30),0 2px 8px rgba(16,24,40,.08);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  font-family:var(--font); color:var(--ink); background:#EEF1F6;
+  -webkit-font-smoothing:antialiased; padding:28px 22px 64px;
+}
+.wrap{max-width:1440px;margin:0 auto}
+
+/* ── 页头 ─────────────────────────────── */
+.head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:16px;margin-bottom:18px}
+.head h1{margin:0;font-size:22px;font-weight:670;letter-spacing:-.012em}
+.head p{margin:6px 0 0;font-size:12px;color:var(--ink-3);line-height:1.7;max-width:820px}
+.head .badges{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;padding-bottom:2px}
+.tag{font-size:10.5px;padding:4px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent-deep);font-weight:600}
+.tag.gray{background:var(--idle-bg);color:var(--ink-2)}
+
+/* ── 控制条 ───────────────────────────── */
+.toolbar{
+  display:flex;gap:14px;flex-wrap:wrap;align-items:center;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+  padding:10px 13px;margin-bottom:20px;box-shadow:0 1px 2px rgba(16,24,40,.04);
+}
+.toolbar .grp{display:flex;align-items:center;gap:10px}
+.toolbar .lbl{font-size:10.5px;color:var(--ink-3);font-weight:600;letter-spacing:.02em;white-space:nowrap;padding-right:2px;margin-right:3px}
+.seg{display:inline-flex;background:var(--card-3);border:1px solid var(--line);border-radius:8px;padding:2px;gap:2px;margin-left:4px}
+.seg button{border:0;background:transparent;color:var(--ink-2);font:inherit;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;white-space:nowrap}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--card);color:var(--ink);font-weight:650;box-shadow:0 1px 2px rgba(16,24,40,.12)}
+.tbtn{border:1px solid var(--line);background:var(--card);color:var(--ink-2);font:inherit;font-size:11px;padding:6px 11px;border-radius:8px;cursor:pointer}
+.tbtn:hover{border-color:var(--accent);color:var(--accent-deep)}
+.tbtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.check{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-2);cursor:pointer;user-select:none}
+.check input{accent-color:var(--accent);width:13px;height:13px;margin:0}
+
+/* ── 舞台 ─────────────────────────────── */
+.stage{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.desktop{
+  position:relative;flex:1;min-width:1000px;height:704px;border-radius:16px;
+  border:1px solid var(--line);padding-top:38px;
+  display:flex;justify-content:center;
+  background:
+    radial-gradient(900px 520px at 72% 12%, #DCE8FF 0%, rgba(220,232,255,0) 70%),
+    radial-gradient(700px 460px at 12% 88%, #E7E3FF 0%, rgba(231,227,255,0) 70%),
+    linear-gradient(160deg,#F3F6FC,#E7EDF8);
+}
+.desktop::before{
+  content:"";position:absolute;inset:0;border-radius:16px;pointer-events:none;
+  background:radial-gradient(600px 300px at 50% 100%, rgba(78,135,255,.06), transparent 70%);
+}
+
+/* ── 窗口 ─────────────────────────────── */
+.win{
+  position:relative;z-index:20;width:780px;height:580px;flex:0 0 780px;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r-win);
+  box-shadow:var(--sh-win);overflow:hidden;display:flex;flex-direction:column;
+}
+.caption{
+  height:40px;flex:0 0 40px;display:flex;align-items:center;gap:8px;
+  padding:0 0 0 12px;border-bottom:1px solid var(--line-soft);background:var(--card);
+  user-select:none;
+}
+.cap-ic{width:16px;height:16px;display:flex;align-items:center;justify-content:center;flex:0 0 16px}
+.cap-title{font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.cap-btns{margin-left:auto;display:flex;height:100%}
+.cap-btn{
+  width:46px;height:32px;margin-top:0;border:0;background:transparent;color:var(--ink-2);
+  display:flex;align-items:center;justify-content:center;cursor:default;border-radius:6px;
+}
+.cap-btn:hover{background:#F0F0F0;color:var(--ink)}
+.cap-btn.close:hover{background:#C42B1C;color:#fff}
+
+.win-body{flex:1;display:flex;min-height:0}
+
+/* 侧栏 */
+.sidebar{
+  width:188px;flex:0 0 188px;background:var(--sidebar);border-right:1px solid var(--line-soft);
+  padding:10px 10px 12px;display:flex;flex-direction:column;
+}
+.nav-sec{font-size:9.5px;font-weight:700;color:var(--ink-3);letter-spacing:.6px;padding:8px 10px 5px}
+.nav{
+  height:34px;border:0;border-radius:8px;background:transparent;color:var(--ink-2);
+  display:flex;align-items:center;gap:10px;padding:0 10px;font:inherit;font-size:12.5px;
+  font-weight:550;cursor:pointer;width:100%;text-align:left;
+}
+.nav svg{flex:0 0 17px;color:var(--ink-3)}
+.nav:hover{background:var(--card-3);color:var(--ink)}
+.nav:hover svg{color:var(--ink)}
+.nav.on{background:var(--accent);color:#fff;font-weight:620}
+.nav.on svg{color:#fff}
+.nav .cnt{margin-left:auto;font-size:9.5px;font-weight:700;background:var(--accent-soft);color:var(--accent-deep);border-radius:8px;padding:2px 6px;line-height:1.2}
+.nav.on .cnt{background:rgba(255,255,255,.25);color:#fff}
+.nav-foot{margin-top:auto;border-top:1px solid var(--line-soft);padding:10px 10px 2px;display:flex;flex-direction:column;gap:7px}
+.st{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--ink-3)}
+.led{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:0 0 6px}
+.led.off{background:var(--idle)}
+.st .keys{margin-left:2px}
+
+/* 内容区 */
+.content{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--card)}
+.page{display:none;flex:1;min-height:0;flex-direction:column;padding:18px 20px 0}
+.page.on{display:flex}
+#pageSet{overflow-y:auto;padding-bottom:24px}
+
+/* 键帽 */
+.keys{display:inline-flex;align-items:center;gap:3px}
+.key{
+  height:18px;min-width:22px;padding:0 6px;border-radius:5px;border:1px solid var(--line);
+  background:var(--card-3);color:var(--ink-2);font-size:10px;font-weight:650;
+  display:inline-flex;align-items:center;justify-content:center;line-height:1;white-space:nowrap;
+}
+.key.wide{min-width:34px}
+.keys.on-accent .key{background:rgba(255,255,255,.20);border-color:rgba(255,255,255,.28);color:#fff}
+.keys.mini .key{height:16px;min-width:18px;font-size:9px;padding:0 5px}
+
+/* ── 切换页 ───────────────────────────── */
+.hero{
+  position:relative;background:var(--card-2);border:1px solid var(--line-soft);
+  border-radius:var(--r-card);padding:18px 18px 16px;overflow:hidden;flex:0 0 auto;
+}
+.hero::after{
+  content:"";position:absolute;right:-30px;top:-90px;width:230px;height:230px;border-radius:50%;
+  background:radial-gradient(circle,rgba(78,135,255,.13),rgba(78,135,255,0) 70%);pointer-events:none;
+}
+.hero-top{display:flex;align-items:center;justify-content:space-between;position:relative;z-index:1}
+.hero-label{font-size:11px;font-weight:650;color:var(--ink-3);letter-spacing:.6px}
+.pill{font-size:10px;font-weight:650;border-radius:999px;padding:3px 9px;line-height:1.35}
+.pill.run{background:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.hero-main{display:flex;align-items:center;gap:18px;margin-top:14px;position:relative;z-index:1}
+.plate{width:62px;height:62px;border-radius:16px;display:flex;align-items:center;justify-content:center;flex:0 0 62px}
+.plate.win{background:linear-gradient(135deg,#4C8DFF,#2C63D8)}
+.plate.mac{background:linear-gradient(135deg,#6B7484,#3D4450)}
+.plate.neutral{background:var(--card-3);border:1px solid var(--line);color:var(--ink-3)}
+.plate svg{color:#fff}
+.hero-name{font-size:27px;font-weight:700;letter-spacing:-.01em;line-height:1.2}
+.hero-sub{font-size:12px;color:var(--ink-2);margin-top:5px}
+.hero-act{display:flex;gap:9px;margin-top:14px;position:relative;z-index:1}
+.btn-primary{
+  flex:1;height:42px;border:0;border-radius:var(--r-ctrl);background:var(--accent);color:#fff;
+  display:flex;align-items:center;gap:8px;padding:0 12px 0 16px;font:inherit;font-size:13.5px;
+  font-weight:650;cursor:pointer;
+}
+.btn-primary:hover{background:var(--accent-deep)}
+.btn-primary:disabled{background:var(--card-3);color:var(--ink-2);border:1px solid var(--line);cursor:default}
+.btn-primary .tx{flex:1;text-align:left}
+.btn-primary .keys{margin-left:2px}
+.btn-ghost{
+  height:42px;padding:0 16px;border:1px solid var(--line);border-radius:var(--r-ctrl);
+  background:var(--card);color:var(--ink-2);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent-deep)}
+.btn-ghost:disabled{color:var(--ink-3);border-color:var(--line-soft);background:var(--card-2);cursor:default}
+.hero-note{display:flex;align-items:center;gap:6px;margin-top:9px;font-size:11px;color:var(--ok);position:relative;z-index:1}
+.hero-note.dim{color:var(--ink-2)}
+.hero-note.bad{color:var(--danger)}
+.hero-note svg{flex:0 0 12px}
+
+.devs{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:12px;flex:0 0 auto}
+.dev{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+  padding:15px;display:flex;flex-direction:column;cursor:pointer;transition:border-color .15s,background .15s;
+}
+.dev:hover{border-color:var(--accent)}
+.dev.on{background:var(--accent-soft);border-color:var(--accent);cursor:default}
+.dev.dead{background:var(--card);border-color:var(--line);cursor:default}
+.dev.dead:hover{border-color:var(--line)}
+.dev.dead .dev-logo{opacity:.45}
+.dev.dead .dev-name{color:var(--ink-2)}
+.dev.dead .dev-sub{color:var(--ink-2)}
+.dev.dead .dev-led{opacity:.55}
+.dev-top{display:flex;align-items:center;gap:10px}
+.dev-logo{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex:0 0 32px}
+.dev-logo.win{background:linear-gradient(135deg,#4C8DFF,#2C63D8)}
+.dev-logo.mac{background:linear-gradient(135deg,#6B7484,#3D4450)}
+.dev-name{font-size:13.5px;font-weight:650}
+.dev-led{margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--idle-bg);border:2px solid var(--idle)}
+.dev-led.on{background:var(--ok);border-color:rgba(14,124,74,.25)}
+.dev-sub{font-size:11px;color:var(--ink-3);margin-top:9px;line-height:1.55}
+.dev-tag{margin-top:10px;align-self:flex-start;font-size:10px;font-weight:650;border-radius:999px;padding:3px 8px;background:var(--idle-bg);color:var(--ink-3)}
+.dev.on .dev-tag{background:var(--accent-soft);color:var(--accent-deep)}
+
+.sec{font-size:10.5px;font-weight:700;color:var(--ink-3);letter-spacing:.5px;margin:13px 0 8px}
+.rows{background:var(--card);border:1px solid var(--line-soft);border-radius:var(--r-card);flex:0 0 auto}
+.qrow{
+  width:100%;height:44px;border:0;background:transparent;border-radius:var(--r-card);
+  display:flex;align-items:center;gap:11px;padding:0 14px;font:inherit;cursor:pointer;text-align:left;
+}
+.qrow:hover{background:var(--card-2)}
+.qrow .q-ic{width:20px;height:20px;display:flex;align-items:center;justify-content:center;color:var(--accent);flex:0 0 20px}
+.q-tx{flex:1;min-width:0}
+.q-t{font-size:12.5px;font-weight:550;color:var(--ink)}
+.q-s{font-size:10.5px;color:var(--ink-3);margin-top:1px}
+.q-hint{font-size:10px;color:var(--ink-3);font-family:var(--mono)}
+.qrow .chev{color:var(--ink-3);display:flex}
+
+/* ── 剪贴板页 ─────────────────────────── */
+.clip-bar{display:flex;gap:8px;flex:0 0 auto}
+.search{
+  flex:1;height:34px;background:var(--card-2);border:1px solid var(--line);border-radius:9px;
+  display:flex;align-items:center;gap:8px;padding:0 12px;
+}
+.search svg{color:var(--ink-3);flex:0 0 14px}
+.search input{flex:1;border:0;background:transparent;font:inherit;font-size:12px;color:var(--ink);outline:none;min-width:0}
+.search input::placeholder{color:var(--ink-3)}
+.search .sk{font-family:var(--mono);font-size:9px;color:var(--ink-3);border:1px solid var(--line);background:var(--card);border-radius:4px;padding:2px 5px}
+.icon-btn{
+  width:34px;height:34px;flex:0 0 34px;border:1px solid var(--line);border-radius:9px;background:var(--card);
+  display:flex;align-items:center;justify-content:center;color:var(--ink-2);cursor:pointer;padding:0;
+}
+.icon-btn:hover{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-deep)}
+.icon-btn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.chips{display:flex;gap:6px;margin:11px 0;flex:0 0 auto}
+.chip{
+  height:24px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink-2);
+  font:inherit;font-size:11px;font-weight:550;padding:0 11px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;
+}
+.chip .n{font-size:9.5px;color:var(--ink-3);font-family:var(--mono)}
+.chip:hover{border-color:var(--accent);color:var(--accent-deep)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.chip.on .n{color:rgba(255,255,255,.8)}
+.clip-list{
+  flex:1;min-height:0;overflow-y:auto;border:1px solid var(--line-soft);border-radius:var(--r-card);
+  background:var(--card);
+}
+.clip-list::-webkit-scrollbar{width:9px}
+.clip-list::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+.clip-list::-webkit-scrollbar-thumb:hover{background:var(--ink-3)}
+.row{
+  position:relative;height:68px;display:flex;align-items:flex-start;gap:12px;padding:7px 13px;
+  border-bottom:1px solid var(--line-soft);cursor:pointer;transition:background .14s;
+}
+.row:last-child{border-bottom:0}
+.row:hover{background:var(--card-2)}
+.thumb{
+  position:relative;width:46px;height:46px;flex:0 0 46px;border-radius:10px;overflow:visible;
+  display:flex;align-items:center;justify-content:center;color:#fff;
+}
+.thumb .tile{position:absolute;inset:0;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.thumb .tile svg{opacity:.96}
+.badge{
+  position:absolute;right:-3px;bottom:-3px;width:22px;height:22px;border-radius:6px;
+  border:2px solid var(--card);display:flex;align-items:center;justify-content:center;
+  box-shadow:0 1px 3px rgba(16,24,40,.18);z-index:2;
+}
+.row:hover .badge{border-color:var(--card-2)}
+.badge.win{background:linear-gradient(135deg,#4C8DFF,#2C63D8)}
+.badge.mac{background:linear-gradient(135deg,#6B7484,#3D4450)}
+.badge svg{color:#fff}
+.row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;padding-top:1px}
+.row-title{
+  font-size:12.5px;font-weight:550;line-height:18px;height:36px;overflow:hidden;color:var(--ink);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all;
+}
+.row-title.mono{font-family:var(--mono);font-size:11px;font-weight:500}
+.meta{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--ink-3);white-space:nowrap;overflow:hidden}
+.meta .src{color:var(--ink-2);font-weight:700}
+.meta .dot{width:2.5px;height:2.5px;border-radius:50%;background:var(--ink-3);opacity:.7;flex:0 0 2.5px}
+.app-ic{width:14px;height:14px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:8px;font-weight:700;flex:0 0 14px}
+.row-right{width:109px;flex:0 0 109px;display:flex;flex-direction:column;align-items:flex-end;justify-content:space-between;padding:1px 0 2px}
+.stat{font-size:9.5px;font-weight:700;border-radius:6px;padding:3px 8px;line-height:1.2;border:0;font-family:inherit;white-space:nowrap}
+.stat.ok{background:var(--ok-bg);color:var(--ok);cursor:pointer}
+.stat.pend{background:var(--run-bg);color:var(--run)}
+.stat.local{background:var(--idle-bg);color:var(--idle);cursor:pointer}
+.stat.fail{background:var(--danger-bg);color:var(--danger);cursor:pointer}
+.acts{display:flex;gap:3px;opacity:0;transition:opacity .14s}
+.row:hover .acts{opacity:1}
+.act{
+  width:25px;height:25px;border:0;border-radius:6px;background:var(--card-3);color:var(--ink-2);
+  display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;
+}
+.act:hover{background:var(--accent);color:#fff}
+.act.danger:hover{background:var(--danger)}
+.prog{position:absolute;left:13px;right:13px;bottom:0;height:2px;background:var(--run-bg);border-radius:1px;overflow:hidden}
+.prog i{display:block;height:100%;background:var(--run);border-radius:1px}
+
+.empty{display:none;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:20px 28px;text-align:center}
+.empty.on{display:flex}
+.empty svg{color:var(--ink-3)}
+.empty h3{margin:2px 0 0;font-size:13.5px;font-weight:650;color:var(--ink-2)}
+.empty p{margin:0;font-size:11.5px;line-height:1.7;color:var(--ink-3)}
+
+/* ── 设置页 ───────────────────────────── */
+.set-sec{margin-bottom:18px}
+.set-hd{font-size:10.5px;font-weight:700;color:var(--ink-3);letter-spacing:.5px;padding:0 4px 8px}
+.set-card{background:var(--card-2);border:1px solid var(--line-soft);border-radius:var(--r-card);overflow:hidden}
+.set-row{min-height:52px;display:flex;align-items:center;gap:12px;padding:9px 14px}
+.set-row + .set-row{border-top:1px solid var(--line-soft)}
+.set-tx{flex:1;min-width:0}
+.set-t{font-size:12.5px;font-weight:550}
+.set-s{font-size:10.5px;color:var(--ink-3);margin-top:2px;line-height:1.45}
+.set-val{font-size:11.5px;color:var(--ink-3);font-family:var(--mono)}
+.toggle{width:36px;height:21px;border-radius:999px;background:#D8DEE9;border:0;position:relative;cursor:pointer;flex:0 0 36px;padding:0;transition:background .15s}
+.toggle::after{content:"";position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:left .15s}
+.toggle.on{background:var(--accent)}
+.toggle.on::after{left:17px}
+.seg-mini{display:inline-flex;background:var(--card-3);border:1px solid var(--line);border-radius:8px;padding:2px;gap:2px}
+.seg-mini button{border:0;background:transparent;font:inherit;font-size:10.5px;color:var(--ink-2);padding:4px 10px;border-radius:6px;cursor:pointer}
+.seg-mini button.on{background:var(--accent);color:#fff;font-weight:650}
+.hk{display:inline-flex;align-items:center;gap:8px;cursor:pointer;padding:3px 4px;border-radius:6px}
+.hk:hover{background:var(--card-3)}
+.hk .rec{font-size:10.5px;color:var(--ink-3);display:none}
+.hk.recording .keys{display:none}
+.hk.recording .rec{display:inline}
+.storage{display:flex;align-items:center;gap:8px}
+.num{width:62px;height:28px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-family:var(--mono);font-size:11.5px;text-align:right;padding:0 8px;outline:none}
+.num:focus{border-color:var(--accent)}
+.mini-btn{height:28px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink-2);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
+.mini-btn:hover{border-color:var(--accent);color:var(--accent-deep)}
+
+/* ── 底栏 / toast / 遮罩 ─────────────── */
+.statusbar{
+  height:30px;flex:0 0 30px;background:var(--card-2);border-top:1px solid var(--line-soft);
+  display:flex;align-items:center;gap:7px;padding:0 16px;font-size:10.5px;color:var(--ink-3);
+}
+.statusbar .ver{margin-left:auto;font-family:var(--mono);font-size:9.5px}
+.toast{
+  position:absolute;left:50%;bottom:44px;transform:translate(-50%,8px);z-index:80;
+  background:var(--ink);color:#fff;font-size:11.5px;padding:7px 12px;border-radius:8px;
+  opacity:0;transition:opacity .18s,transform .18s;pointer-events:none;white-space:nowrap;max-width:520px;
+  overflow:hidden;text-overflow:ellipsis;
+}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.mask{position:absolute;inset:0;z-index:90;background:rgba(16,24,40,.28);display:none;align-items:center;justify-content:center;border-radius:var(--r-win)}
+.mask.on{display:flex}
+.confirm{width:360px;background:var(--card);border-radius:12px;padding:18px 20px 16px;box-shadow:0 20px 50px -12px rgba(16,24,40,.42)}
+.confirm h3{margin:0;font-size:13.5px;font-weight:650}
+.confirm p{margin:8px 0 0;font-size:11.5px;line-height:1.65;color:var(--ink-3)}
+.confirm .row2{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.confirm .cancel{height:30px;min-width:72px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.confirm .ok{height:30px;min-width:72px;border:0;border-radius:8px;background:var(--danger);color:#fff;font:inherit;font-size:12px;font-weight:650;cursor:pointer}
+
+/* ── 任务栏 + 托盘菜单 ───────────────── */
+.taskbar{
+  position:absolute;left:0;right:0;bottom:0;height:40px;z-index:30;
+  background:rgba(246,248,252,.86);backdrop-filter:blur(18px);
+  border-top:1px solid rgba(255,255,255,.7);border-radius:0 0 16px 16px;
+  display:flex;align-items:center;padding:0 12px;gap:10px;font-size:11px;color:var(--ink-2);
+}
+.tb-start{width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#2C63D8}
+.tb-app{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700}
+.tb-app.blue{background:linear-gradient(135deg,#4C8DFF,#2C63D8)}
+.tb-app.gray{background:#E4E9F1;color:var(--ink-2)}
+.tb-spacer{flex:1}
+.tb-tray{display:flex;align-items:center;gap:8px}
+.tray-ic{
+  width:28px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;
+  color:var(--ink-2);cursor:pointer;position:relative;
+}
+.tray-ic:hover{background:rgba(16,24,40,.06)}
+.tray-ic.on{background:var(--accent-soft);color:var(--accent-deep)}
+.tray-ic .up{position:absolute;top:1px;right:1px;width:4px;height:4px;border-radius:50%;background:var(--ok)}
+.clock{text-align:right;line-height:1.35;font-size:10.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.tray-menu{
+  position:absolute;right:16px;bottom:52px;width:240px;z-index:70;display:none;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:var(--sh-pop);padding:5px;
+}
+.tray-menu.on{display:block}
+.mi{height:32px;border-radius:6px;display:flex;align-items:center;gap:8px;padding:0 10px;font-size:12px;color:var(--ink);cursor:default}
+.mi:hover{background:var(--accent);color:#fff}
+.mi.readonly{color:var(--ink-3);font-size:11.5px}
+.mi.readonly:hover{background:transparent;color:var(--ink-3)}
+.mi.disabled{color:var(--ink-3);pointer-events:none}
+.mi .mi-tx{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mi:hover .keys .key{background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.3);color:#fff}
+.mi .mled{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 7px}
+.mi .mled.off{background:var(--idle)}
+.msep{height:1px;background:var(--line);margin:5px 8px}
+
+/* ── 预览气泡 ─────────────────────────── */
+.pv{position:absolute;z-index:60;display:none}
+.pv.on{display:block}
+.pv-card{
+  background:var(--card);border:1px solid var(--line);border-radius:13px;overflow:hidden;
+  box-shadow:0 12px 36px -10px rgba(16,24,40,.26),0 2px 8px rgba(16,24,40,.10);
+  display:flex;flex-direction:column;max-height:420px;
+}
+.pv-head{background:var(--card-2);border-bottom:1px solid var(--line-soft);padding:8px 11px;display:flex;align-items:center;gap:7px}
+.pv-head .pv-ic{width:14px;height:14px;color:var(--ink-2);display:flex;align-items:center;justify-content:center;flex:0 0 14px}
+.pv-title{font-size:11.5px;font-weight:650;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pv-body{padding:11px 12px;font-size:11.5px;line-height:1.8;color:var(--ink-2);overflow:auto}
+.pv-body::-webkit-scrollbar{width:7px}
+.pv-body::-webkit-scrollbar-thumb{background:var(--ink-3);border-radius:3.5px}
+.pv-text{white-space:pre-wrap;word-break:break-word}
+.pv-code{
+  margin:0;padding:9px 10px;background:var(--card-2);border:1px solid var(--line-soft);border-radius:9px;
+  font-family:var(--mono);font-size:10.5px;line-height:1.7;color:var(--ink);white-space:pre-wrap;word-break:break-word;
+}
+.pv-link{
+  background:var(--accent-soft);border-radius:9px;padding:9px 10px;color:var(--accent-deep);
+  font-family:var(--mono);font-size:10.5px;word-break:break-all;
+}
+.pv-img{width:100%;height:198px;border-radius:9px;border:1px solid var(--line-soft);overflow:hidden}
+.pv-dim{font-size:9.5px;color:var(--ink-3);margin-top:7px;text-align:center}
+.pv-file{background:var(--card-2);border:1px solid var(--line-soft);border-radius:12px;padding:14px 12px 12px;display:flex;flex-direction:column;align-items:center;gap:5px}
+.pv-file .tile52{width:52px;height:52px;border-radius:11px;background:#E9ECF3;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--ink-3);gap:1px}
+.pv-file .ext{font-size:8px;font-weight:700;letter-spacing:.3px}
+.pv-fname{font-size:12px;font-weight:650;color:var(--ink);text-align:center;margin-top:4px;word-break:break-all}
+.pv-fdir{font-size:10px;color:var(--ink-3);text-align:center;word-break:break-all}
+.pv-foot{background:var(--card-2);border-top:1px solid var(--line-soft);padding:7px 11px;display:flex;align-items:center;gap:6px}
+.pv-meta{flex:1;min-width:0;font-size:9.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pv-btn{width:26px;height:26px;border:0;border-radius:7px;background:var(--card-3);color:var(--ink-2);display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+.pv-btn:hover{background:var(--line)}
+.pv-btn.pri{background:var(--accent);color:#fff}
+.pv-btn.pri:hover{background:var(--accent-deep)}
+.pv-arrow{position:absolute;width:12px;height:12px;background:var(--card);border-top:1px solid #D5DBE6;border-right:1px solid #D5DBE6;border-radius:2px;box-shadow:1px -1px 3px rgba(16,24,40,.08)}
+.pv-arrow.right{right:-6px;transform:rotate(-45deg)}
+.pv-arrow.left{left:-6px;transform:rotate(135deg)}
+
+/* ── 缩略图里的假图 ──────────────────── */
+.shot{width:100%;height:100%;position:relative;overflow:hidden;background:linear-gradient(150deg,#8FB6F0,#4F7FD0)}
+.shot::before{content:"";position:absolute;left:3px;right:3px;top:3px;bottom:3px;background:#fff;border-radius:3px;box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.shot::after{content:"";position:absolute;left:6px;right:6px;top:6px;height:4px;background:#5B8DEF;border-radius:1.5px;box-shadow:0 7px 0 -1px #E3E9F3,0 12px 0 -1px #EDF1F7,0 17px 0 -1px #EDF1F7}
+.photo{width:100%;height:100%;position:relative;overflow:hidden;background:linear-gradient(#A9CBE8 0%,#D8E8F4 52%,#7FA8C4 53%,#3F6A8C 100%)}
+.photo::before{content:"";position:absolute;right:8px;top:7px;width:7px;height:7px;border-radius:50%;background:#FFF6D8}
+.photo::after{content:"";position:absolute;left:-4px;bottom:14px;width:34px;height:20px;background:#6E93AE;clip-path:polygon(0 100%,52% 0,100% 100%)}
+.photo.big{height:198px;border-radius:9px}
+/* 大图预览里的截图：同一套 mock 放大 */
+.pv-img .shot{background:linear-gradient(150deg,#93B9F2,#3F6FC4)}
+.pv-img .shot::before{left:22px;right:22px;top:18px;bottom:18px;border-radius:7px;box-shadow:0 6px 18px rgba(16,24,40,.22)}
+.pv-img .shot::after{left:34px;right:34px;top:32px;height:9px;border-radius:3px;box-shadow:0 18px 0 -2px #E3E9F3,0 32px 0 -2px #EDF1F7,0 46px 0 -2px #EDF1F7,0 60px 0 -2px #EDF1F7}
+
+/* ── 右侧说明 ─────────────────────────── */
+.notes{width:300px;flex:0 0 300px;display:flex;flex-direction:column;gap:12px}
+.note-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 15px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.note-card h3{margin:0 0 8px;font-size:12px;font-weight:650;display:flex;align-items:center;gap:6px}
+.note-card h3 .n-ic{color:var(--accent);display:flex}
+.note-card ul{margin:0;padding-left:15px;font-size:11px;line-height:1.75;color:var(--ink-2)}
+.note-card li + li{margin-top:3px}
+.note-card p{margin:0;font-size:11px;line-height:1.75;color:var(--ink-2)}
+.spec{width:100%;border-collapse:collapse;font-size:10.5px;color:var(--ink-2)}
+.spec td{padding:3px 0;vertical-align:top}
+.spec td:first-child{color:var(--ink-3);width:92px;white-space:nowrap}
+.spec td:last-child{font-family:var(--mono);font-size:10px}
+.kbd-list{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--ink-2)}
+.kbd-list .kr{display:flex;align-items:center;gap:8px}
+.kbd-list .kr .hint{margin-left:auto;font-size:10px;color:var(--ink-3);border:1px dashed var(--line);border-radius:5px;padding:2px 7px;white-space:nowrap}
+
+/* 出图模式：只留窗口（?focus=1），评审/截图用 */
+body.focus{padding:10px;background:#EEF1F6}
+body.focus .head,body.focus .toolbar,body.focus .notes{display:none}
+body.focus .wrap{max-width:none}
+body.focus .stage{display:block}
+body.focus .desktop{min-width:0;height:auto;padding:0 0 0 300px;border:0;background:#EEF1F6;display:block}
+body.focus .win{margin:0}
+body.focus .taskbar{position:relative;left:auto;right:auto;bottom:auto;border-radius:0 0 16px 16px;max-width:780px;margin:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="head">
+    <div>
+      <h1>屏幕切换 · Windows2 页面设计</h1>
+      <p>与 mac2 同一套骨架：780×580 宽窗口 + 188 侧栏 + 切换 / 剪贴板 / 设置三页 + 四态药丸。换 Windows 的壳：自绘标题栏、托盘常驻、<b>Alt+Space</b> / <b>Ctrl+Shift+V</b>、资源管理器。</p>
+    </div>
+    <div class="badges">
+      <span class="tag">浅色单主题</span>
+      <span class="tag gray">像素字号</span>
+      <span class="tag gray">单窗口</span>
+      <span class="tag gray">Win11 观感</span>
+    </div>
+  </header>
+
+  <!-- ══════════ 控制条 ══════════ -->
+  <div class="toolbar">
+    <div class="grp">
+      <span class="lbl">页面</span>
+      <div class="seg" id="segPage">
+        <button class="on" data-page="switch">切换</button>
+        <button data-page="clip">剪贴板</button>
+        <button data-page="set">设置</button>
+      </div>
+    </div>
+    <div class="grp">
+      <span class="lbl">画面归属</span>
+      <div class="seg" id="segSrc">
+        <button class="on" data-src="win">Windows</button>
+        <button data-src="mac">Mac</button>
+        <button data-src="unknown">未连接</button>
+      </div>
+    </div>
+    <div class="grp">
+      <label class="check"><input type="checkbox" id="peerOnline" checked>对端在线</label>
+    </div>
+    <div class="grp">
+      <span class="lbl">列表</span>
+      <div class="seg" id="segData">
+        <button class="on" data-data="full">有数据</button>
+        <button data-data="empty">空</button>
+      </div>
+    </div>
+    <div class="grp" style="margin-left:auto">
+      <button class="tbtn" id="btnMenu">托盘菜单</button>
+      <button class="tbtn" id="btnConfirm">清空确认</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <!-- ══════════ 桌面 + 窗口 ══════════ -->
+    <div class="desktop" id="desktop">
+
+      <div class="win" id="win">
+        <!-- 自绘标题栏 -->
+        <div class="caption">
+          <div class="cap-ic">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#2E63E8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h9l-2.2-2.2M13.5 10h-9l2.2 2.2"/></svg>
+          </div>
+          <div class="cap-title">屏幕切换</div>
+          <div class="cap-btns">
+            <button class="cap-btn" id="btnMin" title="最小化">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 5h6"/></svg>
+            </button>
+            <button class="cap-btn close" id="btnClose" title="关闭（收进托盘）">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2.2 2.2l5.6 5.6M7.8 2.2L2.2 7.8"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="win-body">
+          <!-- 侧栏 -->
+          <aside class="sidebar">
+            <div class="nav-sec">核心</div>
+            <button class="nav on" data-page="switch">
+              <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h11l-2.6-2.6M15.5 12h-11l2.6 2.6"/></svg>
+              切换
+            </button>
+            <button class="nav" data-page="clip">
+              <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3" width="11" height="12" rx="2"/><path d="M6.5 3V2.2A1.2 1.2 0 017.7 1h2.6a1.2 1.2 0 011.2 1.2V3"/></svg>
+              剪贴板
+              <span class="cnt" id="navCnt">6</span>
+            </button>
+            <div class="nav-sec">系统</div>
+            <button class="nav" data-page="set">
+              <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M9 1.8v1.8M9 14.4v1.8M1.8 9h1.8M14.4 9h1.8M4 4l1.3 1.3M12.7 12.7l1.3 1.3M14 4l-1.3 1.3M5.3 12.7L4 14"/></svg>
+              设置
+            </button>
+
+            <div class="nav-foot">
+              <div class="st"><span class="led" id="sideLed"></span><span id="sideTxt">已连接 Mac</span></div>
+              <div class="st"><span>热键</span>
+                <span class="keys mini"><span class="key">Alt</span><span class="key wide">Space</span></span>
+              </div>
+            </div>
+          </aside>
+
+          <!-- 内容区 -->
+          <main class="content">
+
+            <!-- ── 切换页 ── -->
+            <section class="page on" id="pageSwitch">
+              <div class="hero">
+                <div class="hero-top">
+                  <span class="hero-label">当前画面</span>
+                  <span class="pill run" id="srcPill">运行中</span>
+                </div>
+                <div class="hero-main">
+                  <div class="plate win" id="heroPlate">
+                    <svg width="30" height="30" viewBox="0 0 22 22" fill="currentColor"><rect x="1" y="1" width="9" height="9" rx="1.4"/><rect x="12" y="1" width="9" height="9" rx="1.4"/><rect x="1" y="12" width="9" height="9" rx="1.4"/><rect x="12" y="12" width="9" height="9" rx="1.4"/></svg>
+                  </div>
+                  <div class="hero-tx">
+                    <div class="hero-name" id="heroName">Windows</div>
+                    <div class="hero-sub" id="heroSub">AOC Q2790PC · HDMI · 输入源 17</div>
+                  </div>
+                </div>
+                <div class="hero-act">
+                  <button class="btn-primary" id="btnSwitch">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5h10l-2.5-2.5M14 11H4l2.5 2.5"/></svg>
+                    <span class="tx" id="btnSwitchTx">切换到 Mac</span>
+                    <span class="keys on-accent" id="btnKeys"><span class="key">Alt</span><span class="key wide">Space</span></span>
+                  </button>
+                  <button class="btn-ghost" id="btnForce">强制切</button>
+                </div>
+                <div class="hero-note" id="heroNote">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5l2.5 2.5L10 3.5"/></svg>
+                  <span id="heroNoteTx">上次切换 63.9 ms · 回读已确认</span>
+                </div>
+              </div>
+
+              <div class="devs">
+                <div class="dev on" data-dev="win">
+                  <div class="dev-top">
+                    <div class="dev-logo win">
+                      <svg width="16" height="16" viewBox="0 0 22 22" fill="#fff"><rect x="1" y="1" width="9" height="9" rx="1.4"/><rect x="12" y="1" width="9" height="9" rx="1.4"/><rect x="1" y="12" width="9" height="9" rx="1.4"/><rect x="12" y="12" width="9" height="9" rx="1.4"/></svg>
+                    </div>
+                    <div class="dev-name">Windows</div>
+                    <div class="dev-led on"></div>
+                  </div>
+                  <div class="dev-sub">HDMI · 输入源 17<br>dualswitch-win · 本机</div>
+                  <div class="dev-tag">当前画面</div>
+                </div>
+                <div class="dev" data-dev="mac">
+                  <div class="dev-top">
+                    <div class="dev-logo mac">
+                      <svg width="16" height="16" viewBox="0 0 22 22" fill="#fff"><path d="M15.6 11.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.8-3-.8c-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.7 2.3 2.9 2.2 1.2 0 1.6-.7 3-.7s1.8.7 3 .7c1.2 0 2-1.1 2.8-2.2.6-.9 1-1.7 1.2-2.1-2.7-1-2.4-4.9-.4-4zM13.4 5.2c.6-.8 1-1.9.9-3-.9 0-2 .6-2.7 1.4-.6.7-1.1 1.8-.9 2.9 1 .1 2-.5 2.7-1.3z"/></svg>
+                    </div>
+                    <div class="dev-name">Mac</div>
+                    <div class="dev-led"></div>
+                  </div>
+                  <div class="dev-sub">USB-C · 输入源 18<br>dualswitch-mac · 在线</div>
+                  <div class="dev-tag">未使用</div>
+                </div>
+              </div>
+
+              <div class="sec">快速操作</div>
+              <div class="rows">
+                <button class="qrow" id="qrowClip">
+                  <span class="q-ic">
+                    <svg width="20" height="20" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3" width="11" height="12" rx="2"/><path d="M6.5 3V2.2A1.2 1.2 0 017.7 1h2.6a1.2 1.2 0 011.2 1.2V3"/></svg>
+                  </span>
+                  <span class="q-tx">
+                    <div class="q-t">剪贴板</div>
+                    <div class="q-s">跨端同步文字与图片 · 来源系统可见</div>
+                  </span>
+                  <span class="q-hint" id="qHint">6 条</span>
+                  <span class="chev">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l4 4-4 4"/></svg>
+                  </span>
+                </button>
+              </div>
+            </section>
+
+            <!-- ── 剪贴板页 ── -->
+            <section class="page" id="pageClip">
+              <div class="clip-bar">
+                <div class="search">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2l2.8 2.8"/></svg>
+                  <input id="clipSearch" placeholder="搜索剪贴板">
+                  <span class="sk">Ctrl F</span>
+                </div>
+                <button class="icon-btn" id="btnPause" title="暂停记录剪贴板">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 3v8M9 3v8"/></svg>
+                </button>
+                <button class="icon-btn" id="btnClear" title="清理历史记录">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5h9M5.5 3.5V2.5h3v1M4 3.5l.7 8h4.6l.7-8"/></svg>
+                </button>
+              </div>
+
+              <div class="chips" id="chips">
+                <button class="chip on" data-f="all">全部 <span class="n">6</span></button>
+                <button class="chip" data-f="text">文字 <span class="n">3</span></button>
+                <button class="chip" data-f="image">图片 <span class="n">1</span></button>
+                <button class="chip" data-f="file">文件 <span class="n">1</span></button>
+                <button class="chip" data-f="link">链接 <span class="n">1</span></button>
+                <button class="chip" data-f="bad">异常 <span class="n">2</span></button>
+              </div>
+
+              <div class="clip-list" id="clipList"></div>
+
+              <div class="empty" id="empty">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 4V3.2A1.2 1.2 0 0110.2 2h3.6A1.2 1.2 0 0115 3.2V4"/></svg>
+                <h3 id="emptyTitle">剪贴板为空</h3>
+                <p id="emptySub">复制内容后会显示在这里，<br>并自动同步到另一台机器</p>
+              </div>
+            </section>
+
+            <!-- ── 设置页 ── -->
+            <section class="page" id="pageSet">
+              <div class="set-sec">
+                <div class="set-hd">通用</div>
+                <div class="set-card">
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">切换模式</div><div class="set-s">标准 = 先本地后请对端代发；强制 = 直接发 DDC Set</div></div>
+                    <div class="seg-mini" data-seg><button class="on">标准</button><button>强制</button></div>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">切换完成通知</div><div class="set-s">切换成功后弹出系统通知</div></div>
+                    <button class="toggle on" data-toggle></button>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">关闭窗口后仍在托盘运行</div><div class="set-s">Windows 端默认开启；关掉后关窗即退出</div></div>
+                    <button class="toggle on" data-toggle></button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-sec">
+                <div class="set-hd">剪贴板</div>
+                <div class="set-card">
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">启用跨端剪贴板</div><div class="set-s">文字与图片自动同步到另一台</div></div>
+                    <button class="toggle on" data-toggle></button>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">悬浮预览</div><div class="set-s">鼠标悬浮在缩略图上时展开预览窗</div></div>
+                    <button class="toggle on" data-toggle></button>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">存储上限</div><div class="set-s">超过上限自动丢弃最旧的记录</div></div>
+                    <div class="storage">
+                      <span class="set-val">已用 12.4 MB</span>
+                      <input class="num" value="200" aria-label="存储上限">
+                      <span class="set-val">MB</span>
+                      <button class="mini-btn" id="btnClean">清理</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-sec">
+                <div class="set-hd">热键</div>
+                <div class="set-card">
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">全局热键</div><div class="set-s">按下即切换画面</div></div>
+                    <div class="hk" data-hk><span class="keys"><span class="key">Alt</span><span class="key wide">Space</span></span><span class="rec">请按下组合键…（Esc 取消）</span></div>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">剪贴板热键</div><div class="set-s">呼出剪贴板页并聚焦搜索</div></div>
+                    <div class="hk" data-hk><span class="keys"><span class="key">Ctrl</span><span class="key">Shift</span><span class="key">V</span></span><span class="rec">请按下组合键…（Esc 取消）</span></div>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">严格区分左右 Alt</div><div class="set-s">打开后左 Alt 不触发（改用低级键盘钩子）</div></div>
+                    <button class="toggle" data-toggle></button>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">阻止 Alt+Space 弹出系统菜单</div><div class="set-s">只在钩子后端生效；关掉会先弹系统菜单再切换</div></div>
+                    <button class="toggle on" data-toggle></button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-sec">
+                <div class="set-hd">显示器</div>
+                <div class="set-card">
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">显示器匹配</div><div class="set-s">按设备名或 device_id 片段定位</div></div>
+                    <span class="set-val">AOC</span>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">DDC 后端</div><div class="set-s">auto / dxva2 / command / mock</div></div>
+                    <span class="set-val">auto</span>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">输入源映射</div><div class="set-s">27 会被这块屏拒绝（实测），别照抄网上</div></div>
+                    <div class="storage">
+                      <span class="set-val">Win</span><input class="num" value="17" aria-label="Windows 输入源">
+                      <span class="set-val">Mac</span><input class="num" value="18" aria-label="Mac 输入源">
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-sec">
+                <div class="set-hd">高级</div>
+                <div class="set-card">
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">探测显示器 / 读取输入源</div><div class="set-s">结果写进日志并 toast 摘要</div></div>
+                    <button class="mini-btn" data-adv="探测完成：AOC Q2790PC · 当前 17">运行</button>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">查看日志</div><div class="set-s">用默认编辑器打开本次运行日志</div></div>
+                    <button class="mini-btn" data-adv="已打开日志">打开</button>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">打开配置目录</div><div class="set-s">%APPDATA%\dualswitch</div></div>
+                    <button class="mini-btn" data-adv="已在资源管理器中打开配置目录">打开</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+          </main>
+        </div>
+
+        <!-- 底栏 -->
+        <div class="statusbar">
+          <span class="led" id="footLed"></span>
+          <span id="footTxt">已连接 Mac · 剪贴板已开启</span>
+          <span class="ver">v0.9.0</span>
+        </div>
+
+        <!-- 窗口内 toast -->
+        <div class="toast" id="toast"></div>
+
+        <!-- 清空确认（窗口内遮罩，不是新窗口） -->
+        <div class="mask" id="mask">
+          <div class="confirm">
+            <h3 id="confirmTitle">清空本机全部 6 条记录？</h3>
+            <p>只清空本机列表，不影响另一台机器；此操作不可撤销。</p>
+            <div class="row2">
+              <button class="cancel" id="btnCancelClear">取消</button>
+              <button class="ok" id="btnDoClear">清空</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 任务栏 -->
+      <div class="taskbar">
+        <div class="tb-start">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><rect x="1" y="1" width="8" height="8" rx="1"/><rect x="11" y="1" width="8" height="8" rx="1"/><rect x="1" y="11" width="8" height="8" rx="1"/><rect x="11" y="11" width="8" height="8" rx="1"/></svg>
+        </div>
+        <div class="tb-app blue">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h9l-2.2-2.2M13.5 10h-9l2.2 2.2"/></svg>
+        </div>
+        <div class="tb-app gray">资</div>
+        <div class="tb-app gray">终</div>
+        <div class="tb-spacer"></div>
+        <div class="tb-tray">
+          <div class="tray-ic" id="trayIcon" title="屏幕切换 · Alt Space · 当前画面：Windows">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h9l-2.2-2.2M13.5 10h-9l2.2 2.2"/></svg>
+            <span class="up" id="trayDot"></span>
+          </div>
+          <div class="clock">16:25<br>2026/10/21</div>
+        </div>
+      </div>
+
+      <!-- 托盘右键菜单 -->
+      <div class="tray-menu" id="trayMenu">
+        <div class="mi readonly"><span class="mled" id="menuLed"></span><span class="mi-tx" id="menuStatus">当前画面：Windows</span></div>
+        <div class="msep"></div>
+        <div class="mi" data-act="open"><span class="mi-tx">打开主界面</span></div>
+        <div class="msep"></div>
+        <div class="mi" data-act="switch"><span class="mi-tx" id="menuSwitch">切换到 Mac（USB-C）</span>
+          <span class="keys"><span class="key">Alt</span><span class="key wide">Space</span></span>
+        </div>
+        <div class="mi" data-act="force"><span class="mi-tx" id="menuForce">强制切到 Mac（USB-C）</span></div>
+        <div class="msep"></div>
+        <div class="mi" data-act="clip"><span class="mi-tx">剪贴板</span>
+          <span class="keys"><span class="key">Ctrl</span><span class="key">Shift</span><span class="key">V</span></span>
+        </div>
+        <div class="mi" data-act="settings"><span class="mi-tx">设置…</span>
+          <span class="keys"><span class="key">Ctrl</span><span class="key">,</span></span>
+        </div>
+        <div class="msep"></div>
+        <div class="mi readonly"><span class="mi-tx">热键：Alt Space（左键打开主界面）</span></div>
+        <div class="mi" data-act="quit"><span class="mi-tx">退出 屏幕切换</span>
+          <span class="keys"><span class="key">Ctrl</span><span class="key">Q</span></span>
+        </div>
+      </div>
+
+      <!-- 预览气泡（顶层悬浮层，可超出窗口） -->
+      <div class="pv" id="pv"></div>
+    </div>
+
+    <!-- ══════════ 右侧说明 ══════════ -->
+    <aside class="notes">
+      <div class="note-card">
+        <h3><span class="n-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 1.5v13M1.5 8h13"/></svg></span>和 mac2 一样的</h3>
+        <ul>
+          <li>780×580 固定窗、188 侧栏、30 底栏</li>
+          <li>行高 68 / 缩略图 46 / 角标 22</li>
+          <li>四态药丸：已同步 / 传输中 / 仅本机 / 失败</li>
+          <li>悬停缩略图 450ms 出气泡，220ms 关</li>
+          <li>单击行 = 复制，双击 = 预览</li>
+          <li>双态空态、键帽、像素字号</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h3><span class="n-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11l4-4 3 3 5-5"/></svg></span>Windows 化的</h3>
+        <ul>
+          <li>自绘标题栏：只留最小化 / 关闭，关闭收进托盘</li>
+          <li>托盘：<b>左键开窗</b>、右键菜单、双击也开窗（不切换）</li>
+          <li>热键 <b>Alt+Space</b> / <b>Ctrl+Shift+V</b>，键帽写文字</li>
+          <li>文件 → 资源管理器；图片 → 默认看图；链接 → 默认浏览器</li>
+          <li>清空确认是<b>窗口内遮罩</b>，不弹第二个窗口</li>
+          <li>设置多一个「高级」组（探测 / 日志 / 配置目录）</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h3><span class="n-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 2v12M2 8h12"/></svg></span>点这里试试</h3>
+        <div class="kbd-list">
+          <div class="kr"><span>切换页三态</span><span class="hint">上方控制条</span></div>
+          <div class="kr"><span>托盘菜单</span><span class="hint">右键托盘图标</span></div>
+          <div class="kr"><span>预览气泡</span><span class="hint">悬停缩略图 450ms</span></div>
+          <div class="kr"><span>药丸重试</span><span class="hint">点失败 / 仅本机</span></div>
+          <div class="kr"><span>清空确认</span><span class="hint">点 🗑</span></div>
+        </div>
+      </div>
+      <div class="note-card">
+        <h3><span class="n-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h8"/></svg></span>关键尺寸</h3>
+        <table class="spec">
+          <tr><td>窗口</td><td>780 × 580 r12</td></tr>
+          <tr><td>标题栏 / 侧栏</td><td>40 / 188</td></tr>
+          <tr><td>内容 padding</td><td>20 · 18</td></tr>
+          <tr><td>行 / 缩略图</td><td>68 / 46 r10</td></tr>
+          <tr><td>角标</td><td>22 r6（2px 描边）</td></tr>
+          <tr><td>工具钮 / 行内动作</td><td>34 / 25</td></tr>
+          <tr><td>预览宽上限</td><td>图 412 · 文 392 · 码 400</td></tr>
+          <tr><td>字号</td><td>27 / 13.5 / 12.5 / 10</td></tr>
+        </table>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   数据（Windows 端记录：app 字段待后端补齐；文件为 P2）
+   ============================================================ */
+const LONG_TEXT = [
+  '验收记录：mac2 第一轮的问题清单（共 12 条）',
+  '',
+  '1. 窗口不能拖动 —— 全屏内容视图吃掉了标题栏拖拽区，整套透明标题栏逻辑删除。',
+  '2. 菜单太大 —— 15px 图标被按 DPR 放大成 30pt，行高翻倍；改成只留状态灯。',
+  '3. 未连接页看不清 —— 主按钮文案内联白色，禁用时仍白字压浅灰；改成按状态改色。',
+  '4. 来源角标只有 1/4 有内容 —— 先画后设 DPR，嵌套 pixmap 的逻辑尺寸被当物理像素。',
+  '5. 复制访达图片是空白 PNG —— 先读了图标位图；改成 file-url 优先。',
+  '6. 预览窗不移出关闭 —— 只有缩略图 leave 计时，气泡本身也要走 schedule_close。',
+  '7. 设置里外观 / 保留历史两行删除，appearance 固定 light。',
+  '8. 存储上限写死 —— 改成可编辑（10–5000 MB）+ 清理按钮。',
+  '9. 数值框文字看不见 —— QSpinBox 被 QSS 改边框后内部宽度算成 1px，改 QLineEdit。',
+  '10. 文件记录：图片文件缩略图空白、没有文件名/目录、按钮组合不对。',
+  '11. 长文本预览叠字 —— 正文放进 QScrollArea，按实际换行量量高。',
+  '12. 重复复制要提到最前，不能堆行。',
+  '',
+  '—— 以上 Windows2 逐条对照落地，行为保持一致。'
+].join('\n');
+
+const RECORDS = [
+  {
+    id:'r1', kind:'text', source:'win', app:'微信', appColor:'#07C160', appLetter:'微',
+    time:'3 分钟前', size:'36 B', type:'纯文本', state:'ok',
+    title:'今晚 8 点在 3 号会议室过一下 v2 的验收清单，记得带上…',
+    text:'今晚 8 点在 3 号会议室过一下 v2 的验收清单，记得带上 Windows 端的安装包和那份托盘日志。'
+  },
+  {
+    id:'r2', kind:'image', source:'win', app:'截图', appColor:'#5B6B84', appLetter:'截',
+    time:'12 分钟前', size:'480 KB', dims:'1920×1080', type:'图片', state:'ok',
+    title:'图片 1920×1080'
+  },
+  {
+    id:'r3', kind:'link', source:'mac', app:'Safari', appColor:'#2E7CF6', appLetter:'S',
+    time:'1 小时前', size:'128 B', type:'链接', state:'pend', progress:0.62,
+    title:'https://developer.microsoft.com/windows/apps/design',
+    text:'https://developer.microsoft.com/windows/apps/design'
+  },
+  {
+    id:'r4', kind:'code', source:'win', app:'VS Code', appColor:'#0E7ACC', appLetter:'V',
+    time:'2 小时前', size:'1.4 KB', type:'代码', state:'ok',
+    title:'def sync_once(self) -> ClipRecord | None:',
+    text:'def sync_once(self) -> ClipRecord | None:\n    item = self.backend.poll()\n    if item is None:\n        return None\n    return self.engine.accept(item)'
+  },
+  {
+    id:'r5', kind:'file', source:'win', app:'资源管理器', appColor:'#E8B23A', appLetter:'E',
+    time:'昨天 14:33', size:'3.0 MB', type:'文件', state:'local',
+    title:'湖畔的清晨.png',
+    path:'C:\\Users\\zhqi\\Downloads\\照片\\湖畔的清晨.png',
+    dir:'~\\Downloads\\照片'
+  },
+  {
+    id:'r6', kind:'text', source:'mac', app:'备忘录', appColor:'#E5B93C', appLetter:'N',
+    time:'昨天 09:12', size:'2.1 KB', type:'纯文本', state:'fail',
+    title:'验收记录：mac2 第一轮的问题清单（共 12 条）…',
+    text:LONG_TEXT
+  }
+];
+
+const KIND_LABEL = {text:'纯文本', code:'代码', link:'链接', image:'图片', file:'文件'};
+const CHIP_MATCH = {
+  all: () => true,
+  text: r => r.kind === 'text' || r.kind === 'code',
+  image: r => r.kind === 'image',
+  file: r => r.kind === 'file',
+  link: r => r.kind === 'link',
+  bad: r => r.state === 'fail' || r.state === 'local'
+};
+
+/* ============================================================
+   图标
+   ============================================================ */
+const ICONS = {
+  copy:'<rect x="5" y="5" width="9" height="10" rx="1.6"/><path d="M3.5 10.5V3.6A1.6 1.6 0 015.1 2h6.3"/>',
+  eye:'<path d="M1.6 8s2.4-4 6.4-4 6.4 4 6.4 4-2.4 4-6.4 4S1.6 8 1.6 8z"/><circle cx="8" cy="8" r="1.7"/>',
+  folder:'<path d="M1.8 4.2h4l1.2 1.4h7.2v7H1.8z"/>',
+  openlink:'<path d="M8 2.5h5.5V8M13.5 2.5L7 9"/><path d="M11 10.5v2.2a1 1 0 01-1 1H3a1 1 0 01-1-1V5.7a1 1 0 011-1h2.2"/>',
+  trash:'<path d="M2.5 3.5h9M5.5 3.5V2.5h3v1M4 3.5l.7 8h4.6l.7-8"/>',
+  text:'<path d="M3 4h8M3 7h8M3 10h5"/>',
+  code:'<path d="M5.2 4.2L2.4 8l2.8 3.8M8.8 4.2L11.6 8l-2.8 3.8"/>',
+  link:'<path d="M6.2 9.8l3.6-3.6"/><path d="M7.4 4.4l1-1a2.4 2.4 0 013.4 3.4l-1 1M6.6 8.2l-1 1a2.4 2.4 0 003.4 3.4l1-1"/>',
+  image:'<rect x="2.2" y="2.8" width="9.6" height="8.4" rx="1.4"/><circle cx="5.4" cy="5.6" r=".9"/><path d="M2.6 9.6l2.6-2.4 2.2 2 1.6-1.4 2.4 2.2"/>',
+  clipboard:'<rect x="3.5" y="3" width="11" height="12" rx="2"/><path d="M6.5 3V2.2A1.2 1.2 0 017.7 1h2.6a1.2 1.2 0 011.2 1.2V3"/>'
+};
+function svg(name, size=14, sw=1.8){
+  return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="'+sw+'" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>';
+}
+const LOGO_WIN = '<svg width="12" height="12" viewBox="0 0 22 22" fill="currentColor"><rect x="1" y="1" width="9" height="9" rx="1.4"/><rect x="12" y="1" width="9" height="9" rx="1.4"/><rect x="1" y="12" width="9" height="9" rx="1.4"/><rect x="12" y="12" width="9" height="9" rx="1.4"/></svg>';
+const LOGO_MAC = '<svg width="12" height="12" viewBox="0 0 22 22" fill="currentColor"><path d="M15.6 11.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.8-3-.8c-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.7 2.3 2.9 2.2 1.2 0 1.6-.7 3-.7s1.8.7 3 .7c1.2 0 2-1.1 2.8-2.2.6-.9 1-1.7 1.2-2.1-2.7-1-2.4-4.9-.4-4zM13.4 5.2c.6-.8 1-1.9.9-3-.9 0-2 .6-2.7 1.4-.6.7-1.1 1.8-.9 2.9 1 .1 2-.5 2.7-1.3z"/></svg>';
+
+/* ============================================================
+   状态
+   ============================================================ */
+const el = id => document.getElementById(id);
+const desktop = el('desktop');
+const pv = el('pv');
+let state = {page:'switch', src:'win', data:'full', peer:true};
+let filter = 'all';
+let query = '';
+let records = RECORDS.slice();
+let toastTimer = null;
+let openTimer = null, closeTimer = null;
+
+/* ============================================================
+   页面切换
+   ============================================================ */
+function setPage(name){
+  state.page = name;
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'page' + name.charAt(0).toUpperCase() + name.slice(1)));
+  document.querySelectorAll('.nav').forEach(b => b.classList.toggle('on', b.dataset.page === name));
+  document.querySelectorAll('#segPage button').forEach(b => b.classList.toggle('on', b.dataset.page === name));
+  hidePreview();
+  closeMenu();
+  const title = {switch:'屏幕切换', clip:'屏幕切换 · 剪贴板', set:'屏幕切换 · 设置'}[name] || '屏幕切换';
+  document.querySelector('.cap-title').textContent = title;
+  if (name !== 'set') document.querySelectorAll('[data-hk]').forEach(h => h.classList.remove('recording'));
+}
+document.querySelectorAll('[data-page]').forEach(b => {
+  b.addEventListener('click', () => setPage(b.dataset.page));
+});
+el('qrowClip').addEventListener('click', () => setPage('clip'));
+
+/* ============================================================
+   画面归属三态
+   ============================================================ */
+const SRC = {
+  win: {name:'Windows', plate:'win', logo:LOGO_WIN, port:'HDMI', sub:'AOC Q2790PC · HDMI · 输入源 17', other:'Mac', target:'mac', active:'win'},
+  mac: {name:'Mac', plate:'mac', logo:LOGO_MAC, port:'USB-C', sub:'AOC Q2790PC · USB-C · 输入源 18', other:'Windows', target:'win', active:'mac'}
+};
+
+function setSource(src){
+  state.src = src;
+  document.querySelectorAll('#segSrc button').forEach(b => b.classList.toggle('on', b.dataset.src === src));
+  const plate = el('heroPlate');
+  const btn = el('btnSwitch');
+  const btnTx = el('btnSwitchTx');
+  const keys = el('btnKeys');
+  const force = el('btnForce');
+  const note = el('heroNote');
+  const noteTx = el('heroNoteTx');
+  const pill = el('srcPill');
+
+  if (src === 'unknown'){
+    plate.className = 'plate neutral';
+    plate.innerHTML = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
+    el('heroName').textContent = '未检测到外接显示器';
+    el('heroSub').textContent = state.peer ? '画面可能在 Mac · 可以请它代发切换' : '没接线，或画面在另一台机器上';
+    pill.className = 'pill warn';
+    pill.textContent = '待确认';
+    btn.disabled = !state.peer;
+    btnTx.textContent = state.peer ? '从 Mac 切过来' : '未检测到显示器';
+    keys.style.visibility = 'hidden';
+    force.disabled = true;
+    note.className = 'hero-note dim';
+    note.querySelector('svg').style.display = 'none';
+    noteTx.textContent = state.peer ? '对端在线，可以直接把画面叫回来' : '插上显示器后 2–4 秒内自动恢复';
+    document.querySelectorAll('.dev').forEach(d => { d.classList.remove('on'); d.classList.add('dead'); });
+    document.querySelectorAll('.dev .dev-led').forEach(l => l.classList.remove('on'));
+    document.querySelectorAll('.dev .dev-tag').forEach(t => t.textContent = '未连接');
+    document.querySelector('.dev[data-dev="win"] .dev-sub').innerHTML = 'HDMI · 输入源 17<br>dualswitch-win · 本机';
+    document.querySelector('.dev[data-dev="mac"] .dev-sub').innerHTML =
+      'USB-C · 输入源 18<br>' + (state.peer ? 'dualswitch-mac · 在线' : 'dualswitch-mac · 离线');
+    el('sideTxt').textContent = state.peer ? '对端在线' : '对端离线';
+    el('sideLed').className = 'led off';
+    el('footTxt').textContent = state.peer ? '对端在线 · 未检测到外接显示器' : '对端离线 · 未检测到外接显示器';
+    el('footLed').className = 'led off';
+    el('trayDot').style.background = 'var(--idle)';
+    el('trayIcon').title = '屏幕切换 · Alt Space · 未检测到显示器';
+  } else {
+    const s = SRC[src];
+    const other = SRC[s.target];
+    plate.className = 'plate ' + s.plate;
+    plate.innerHTML = s.logo.replace('width="12" height="12"', 'width="30" height="30"');
+    el('heroName').textContent = s.name;
+    el('heroSub').textContent = s.sub;
+    pill.className = 'pill run';
+    pill.textContent = '运行中';
+    btn.disabled = false;
+    btnTx.textContent = '切换到 ' + other.name;
+    keys.style.visibility = 'visible';
+    force.disabled = false;
+    note.className = 'hero-note';
+    note.querySelector('svg').style.display = '';
+    noteTx.textContent = '上次切换 63.9 ms · 回读已确认';
+    document.querySelectorAll('.dev').forEach(d => {
+      d.classList.remove('dead');
+      d.classList.toggle('on', d.dataset.dev === s.active);
+    });
+    document.querySelectorAll('.dev').forEach(d => {
+      const on = d.dataset.dev === s.active;
+      d.querySelector('.dev-led').classList.toggle('on', on);
+      d.querySelector('.dev-tag').textContent = on ? '当前画面' : '未使用';
+    });
+    document.querySelector('.dev[data-dev="win"] .dev-sub').innerHTML = 'HDMI · 输入源 17<br>dualswitch-win · 本机';
+    document.querySelector('.dev[data-dev="mac"] .dev-sub').innerHTML = 'USB-C · 输入源 18<br>dualswitch-mac · 在线';
+    el('sideTxt').textContent = '已连接 ' + other.name;
+    el('sideLed').className = 'led';
+    el('footTxt').textContent = '已连接 ' + other.name + ' · 剪贴板已开启';
+    el('footLed').className = 'led';
+    el('trayDot').style.background = 'var(--ok)';
+    el('trayIcon').title = '屏幕切换 · Alt Space · 当前画面：' + s.name;
+  }
+  updateMenu();
+}
+
+document.querySelectorAll('#segSrc button').forEach(b => b.addEventListener('click', () => setSource(b.dataset.src)));
+el('peerOnline').addEventListener('change', e => { state.peer = e.target.checked; setSource(state.src); });
+
+/* ============================================================
+   切换动作（三段：busy → 翻转 → toast）
+   ============================================================ */
+function doSwitch(force){
+  const btn = el('btnSwitch');
+  if (state.src === 'unknown'){
+    if (force) { toast('未检测到显示器，无法强制切换'); return; }
+    if (!state.peer) { toast('未检测到显示器，无法切换'); return; }
+  }
+  if (state.src === 'unknown' && state.peer){
+    toast('已请 Mac 代发切换');
+    setTimeout(() => setSource('mac'), 700);
+    return;
+  }
+  const target = SRC[state.src].target;
+  btn.disabled = true;
+  el('btnSwitchTx').textContent = '切换中…';
+  el('btnKeys').style.visibility = 'hidden';
+  el('heroNote').className = 'hero-note dim';
+  el('heroNoteTx').textContent = '正在发送 DDC Set · 目标 ' + SRC[target].name;
+  setTimeout(() => {
+    setSource(target);
+    toast('已切换到 ' + SRC[target].name + (force ? '（强制）' : ''));
+  }, 900);
+}
+el('btnSwitch').addEventListener('click', () => doSwitch(false));
+el('btnForce').addEventListener('click', () => doSwitch(true));
+document.querySelectorAll('.dev').forEach(d => d.addEventListener('click', () => {
+  if (d.classList.contains('dead')) return;
+  if (d.classList.contains('on')) { toast('画面已经在这台机器上'); return; }
+  doSwitch(false);
+}));
+
+/* ============================================================
+   托盘菜单
+   ============================================================ */
+function updateMenu(){
+  const menuSwitch = el('menuSwitch');
+  const menuForce = el('menuForce');
+  const status = el('menuStatus');
+  const led = el('menuLed');
+  if (state.src === 'unknown'){
+    status.textContent = '当前画面：未检测到';
+    led.className = 'mled off';
+    menuSwitch.textContent = state.peer ? '从 Mac 切过来' : '切换（未检测到显示器）';
+    menuSwitch.parentElement.classList.toggle('disabled', !state.peer);
+    menuForce.textContent = '强制切换（未检测到显示器）';
+    menuForce.parentElement.classList.add('disabled');
+  } else {
+    const s = SRC[state.src];
+    const other = SRC[s.target];
+    status.textContent = '当前画面：' + s.name;
+    led.className = 'mled';
+    menuSwitch.textContent = '切换到 ' + other.name + '（' + other.port + '）';
+    menuSwitch.parentElement.classList.remove('disabled');
+    menuForce.textContent = '强制切到 ' + other.name + '（' + other.port + '）';
+    menuForce.parentElement.classList.remove('disabled');
+  }
+}
+function openMenu(){ el('trayMenu').classList.add('on'); el('trayIcon').classList.add('on'); el('btnMenu').classList.add('on'); }
+function closeMenu(){ el('trayMenu').classList.remove('on'); el('trayIcon').classList.remove('on'); el('btnMenu').classList.remove('on'); }
+el('trayIcon').addEventListener('click', e => {
+  e.stopPropagation();
+  if (el('trayMenu').classList.contains('on')) { closeMenu(); return; }
+  closeMenu();
+  toast('打开主界面（左键单击 = 开窗，右键 = 菜单）');
+});
+el('trayIcon').addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); openMenu(); });
+el('btnMenu').addEventListener('click', e => { e.stopPropagation(); el('trayMenu').classList.contains('on') ? closeMenu() : openMenu(); });
+document.addEventListener('click', e => {
+  if (!el('trayMenu').contains(e.target) && e.target !== el('trayIcon')) closeMenu();
+});
+el('trayMenu').addEventListener('click', e => {
+  const item = e.target.closest('.mi[data-act]');
+  if (!item) return;
+  const act = item.dataset.act;
+  closeMenu();
+  if (act === 'open') toast('打开主界面');
+  if (act === 'switch') doSwitch(false);
+  if (act === 'force') doSwitch(true);
+  if (act === 'clip') { setPage('clip'); el('clipSearch').focus(); }
+  if (act === 'settings') setPage('set');
+  if (act === 'quit') toast('退出：真正结束进程（窗口只是收进托盘）');
+});
+
+/* ============================================================
+   剪贴板：渲染
+   ============================================================ */
+function thumbHtml(r){
+  const badge = '<span class="badge ' + (r.source === 'win' ? 'win' : 'mac') + '">' + (r.source === 'win' ? LOGO_WIN : LOGO_MAC) + '</span>';
+  let inner;
+  if (r.kind === 'image'){
+    inner = '<span class="tile"><span class="shot"></span></span>';
+  } else if (r.kind === 'file'){
+    inner = '<span class="tile"><span class="photo"></span></span>';
+  } else {
+    const color = {text:'#657DFF', code:'#7A5AF8', link:'#6B7BD3'}[r.kind] || '#657DFF';
+    const ic = {text:'text', code:'code', link:'link'}[r.kind] || 'text';
+    inner = '<span class="tile" style="background:' + color + '">' + svg(ic, 20, 1.9) + '</span>';
+  }
+  return '<div class="thumb" data-id="' + r.id + '">' + inner + badge + '</div>';
+}
+function pillHtml(r){
+  const map = {ok:['ok','已同步'], pend:['pend','传输中 ' + Math.round((r.progress||0.25)*100) + '%'], local:['local','仅本机'], fail:['fail','失败']};
+  const [cls, tx] = map[r.state];
+  return '<button class="stat ' + cls + '" data-pill="' + r.id + '">' + tx + '</button>';
+}
+function metaHtml(r){
+  const appIc = '<span class="app-ic" style="background:' + r.appColor + '">' + r.appLetter + '</span>';
+  const parts = [
+    '<span class="src">' + (r.source === 'win' ? 'Windows' : 'Mac') + '</span>',
+    '<span class="dot"></span>', appIc, '<span>' + r.app + '</span>',
+    '<span class="dot"></span><span>' + r.time + '</span>',
+    '<span class="dot"></span><span>' + r.size + '</span>'
+  ];
+  if (r.dims) parts.push('<span class="dot"></span><span>' + r.dims + '</span>');
+  if (r.kind !== 'file') parts.push('<span class="dot"></span><span>' + r.type + '</span>');
+  return '<div class="meta">' + parts.join('') + '</div>';
+}
+function actsHtml(r){
+  let out = '<button class="act" data-act="copy" title="复制">' + svg('copy',13,1.7) + '</button>';
+  if (r.kind === 'image') out += '<button class="act" data-act="preview" title="用默认图片查看器打开">' + svg('eye',13,1.7) + '</button>';
+  if (r.kind === 'link') out += '<button class="act" data-act="openlink" title="打开链接">' + svg('openlink',13,1.7) + '</button>';
+  if (r.kind === 'file') out += '<button class="act" data-act="explorer" title="在资源管理器中显示">' + svg('folder',13,1.7) + '</button>';
+  out += '<button class="act danger" data-act="delete" title="删除">' + svg('trash',13,1.7) + '</button>';
+  return '<div class="acts">' + out + '</div>';
+}
+function rowHtml(r){
+  const mono = r.kind === 'code' ? ' mono' : '';
+  const prog = r.state === 'pend' ? '<div class="prog"><i style="width:' + Math.round((r.progress||0.25)*100) + '%"></i></div>' : '';
+  return '<div class="row" data-row="' + r.id + '">' +
+    thumbHtml(r) +
+    '<div class="row-main">' +
+      '<div class="row-title' + mono + '">' + r.title + '</div>' +
+      metaHtml(r) +
+    '</div>' +
+    '<div class="row-right">' + pillHtml(r) + actsHtml(r) + '</div>' +
+    prog +
+  '</div>';
+}
+function visible(){
+  return records.filter(r => CHIP_MATCH[filter](r)).filter(r => {
+    if (!query) return true;
+    const hay = (r.title + ' ' + (r.text||'') + ' ' + (r.path||'') + ' ' + r.app + ' ' + r.type).toLowerCase();
+    return hay.indexOf(query) >= 0;
+  });
+}
+function render(){
+  const list = el('clipList');
+  const rows = visible();
+  list.innerHTML = rows.map(rowHtml).join('');
+  el('navCnt').textContent = records.length ? records.length : '';
+  el('qHint').textContent = records.length + ' 条';
+  el('confirmTitle').textContent = '清空本机全部 ' + records.length + ' 条记录？';
+  refreshChips();
+  updateEmpty(rows.length);
+  bindRows();
+}
+function refreshChips(){
+  const counts = {all:records.length, text:0, image:0, file:0, link:0, bad:0};
+  records.forEach(r => {
+    if (r.state === 'fail' || r.state === 'local') counts.bad++;
+    const key = r.kind === 'code' ? 'text' : r.kind;
+    if (counts[key] !== undefined) counts[key]++;
+  });
+  document.querySelectorAll('#chips .chip').forEach(c => {
+    const k = c.dataset.f;
+    c.querySelector('.n').textContent = counts[k];
+    c.classList.toggle('on', k === filter);
+  });
+}
+function updateEmpty(n){
+  const empty = el('empty');
+  const list = el('clipList');
+  if (n > 0){ empty.classList.remove('on'); list.style.display = ''; return; }
+  empty.classList.add('on');
+  list.style.display = 'none';
+  const filtering = !!query || filter !== 'all';
+  el('emptyTitle').textContent = filtering ? '当前筛选下暂无内容' : '剪贴板为空';
+  el('emptySub').innerHTML = filtering ? '换个筛选条件试试' : '复制内容后会显示在这里，<br>并自动同步到另一台机器';
+  el('empty').querySelector('svg').innerHTML = filtering
+    ? '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/>'
+    : ICONS.clipboard;
+}
+
+/* 行交互 */
+function bindRows(){
+  document.querySelectorAll('.row').forEach(row => {
+    const id = row.dataset.row;
+    const rec = records.find(r => r.id === id);
+    const thumb = row.querySelector('.thumb');
+
+    row.addEventListener('click', e => {
+      if (e.target.closest('.act') || e.target.closest('[data-pill]')) return;
+      if (rec.state === 'fail' || rec.state === 'local') { retry(rec); return; }
+      toast('已复制');
+    });
+    row.addEventListener('dblclick', e => {
+      if (e.target.closest('.act')) return;
+      showPreview(rec, thumb);
+    });
+
+    thumb.addEventListener('mouseenter', () => {
+      clearTimeout(closeTimer);
+      clearTimeout(openTimer);
+      openTimer = setTimeout(() => showPreview(rec, thumb), 450);
+    });
+    thumb.addEventListener('mouseleave', () => {
+      clearTimeout(openTimer);
+      closeTimer = setTimeout(hidePreview, 220);
+    });
+
+    row.querySelectorAll('.act').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const act = btn.dataset.act;
+        if (act === 'copy') toast('已复制');
+        if (act === 'preview') { showPreview(rec, thumb); toast('用默认图片查看器打开'); }
+        if (act === 'openlink') toast('用默认浏览器打开链接');
+        if (act === 'explorer') toast('在资源管理器中显示：' + rec.path);
+        if (act === 'delete') { records = records.filter(r => r.id !== rec.id); render(); toast('已删除 1 条'); }
+      });
+    });
+
+    const pill = row.querySelector('[data-pill]');
+    if (pill) pill.addEventListener('click', e => {
+      e.stopPropagation();
+      if (rec.state === 'fail' || rec.state === 'local') retry(rec);
+      else toast('已复制');
+    });
+  });
+}
+
+/* 药丸重试 */
+function retry(rec){
+  const pill = document.querySelector('[data-pill="' + rec.id + '"]');
+  if (!pill) return;
+  pill.className = 'stat pend';
+  let step = 0;
+  const timer = setInterval(() => {
+    step++;
+    const p = Math.min(100, step * 25);
+    pill.textContent = '传输中 ' + p + '%';
+    if (step >= 4){
+      clearInterval(timer);
+      rec.state = 'ok';
+      rec.progress = 1;
+      pill.className = 'stat ok';
+      pill.textContent = '已同步';
+      refreshChips();
+      toast('已重新同步');
+    }
+  }, 240);
+}
+
+/* 筛选 / 搜索 */
+document.querySelectorAll('#chips .chip').forEach(c => c.addEventListener('click', () => {
+  filter = c.dataset.f;
+  hidePreview();
+  render();
+}));
+el('clipSearch').addEventListener('input', e => {
+  query = e.target.value.trim().toLowerCase();
+  hidePreview();
+  render();
+});
+
+/* 暂停 */
+let paused = false;
+el('btnPause').addEventListener('click', () => {
+  paused = !paused;
+  const b = el('btnPause');
+  b.classList.toggle('on', paused);
+  b.innerHTML = paused
+    ? '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M4.5 3l6 4-6 4z"/></svg>'
+    : '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 3v8M9 3v8"/></svg>';
+  b.title = paused ? '恢复记录剪贴板' : '暂停记录剪贴板';
+  toast(paused ? '已暂停记录剪贴板' : '已恢复记录剪贴板');
+});
+
+/* ============================================================
+   预览气泡
+   ============================================================ */
+function bubbleContent(rec){
+  const pill = pillHtml(rec).replace('class="stat', 'class="pill');
+  if (rec.kind === 'image'){
+    return {
+      w: 380,
+      head: svg('image',14,1.7) + '<span class="pv-title">图片</span>' + '<span class="pill run" style="font-size:9.5px;padding:2px 7px">已同步</span>',
+      body: '<div class="pv-img"><div class="shot"></div></div><div class="pv-dim">1920 × 1080 · PNG · 480 KB</div>',
+      meta: 'Windows · 截图 · 12 分钟前 · 480 KB',
+      btns: [{act:'preview', ic:'eye', tip:'用默认图片查看器打开'}, {act:'copy', ic:'copy', tip:'复制', pri:true}]
+    };
+  }
+  if (rec.kind === 'file'){
+    return {
+      w: 380,
+      head: svg('folder',14,1.7) + '<span class="pv-title">文件</span>' + '<span class="pill" style="font-size:9.5px;padding:2px 7px;background:var(--idle-bg);color:var(--idle)">仅本机</span>',
+      body: '<div class="pv-file"><div class="tile52">' + svg('image',24,1.6) + '<span class="ext">PNG</span></div>' +
+            '<div class="pv-fname">湖畔的清晨.png</div><div class="pv-fdir">~\\Downloads\\照片</div></div>',
+      meta: '3.0 MB · 昨天 14:33',
+      btns: [{act:'preview', ic:'eye', tip:'用默认图片查看器打开'}, {act:'explorer', ic:'folder', tip:'在资源管理器中显示'}, {act:'copy', ic:'copy', tip:'复制', pri:true}]
+    };
+  }
+  if (rec.kind === 'link'){
+    return {
+      w: 380,
+      head: svg('link',14,1.7) + '<span class="pv-title">链接</span>' + '<span class="pill run" style="font-size:9.5px;padding:2px 7px;background:var(--run-bg);color:var(--run)">传输中 62%</span>',
+      body: '<div class="pv-link">' + rec.text + '</div>',
+      meta: 'Mac · Safari · 1 小时前 · 128 B',
+      btns: [{act:'openlink', ic:'openlink', tip:'打开链接'}, {act:'copy', ic:'copy', tip:'复制', pri:true}]
+    };
+  }
+  if (rec.kind === 'code'){
+    return {
+      w: 400,
+      head: svg('code',14,1.7) + '<span class="pv-title">代码</span>' + '<span class="pill run" style="font-size:9.5px;padding:2px 7px">已同步</span>',
+      body: '<pre class="pv-code">' + escapeHtml(rec.text) + '</pre>',
+      meta: 'Windows · VS Code · 2 小时前 · 1.4 KB',
+      btns: [{act:'copy', ic:'copy', tip:'复制', pri:true}]
+    };
+  }
+  return {
+    w: 392,
+    head: svg('text',14,1.7) + '<span class="pv-title">纯文本</span>' + '<span class="pill run" style="font-size:9.5px;padding:2px 7px">已同步</span>',
+    body: '<div class="pv-text">' + escapeHtml(rec.text) + '</div>',
+    meta: (rec.source === 'win' ? 'Windows' : 'Mac') + ' · ' + rec.app + ' · ' + rec.time + ' · ' + rec.size,
+    btns: [{act:'copy', ic:'copy', tip:'复制', pri:true}],
+    scroll: rec.text.length > 400
+  };
+}
+function escapeHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function showPreview(rec, thumb){
+  clearTimeout(openTimer);
+  const c = bubbleContent(rec);
+  const btns = c.btns.map(b => '<button class="pv-btn' + (b.pri ? ' pri' : '') + '" data-pv="' + b.act + '" title="' + b.tip + '">' + svg(b.ic,13,1.8) + '</button>').join('');
+  pv.innerHTML = '<div class="pv-card" style="width:' + c.w + 'px">' +
+      '<div class="pv-head">' + c.head + '</div>' +
+      '<div class="pv-body"' + (c.scroll ? ' style="max-height:300px"' : '') + '>' + c.body + '</div>' +
+      '<div class="pv-foot"><span class="pv-meta">' + c.meta + '</span>' + btns + '</div>' +
+    '</div><div class="pv-arrow right"></div>';
+  pv.classList.add('on');
+
+  const card = pv.querySelector('.pv-card');
+  const w = c.w, h = card.offsetHeight;
+  const dRect = desktop.getBoundingClientRect();
+  const tRect = thumb.getBoundingClientRect();
+  const thumbLeft = tRect.left - dRect.left;
+  const thumbCenterY = tRect.top - dRect.top + tRect.height / 2;
+
+  let left = thumbLeft - w - 12;
+  const arrowRight = left > -60;
+  if (!arrowRight) left = thumbLeft + tRect.width + 12;
+  let top = thumbCenterY - h / 2;
+  top = Math.max(8, Math.min(desktop.clientHeight - h - 8, top));
+
+  pv.style.left = Math.round(left) + 'px';
+  pv.style.top = Math.round(top) + 'px';
+  const arrow = pv.querySelector('.pv-arrow');
+  arrow.className = 'pv-arrow ' + (arrowRight ? 'right' : 'left');
+  arrow.style.top = Math.max(12, Math.min(h - 30, thumbCenterY - top - 6)) + 'px';
+
+  pv.onmouseenter = () => clearTimeout(closeTimer);
+  pv.onmouseleave = () => { closeTimer = setTimeout(hidePreview, 220); };
+  pv.querySelectorAll('[data-pv]').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    const act = b.dataset.pv;
+    if (act === 'copy') toast('已复制');
+    if (act === 'preview') toast('用默认图片查看器打开');
+    if (act === 'explorer') toast('在资源管理器中显示：' + rec.path);
+    if (act === 'openlink') toast('用默认浏览器打开链接');
+  }));
+}
+function hidePreview(){ pv.classList.remove('on'); pv.innerHTML = ''; }
+
+/* ============================================================
+   设置页控件
+   ============================================================ */
+document.querySelectorAll('[data-toggle]').forEach(t => t.addEventListener('click', () => t.classList.toggle('on')));
+document.querySelectorAll('[data-seg]').forEach(seg => seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+  seg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  toast('已切换为「' + b.textContent + '」模式');
+})));
+document.querySelectorAll('[data-hk]').forEach(h => {
+  h.addEventListener('click', () => {
+    document.querySelectorAll('[data-hk]').forEach(x => { if (x !== h) x.classList.remove('recording'); });
+    h.classList.toggle('recording');
+    if (h.classList.contains('recording')) toast('按下新组合键（Esc 取消）');
+  });
+});
+document.querySelectorAll('[data-adv]').forEach(b => b.addEventListener('click', () => toast(b.dataset.adv)));
+
+/* ============================================================
+   清空确认 / toast / 窗口按钮
+   ============================================================ */
+function showConfirm(){ el('mask').classList.add('on'); }
+function hideConfirm(){ el('mask').classList.remove('on'); }
+el('btnClear').addEventListener('click', showConfirm);
+el('btnClean').addEventListener('click', showConfirm);
+el('btnConfirm').addEventListener('click', showConfirm);
+el('btnCancelClear').addEventListener('click', hideConfirm);
+el('btnDoClear').addEventListener('click', () => {
+  const n = records.length;
+  records = [];
+  hideConfirm();
+  render();
+  toast('已清空 ' + n + ' 条');
+});
+el('mask').addEventListener('click', e => { if (e.target === el('mask')) hideConfirm(); });
+
+function toast(msg){
+  const t = el('toast');
+  t.textContent = msg;
+  t.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('on'), 1900);
+}
+el('btnMin').addEventListener('click', () => toast('最小化到任务栏'));
+el('btnClose').addEventListener('click', () => toast('已收进托盘（关闭窗口不退出）'));
+
+/* 数据空态 */
+document.querySelectorAll('#segData button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#segData button').forEach(x => x.classList.toggle('on', x === b));
+  state.data = b.dataset.data;
+  if (state.data === 'empty'){
+    filter = 'all'; query = ''; el('clipSearch').value = '';
+    records = [];
+  } else {
+    records = RECORDS.slice();
+  }
+  hidePreview();
+  render();
+}));
+
+/* Esc */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape'){
+    if (el('mask').classList.contains('on')) { hideConfirm(); return; }
+    if (el('trayMenu').classList.contains('on')) { closeMenu(); return; }
+    if (pv.classList.contains('on')) { hidePreview(); return; }
+    document.querySelectorAll('[data-hk]').forEach(h => h.classList.remove('recording'));
+  }
+  if (e.ctrlKey && (e.key === 'f' || e.key === 'F')){
+    if (state.page !== 'clip') setPage('clip');
+    e.preventDefault();
+    el('clipSearch').focus();
+  }
+});
+
+/* 初始化 */
+render();
+setSource('win');
+
+/* 设计稿直链（出图/评审用）：
+   index.html?page=clip&preview=r1
+   index.html?src=unknown&peer=0
+   index.html?menu=1 / ?confirm=1 / ?data=empty */
+(function demoFromQuery(){
+  const p = new URLSearchParams(location.search);
+  if (p.get('focus')) document.body.classList.add('focus');
+  if (p.get('peer') === '0'){ state.peer = false; el('peerOnline').checked = false; }
+  if (p.get('src')) setSource(p.get('src'));
+  if (p.get('data') === 'empty'){ records = []; filter = 'all'; render(); }
+  if (p.get('page')) setPage(p.get('page'));
+  if (p.get('bottom')) setTimeout(() => { el('pageSet').scrollTop = 9999; }, 30);
+  if (p.get('menu')) openMenu();
+  if (p.get('confirm')) showConfirm();
+  const pid = p.get('preview');
+  if (pid){
+    setPage('clip');
+    const rec = records.find(r => r.id === pid);
+    const th = document.querySelector('[data-row="' + pid + '"] .thumb');
+    if (rec && th) setTimeout(() => showPreview(rec, th), 80);
+  }
+})();
+</script>
+</body>
+</html>
