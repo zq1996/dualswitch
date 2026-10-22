@@ -12,6 +12,11 @@ import time
 
 import pytest
 
+# v2 界面树按平台分发（darwin → ui/mac2，win32 → ui/win2），这份用例只对 mac 树有意义。
+# 不在这里拦一道，就会逼着对端在 Windows 上跑它、然后改断言迁就平台 —— 互相改文件的循环。
+if sys.platform != "darwin":
+    pytest.skip("v2 界面树是 macOS 端的（win32 走 ui/win2）", allow_module_level=True)
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6", reason="未安装 PySide6，跳过界面测试")
