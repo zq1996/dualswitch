@@ -76,7 +76,7 @@
   2. `QT_QPA_PLATFORM=offscreen python tools/shots_v2.py` 出图，`v2-switch` 里「运行中」是胶囊形
   3. 新增一条守卫用例：自绘 pill 抓图后**角落像素 ≠ 中心像素**（方角时两者相同）
   4. `pytest -q` 全绿
-- **状态**: 已修复（2026-10-22，**未提交**）
+- **状态**: 已合并 `dc798c8`（2026-10-22）
   · 实测把规律钉死了：Qt 只在「圆角 ≤ 控件高度的一半」时才画圆角。同一个 20px 高的标签，
     `10px` 生效、`12px` 起直接退化成直角（角像素 alpha 从 28 跳到 53，可量化）。
     Windows 端「19px 上 9/10/999 全方」是另一回事（那边控件类型不同）。
@@ -134,7 +134,7 @@
 - **验收**:
   1. `pytest -q tests/test_icons.py --basetemp=.pytest-tmp`（母版与副本逐字节比对 + menubar 必须 36×36）
   2. `python design/icon/build_icon.py` 后再跑一遍，上面仍然绿（说明同步是自动的）
-- **状态**: 已修复（2026-10-22，**未提交**）
+- **状态**: 已合并 `dc798c8`（2026-10-22）
   · 守卫用例不分平台，Windows 端 pull 后跑全量会自动带上；他们的打包会拿到新 `screen-switch.ico`。
 
 ---
@@ -155,7 +155,7 @@
      （状态机 / PIN 错误 / 过期 / 5 次上限 / 取消回滚 / 解除 / 身份绑定 / 配对中不传输）
   2. `python tools/shots_v2.py` 出 `outputs/v2-pair-*.png`，7 个状态逐张对照 §12.5
   3. `pytest -q --basetemp=.pytest-tmp` 全绿
-- **状态**: 已实现（2026-10-22）
+- **状态**: 已合并 `dc798c8`（2026-10-22）
   · 新增 `ui/mac2/pairing_page.py`；`sync/engine.py` 加 `begin_pairing / cancel_pairing / pair_with_peer /
     unpair / pairing_status / discovered_peers / refresh_discovery / set_config_saver`；
     `transport.py` 加 `set_key(drop_links) / set_expected_peer_device / on_auth_failed`；
