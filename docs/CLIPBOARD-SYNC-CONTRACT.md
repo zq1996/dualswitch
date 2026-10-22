@@ -239,6 +239,15 @@ A 端同法算 key，校验通过 → HELLO_OK，双方把 key 存进 config（c
 > 盐是**固定串**不是 `device_id_A`（第 11 节 2026-10-18 条）。固定盐让「两端输入同一个 PIN
 > ⇒ 同一个 key」成立，所以**不需要先交换 device_id、也不需要把 PIN 或 key 发到网上**。
 
+**每帧**：`seal(key, plaintext)` = `SHA256(key + counter)` 生成 keystream，XOR 后附 `HMAC-SHA256(key, ciphertext)[:16]`。
+`counter` 每条消息自增，接收端校验单调（防重放）。
+
+> 说明：这是应用层自研的"够用级"加密，不是经过审计的 AEAD。威胁模型只覆盖"同一局域网有人抓包"，
+> 不防"已经拿到 PIN 且能中间人"。P2 如果要求更高，换 TLS 重写 `transport.py` 的 40 行即可，协议层不用动。
+>
+> **调试开关**：`clipboard.debug_plain = true` 时跳过加密（帧头加 `"enc": false`），方便用抓包看内容。
+> 默认关闭，且写入配置时在日志里记一条 warning。
+
 #### 4.4.1 配对的实际流程（2026-10-22 起有界面，**两端照这个实现**）
 
 1. **A（显示端）**：`derive_key(pin)` 得到临时 key，交给 transport（`set_key(key, drop_links=True)`，
@@ -258,15 +267,6 @@ A 端同法算 key，校验通过 → HELLO_OK，双方把 key 存进 config（c
 
 **输错次数**：B 侧本地 5 次上限（`attempts_left` 递减，用尽后必须让 A 重新显示码）；
 A 侧按来源 IP 累计 5 次认证失败同样作废当前码。两侧上限都是 5，别各自改。
-
-**每帧**：`seal(key, plaintext)` = `SHA256(key + counter)` 生成 keystream，XOR 后附 `HMAC-SHA256(key, ciphertext)[:16]`。
-`counter` 每条消息自增，接收端校验单调（防重放）。
-
-> 说明：这是应用层自研的"够用级"加密，不是经过审计的 AEAD。威胁模型只覆盖"同一局域网有人抓包"，
-> 不防"已经拿到 PIN 且能中间人"。P2 如果要求更高，换 TLS 重写 `transport.py` 的 40 行即可，协议层不用动。
->
-> **调试开关**：`clipboard.debug_plain = true` 时跳过加密（帧头加 `"enc": false`），方便用抓包看内容。
-> 默认关闭，且写入配置时在日志里记一条 warning。
 
 ### 4.5 环抑制（三层，缺一不可）
 
