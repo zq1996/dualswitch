@@ -6,10 +6,13 @@
   · 右键     → 弹菜单（菜单是唯一「随手切一下」的入口）
   · 悬停     → tooltip：`屏幕切换 · Alt Space · 当前画面：Windows`
 
-菜单（§4.2）：8 行 + 4 条分隔线，宽 240、行高 32、圆角 6；hover 主色实底 + 白字，
+菜单（§4.2）：9 行 + 5 条分隔线，宽 240、行高 32、圆角 6；hover 主色实底 + 白字，
 键帽同步反白。实现是 `QMenu` + `QWidgetAction` 自绘行（键帽与窗口内完全一致），
 Win10 上若自绘行 hover 闪烁，`DUALSWITCH_NATIVE_MENU=1` 退化为原生 QAction +
 `setShortcut` 文本（只显示、不注册）。
+
+2026-10-22 跟随 mac2 加了第 7 行「配对电脑… 已配对/未配对」（`docs/UI-WINDOWS2-DESIGN.md`
+§14.3）：标题后跟状态文字，与侧栏状态灯同一数据源；行数 +1、分隔线 +1。
 
 已移除：探测显示器 / 查看日志 / 打开配置目录 → 移进 **设置 → 高级**（§7.5）。
 退出用普通色（Windows 菜单没有「红字菜单项」惯例）。
@@ -70,6 +73,15 @@ def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> l
         led = "none"
 
     hotkey_keys = tuple(theme.keycap_labels(hotkey_label))
+    # 配对电脑（§14.3）：标题后跟状态文字，**与侧栏状态灯同一数据源**
+    # （runner 传进来的 `pair_state` 就是 `pairing_page.status_text()`），不各算一遍。
+    pair_state = ""
+    if actions.get("pair_state") is not None:
+        try:
+            pair_state = str(actions["pair_state"]() or "")
+        except Exception:  # noqa: BLE001 - 状态读不出来不影响菜单可用
+            pair_state = ""
+    pair_title = "配对电脑…" + (f"    {pair_state}" if pair_state else "")
     return [
         MenuEntry("status", status_title, led=led),
         MenuEntry("sep"),
@@ -85,6 +97,8 @@ def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> l
                   keys=("Ctrl", "Shift", "V")),
         MenuEntry("item", "设置…", actions.get("settings"), icon="settings",
                   keys=("Ctrl", ",")),
+        MenuEntry("sep"),
+        MenuEntry("item", pair_title, actions.get("pair"), icon="pair"),
         MenuEntry("sep"),
         MenuEntry(
             "label",

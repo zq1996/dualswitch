@@ -7,13 +7,18 @@
 底 #22113D / 蓝 #2660FF / 琥珀 #FFB200。
 
 用法：
-    python3 design/icon/build_icon.py
+    python design/icon/build_icon.py            # 出图（母版 + 11 档 PNG + ico/icns + 同步运行时副本）
+    python design/icon/build_icon.py --check    # 只校验「母版 ↔ ui/assets 副本」是否一致，不出图
 产物：
     design/icon/icon-master.svg         母版（1024，可直接在浏览器里看）
     design/icon/png/icon-*.png          16…1024 共 11 档
     design/icon/screen-switch.ico
     design/icon/screen-switch.icns
     src/dualswitch/ui/assets/screen-switch.{ico,icns}   ← 运行时副本（自动同步）
+
+**两端都能跑**（2026-10-22）：栅格化靠 Chromium 内核的无头截图，macOS 找 Chrome，
+Windows 依次找 Chrome / Edge（Edge 也是 Chromium，输出一致），Linux 找
+chrome/chromium/google-chrome。也可以用 `DUALSWITCH_CHROME=/path/to/browser` 指定。
 
 为什么要有运行时副本：程序里取图标一律走 `theme.asset("screen-switch.icns")`，
 它**先查** `ui/assets/`，找不到才回落到 `design/icon/`。只更新 design/ 里的母版，
@@ -23,8 +28,10 @@
 
 from __future__ import annotations
 
+import os
 import struct
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -33,7 +40,41 @@ PNG_DIR = HERE / "png"
 MASTER_SVG = HERE / "icon-master.svg"
 #: 运行时副本目录（theme.asset 第一个查这里）
 RUNTIME_DIR = HERE.parent.parent / "src" / "dualswitch" / "ui" / "assets"
-CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+#: 各平台可能的 Chromium 内核浏览器（按顺序取第一个存在的）
+BROWSER_CANDIDATES = {
+    "darwin": [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ],
+    "win32": [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ],
+    "linux": [
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ],
+}
+
+
+def find_browser() -> str:
+    """定位一个 Chromium 内核浏览器；找不到就抛 SystemExit 说清怎么指定。"""
+    override = os.environ.get("DUALSWITCH_CHROME", "")
+    if override and Path(override).exists():
+        return override
+    for cand in BROWSER_CANDIDATES.get(sys.platform, []):
+        if Path(cand).exists():
+            return cand
+    raise SystemExit(
+        "找不到 Chromium 内核浏览器（Chrome / Edge）。\n"
+        "装一个，或用环境变量指定：DUALSWITCH_CHROME=/path/to/chrome\n"
+        f"当前平台 {sys.platform} 试过：\n  " + "\n  ".join(BROWSER_CANDIDATES.get(sys.platform, ["（无候选）"]))
+    )
 
 # ---- 画面内容（原样照抄，勿改） ---------------------------------------------
 BODY = (
@@ -59,8 +100,7 @@ def build_svg(size: int) -> str:
 
 def rasterize(sizes: list[int]) -> None:
     """矢量直接栅格化到每档尺寸，保留透明背景。"""
-    if not Path(CHROME).exists():
-        raise SystemExit(f"找不到 Chrome：{CHROME}")
+    chrome = find_browser()
     PNG_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         tmpd = Path(tmp)
@@ -73,11 +113,11 @@ def rasterize(sizes: list[int]) -> None:
             )
             out = PNG_DIR / f"icon-{n}.png"
             subprocess.run(
-                [CHROME, "--headless=new", "--no-sandbox", "--disable-gpu",
+                [chrome, "--headless=new", "--no-sandbox", "--disable-gpu",
                  "--disable-software-rasterizer", "--disable-dev-shm-usage",
                  "--hide-scrollbars", "--default-background-color=00000000",
                  "--force-device-scale-factor=1", f"--window-size={n},{n}",
-                 f"--screenshot={out}", f"file://{html}"],
+                 f"--screenshot={out}", html.as_uri()],
                 check=True, capture_output=True,
             )
             if not out.exists():
@@ -139,6 +179,44 @@ def sync_runtime() -> None:
         dst = RUNTIME_DIR / name
         dst.write_bytes(src.read_bytes())
         print(f"COPY -> {dst}")
+
+
+def check() -> int:
+    """不出图，只校验「母版 ↔ 运行时副本」逐字节一致（= tests/test_icons.py 的同一条件）。
+
+    Windows 端没有 Chrome 也能跑这一步，用来回答「我这边的图标是不是旧的」。
+    """
+    bad = 0
+    for name in ("screen-switch.ico", "screen-switch.icns"):
+        master, runtime = HERE / name, RUNTIME_DIR / name
+        if not master.exists():
+            print(f"[缺失] 母版 {master}")
+            bad += 1
+            continue
+        if not runtime.exists():
+            print(f"[缺失] 运行时副本 {runtime}（跑一遍本脚本即可生成）")
+            bad += 1
+            continue
+        if master.read_bytes() != runtime.read_bytes():
+            print(f"[过期] {runtime.name} 与母版不一致 —— 跑一遍本脚本重新出图")
+            bad += 1
+        else:
+            print(f"[一致] {runtime.name}（{len(master.read_bytes())} 字节）")
+    return 0 if bad == 0 else 1
+
+
+def main() -> None:
+    if "--check" in sys.argv[1:]:
+        raise SystemExit(check())
+    sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256, 512, 1024]
+    rasterize(sizes)
+    print(f"PNG {len(sizes)} 档 -> {PNG_DIR}")
+    files = {n: PNG_DIR / f"icon-{n}.png" for n in sizes}
+    write_ico(HERE / "screen-switch.ico", [(n, files[n]) for n in sizes if n <= 256])
+    print(f"ICO  -> {HERE / 'screen-switch.ico'}")
+    write_icns(HERE / "screen-switch.icns", files)
+    print(f"ICNS -> {HERE / 'screen-switch.icns'}")
+    sync_runtime()
 
 
 if __name__ == "__main__":

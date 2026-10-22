@@ -33,6 +33,11 @@ from dualswitch.config import SOURCE_UNKNOWN, platform_defaults  # noqa: E402
 from dualswitch.sync.engine import ClipRecord  # noqa: E402
 from dualswitch.ui.win2 import openers, preview, theme, tray  # noqa: E402
 from dualswitch.ui.win2.clipboard_page import ClipboardPage, ClipRow, Thumb  # noqa: E402
+from dualswitch.ui.win2.pairing_page import (  # noqa: E402
+    ConfirmRequest,
+    PairingPage,
+    PinGroup,
+)
 from dualswitch.ui.win2.preview import PreviewController, short_dir  # noqa: E402
 from dualswitch.ui.win2.runner import ConfirmOverlay, Toast  # noqa: E402
 from dualswitch.ui.win2.settings_page import (  # noqa: E402
@@ -42,6 +47,7 @@ from dualswitch.ui.win2.settings_page import (  # noqa: E402
 from dualswitch.ui.win2.switch_page import SwitchPage  # noqa: E402
 from dualswitch.ui.win2.window import (  # noqa: E402
     PAGE_CLIP,
+    PAGE_PAIR,
     PAGE_SETTINGS,
     PAGE_SWITCH,
     CaptionButton,
@@ -145,8 +151,11 @@ def test_window_is_frameless_with_two_caption_buttons(app, cfg):
 
 
 def test_window_geometry_tokens(app):
-    assert theme.SIDEBAR_W == 188
-    assert theme.FOOTER_H == 30
+    # 2026-10-22 用户拍板「侧栏跟 mac2」：188 → 156，且可收到 56（§14.2 已拍板）
+    assert theme.SIDEBAR_W == 156
+    assert theme.SIDEBAR_W_COLLAPSED == 56
+    assert (theme.SIDEBAR_HANDLE_W, theme.SIDEBAR_HANDLE_H) == (15, 46)
+    assert theme.FOOTER_H == 30            # Windows 保留底栏（托盘不可用时的状态出口）
     assert theme.RADIUS_WIN == 12          # Windows 取 12（mac 是 16）
     assert theme.MENU_W == 240 and theme.MENU_ROW_H == 32
 
@@ -546,16 +555,25 @@ def test_clear_confirm_overlay(app, cfg):
     win.show()
     overlay = ConfirmOverlay(win)
     done = []
-    overlay.ask(8, lambda: done.append(True))
+    # 2026-10-22 起遮罩是通用的：标题/说明/按钮文字都由调用方给（配对页也用它）
+    overlay.ask(
+        "清空本机全部 8 条记录？",
+        "只清空本机列表，不影响另一台机器；此操作不可撤销。",
+        "清空",
+        lambda: done.append(True),
+    )
     assert overlay.is_open()
     assert overlay.title.text() == "清空本机全部 8 条记录？"
     assert "不影响另一台机器" in overlay.sub.text()
+    assert overlay.btn_ok.text() == "清空"
     assert overlay.btn_ok.objectName() == "dangerBtn"     # 红色「清空」
     # Esc = 取消
     overlay.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
     assert not overlay.is_open() and done == []
 
-    overlay.ask(3, lambda: done.append(True))
+    overlay.ask("解除和 zq-mac 的配对？", "解除后不再同步", "解除配对",
+                lambda: done.append(True))
+    assert overlay.btn_ok.text() == "解除配对" and overlay.title.text() == "解除和 zq-mac 的配对？"
     overlay.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier))
     assert not overlay.is_open() and done == [True]
     win.close()
@@ -727,14 +745,16 @@ def test_tray_menu_structure(app, cfg):
     entries = tray.build_menu_entries(cfg, "windows", "Alt+Space", {})
     kinds = [e.kind for e in entries]
     titles = [e.title for e in entries if e.title]
-    assert kinds.count("sep") == 4
-    assert len(entries) == 12                     # 8 行 + 4 分隔线
+    # 2026-10-22：跟随 mac2 加第 7 行「配对电脑…」→ 9 行 + 5 条分隔线（§14.3）
+    assert kinds.count("sep") == 5
+    assert len(entries) == 14                     # 9 行 + 5 分隔线
     assert titles[0] == "当前画面：Windows"
     assert "打开主界面" in titles
     assert any(t.startswith("切换到 Mac（USB-C）") for t in titles)
     assert any(t.startswith("强制切到 Mac（USB-C）") for t in titles)
     assert "剪贴板" in titles
     assert "设置…" in titles
+    assert any(t.startswith("配对电脑…") for t in titles)
     assert any(t.startswith("热键：Alt Space") for t in titles)
     assert "退出 屏幕切换" in titles
     # 调试入口已移进设置 → 高级
@@ -742,6 +762,19 @@ def test_tray_menu_structure(app, cfg):
         assert not any(banned in t for t in titles)
     # 退出用普通色（Windows 菜单没有红字惯例）
     assert not [e for e in entries if e.title.startswith("退出")][0].danger
+
+
+def test_tray_pair_row_shares_status_with_sidebar(app, cfg):
+    """托盘第 7 行的状态文字必须与侧栏灯同一数据源（§14.3：不许各算一遍）。"""
+    actions = {"pair": lambda: None, "pair_state": lambda: "已配对"}
+    entries = tray.build_menu_entries(cfg, "windows", "Alt+Space", actions)
+    row = [e for e in entries if e.title.startswith("配对电脑…")][0]
+    assert row.title == "配对电脑…    已配对"
+    assert row.action is actions["pair"]
+    # 状态读不出来时只留标题，不抛
+    bad = tray.build_menu_entries(cfg, "windows", "Alt+Space",
+                                  {"pair_state": lambda: (_ for _ in ()).throw(RuntimeError())})
+    assert [e for e in bad if e.title.startswith("配对电脑…")][0].title == "配对电脑…"
 
 
 def test_tray_menu_keycaps_are_text(app, cfg):
@@ -789,7 +822,7 @@ def test_menu_rows_render_and_disable(app, cfg):
     menu = tray.TrayMenu()
     menu.rebuild(entries)
     rows = [w for w in menu.findChildren(tray.MenuRow)]
-    assert len(rows) == 8, "8 行菜单"
+    assert len(rows) == 9, "9 行菜单（2026-10-22 加「配对电脑…」）"
     assert all(r.height() == theme.MENU_ROW_H == 32 for r in rows)
     assert all(r.width() == theme.MENU_W - 12 for r in rows)
     force_row = [r for r in rows if r.entry.title.startswith("强制切换")][0]
@@ -947,3 +980,214 @@ def test_emoji_in_file_name(app, cfg):
     page.refresh()
     assert page._rows["fe"].ui_kind == "file"
     assert page._rows["fe"].title.full_text() == "截图 🎉 2026.png"
+
+
+# --------------------------------------------------------------------------- #
+# 8. 配对电脑页（§14.1）+ 侧栏收起 / 退出（§0.4 / §13）
+#
+# 页面只做「显示 + 收集输入」，所以这里用假引擎给出可控的 pairing_status()，
+# 不启发现、不开端口、不落盘 —— 真实协议路径在 tests/test_pairing.py（共享用例）。
+# --------------------------------------------------------------------------- #
+class FakePairEngine:
+    """假配对引擎：状态字典由测试直接改，调用记录在 `calls` 里。"""
+
+    def __init__(self, status=None, peers=None, begin_pin="483921"):
+        self.status = dict(FakePairEngine.DEFAULT, **(status or {}))
+        self.peers = list(peers or [])
+        self.begin_pin = begin_pin
+        self.calls = []
+
+    DEFAULT = {
+        "state": "idle", "outcome": "", "error": "", "error_kind": "",
+        "pin": "", "expires_in": 0.0, "attempts_left": 5,
+        "paired": False, "legacy": False, "mismatch": False,
+        "connected": False, "peer_device": "", "peer_name": "",
+        "paired_at": 0.0, "addr": "", "last_sync_at": 0.0,
+    }
+
+    def pairing_status(self):
+        return dict(self.status)
+
+    def discovered_peers(self):
+        return list(self.peers)
+
+    def begin_pairing(self):
+        self.calls.append("begin")
+        self.status.update(state="showing", pin=self.begin_pin, expires_in=300.0, outcome="")
+        return self.begin_pin
+
+    def cancel_pairing(self):
+        self.calls.append("cancel")
+        self.status.update(state="idle", pin="", expires_in=0.0)
+
+    def pair_with_peer(self, addr, pin):  # noqa: ANN001, ARG002
+        self.calls.append(("pair", addr, pin))
+        return {"ok": True, "peer_name": "zq-mac-mini", "peer_device": "macos-1",
+                "addr": "192.168.1.42:47823"}
+
+    def unpair(self):
+        self.calls.append("unpair")
+        self.status.update(paired=False, peer_device="", peer_name="", addr="", paired_at=0.0)
+
+    def refresh_discovery(self):
+        self.calls.append("refresh")
+
+
+def _peers():
+    return [
+        {"device": "windows-3f2a91c4", "host": "DESKTOP-8Q2K", "ip": "192.168.1.31",
+         "port": 47823, "plat": "windows", "paired": False, "pairing": True},
+        {"device": "macos-77aa", "host": "zq-mac-mini", "ip": "192.168.1.42",
+         "port": 47823, "plat": "macos", "paired": True, "pairing": False},
+    ]
+
+
+def test_pairing_page_is_fourth_page(app, cfg):
+    win = MainWindow(cfg, "Alt+Space", "v0")
+    seen = []
+    win.pageChanged.connect(seen.append)
+    sp = SwitchPage(cfg, "Alt+Space", "AOC Q2790PC")
+    cp = ClipboardPage(FakeEngine([]))
+    st = SettingsPage(cfg, os.path.join(HOME, "cfg-test.json"))
+    pair = PairingPage(FakePairEngine())
+    win.attach_pages(sp, cp, st, pair)
+    assert win.pages.count() == 4
+    win.show_page(PAGE_PAIR)
+    assert win.current_page() == PAGE_PAIR
+    assert win.pages.currentWidget() is pair
+    assert win.nav_pair.isChecked() and not win.nav_settings.isChecked()
+    assert seen == [PAGE_PAIR], "runner 靠 pageChanged 做 activate/deactivate"
+    win.close()
+
+
+def test_pairing_page_discover_lists_peers(app):
+    page = PairingPage(FakePairEngine(peers=_peers()))
+    page.activate()
+    assert page.state() == "discover"
+    assert page.top_pill.text() == "未配对"
+    assert page.scan_hint.text() == "找到 2 台"
+    assert set(page._peer_rows) == {"windows-3f2a91c4", "macos-77aa"}
+    # 已与别的电脑配对 → 「替换配对」；正常 → 「配对」
+    assert page._peer_rows["macos-77aa"]["btn"].text() == "替换配对"
+    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "配对"
+
+
+def test_pairing_page_show_code_then_deactivate_cancels(app):
+    engine = FakePairEngine(peers=_peers())
+    page = PairingPage(engine)
+    page.activate()
+    page._start_show_code()
+    assert page.state() == "showcode"
+    assert [b.text() for b in page._pin_blocks] == list("483921")
+    assert "5:00 后失效" in page.pin_count.text()
+    assert page.top_pill.text() == "等待配对"
+    # 离开页面 = 取消（码立即失效，不落盘）
+    page.deactivate()
+    assert "cancel" in engine.calls
+
+
+def test_pairing_page_pin_input_and_wrong_code(app):
+    engine = FakePairEngine(peers=_peers())
+    page = PairingPage(engine)
+    page.activate()
+    page._select_peer(_peers()[0])
+    assert page.state() == "entercode"
+    assert not page.btn_pair.isEnabled(), "6 位没填满时「配对」置灰"
+    page.pin_group.fill(0, "123456")
+    assert page.btn_pair.isEnabled()
+    page._show_code_error(4, "配对码不正确")
+    assert page.pin_error.isVisible() or not page.pin_error.isHidden()
+    assert "还可以试 4 次" in page.pin_error_text.text()
+    page._show_invalid_code()
+    assert not page.pin_group.is_editable(), "5 次用完：输入禁用、只留返回列表"
+
+
+def test_pairing_page_unpair_uses_window_mask(app):
+    """解除配对必须走窗口内遮罩（§14.1），不能自己弹 QDialog / 页内小卡片。"""
+    engine = FakePairEngine({
+        "paired": True, "state": "paired", "peer_device": "windows-3f2a91c4",
+        "peer_name": "DESKTOP-8Q2K", "addr": "192.168.1.31:47823", "connected": True,
+    })
+    page = PairingPage(engine)
+    requests = []
+    page.confirmRequested.connect(requests.append)
+    page.activate()
+    assert page.state() == "paired"
+    page._ask_unpair()
+    assert len(requests) == 1
+    req = requests[0]
+    assert "解除和 DESKTOP-8Q2K 的配对" in req.title
+    assert req.confirm_text == "解除配对"
+    assert engine.calls == [], "点按钮只发确认请求，不能先动引擎"
+    req.on_confirm()
+    assert "unpair" in engine.calls
+
+
+def test_pairing_page_replace_confirm(app):
+    engine = FakePairEngine(peers=_peers(), status={"paired": True,
+                                                    "peer_device": "macos-other",
+                                                    "peer_name": "旧电脑"})
+    page = PairingPage(engine)
+    requests = []
+    page.confirmRequested.connect(requests.append)
+    page.activate()
+    page._pick_peer(_peers()[0])
+    assert requests and "替换现有的 旧电脑" in requests[0].title
+    assert page.state() == "paired", "确认之前停在已配对页，不进输入码页"
+    assert page._selected == {}
+
+
+def test_pairing_page_no_dialog_in_source():
+    """守「只有一个窗口」：配对页不许**实例化** QDialog（注释里提到它不算）。"""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src" / "dualswitch" / "ui" / "win2"
+    text = (src / "pairing_page.py").read_text(encoding="utf-8")
+    assert "QDialog(" not in text
+    assert "import QDialog" not in text
+
+
+def test_sidebar_collapse_and_restore(app, cfg):
+    win = MainWindow(cfg, "Alt+Space", "v0")
+    sp = SwitchPage(cfg, "Alt+Space", "AOC Q2790PC")
+    cp = ClipboardPage(FakeEngine([]))
+    st = SettingsPage(cfg, os.path.join(HOME, "cfg-test.json"))
+    win.attach_pages(sp, cp, st, PairingPage(FakePairEngine()))
+    win.set_nav_count(12)
+    assert win.sidebar.width() == theme.SIDEBAR_W == 156
+    win.set_sidebar_collapsed(True)
+    assert win.sidebar.width() == theme.SIDEBAR_W_COLLAPSED == 56
+    assert win.is_sidebar_collapsed()
+    assert not win.sec_core.isVisible() and not win.sec_system.isVisible()
+    assert win.nav_pair.is_collapsed() and win.nav_pair.toolTip() == "配对电脑"
+    assert win.btn_quit.isVisible() or not win.btn_quit.isHidden()
+    assert win.side_handle.toolTip() == "展开侧栏"
+    win.set_sidebar_collapsed(False)
+    assert win.sidebar.width() == 156 and win.side_handle.toolTip() == "收起侧栏"
+    win.close()
+
+
+def test_quit_button_emits_and_hotkey_hint(app, cfg):
+    win = MainWindow(cfg, "Alt+Space", "v0")
+    fired = []
+    win.quitRequested.connect(lambda: fired.append(True))
+    win.btn_quit.click()
+    assert fired == [True]
+    assert win.btn_quit.toolTip() == "退出应用（Ctrl+Q）"
+    # 热键未启用时侧栏给警示文案（不是显示一个空键帽组）
+    win.set_side_hotkey("未启用")
+    assert win.side_hotkey_text.text() == "热键未启用"
+    win.close()
+
+
+def test_nav_pair_status_dot(app, cfg):
+    win = MainWindow(cfg, "Alt+Space", "v0")
+    win.nav_pair.set_status_dot("ok", "已配对")
+    assert win.nav_pair.status_dot_tooltip() == "已配对"
+    assert win.nav_pair.count_tone() == "ok"
+    win.nav_pair.set_status_dot("bad", "需重新配对")
+    assert win.nav_pair.status_dot_tooltip() == "需重新配对"
+    assert win.nav_pair.count_tone() == "bad"
+    win.nav_pair.set_collapsed(True)
+    assert win.nav_pair._status_dot.width() == 7, "收起态状态灯缩到 7px"
+    win.close()

@@ -19,7 +19,7 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -31,13 +31,14 @@ from PySide6.QtWidgets import (
 )
 
 from ... import __version__, logging_setup
-from ...config import SOURCE_UNKNOWN
+from ...config import SOURCE_UNKNOWN, save as save_config
 from ..clipboard_feed import LocalClipFeed
 from . import openers, theme, tray
 from .clipboard_page import ClipboardPage
+from .pairing_page import ConfirmRequest, PairingPage
 from .settings_page import SettingsPage
 from .switch_page import SwitchPage
-from .window import PAGE_CLIP, PAGE_SETTINGS, MainWindow
+from .window import PAGE_CLIP, PAGE_PAIR, PAGE_SETTINGS, PAGE_SWITCH, MainWindow
 
 log = logging_setup.get("ui")
 
@@ -80,9 +81,13 @@ class Toast(QWidget):
 # 清空确认遮罩（§8：覆盖整窗，不新建窗口）
 # --------------------------------------------------------------------------- #
 class ConfirmOverlay(QWidget):
-    """窗口内确认遮罩：360 卡片 + 红色「清空」，`Esc` 取消、`Enter` 确认。
+    """窗口内确认遮罩：360 卡片 + 危险色确认按钮，`Esc` 取消、`Enter` 确认。
 
     遮罩覆盖整个窗口（含侧栏/底栏）。焦点默认在「取消」上，防手滑。
+
+    2026-10-22：从「只能清空剪贴板」泛化成通用确认 —— 配对页的
+    「替换配对」/「解除配对」也走这里（`UI-WINDOWS2-DESIGN.md` §14.1 要求用窗口内
+    遮罩而不是 QDialog），所以标题/说明/按钮文字都由调用方给。
     """
 
     CARD_W = 360
@@ -110,9 +115,7 @@ class ConfirmOverlay(QWidget):
         self.title = QLabel("", self.card)
         self.title.setObjectName("confirmTitle")
         self.title.setFont(theme.qfont(13.5, 650))
-        self.sub = QLabel(
-            "只清空本机列表，不影响另一台机器；此操作不可撤销。", self.card
-        )
+        self.sub = QLabel("", self.card)
         self.sub.setObjectName("confirmSub")
         self.sub.setFont(theme.qfont(11.5))
         self.sub.setWordWrap(True)
@@ -151,9 +154,11 @@ class ConfirmOverlay(QWidget):
         outer.addStretch(1)
 
     # ---- 显示 ----
-    def ask(self, count: int, on_confirm) -> None:  # noqa: ANN001
+    def ask(self, title: str, sub: str, confirm_text: str, on_confirm) -> None:  # noqa: ANN001
         self._on_confirm = on_confirm
-        self.title.setText(f"清空本机全部 {count} 条记录？")
+        self.title.setText(title)
+        self.sub.setText(sub)
+        self.btn_ok.setText(confirm_text)
         parent = self.parentWidget()
         if parent is not None:
             self.setGeometry(0, 0, parent.width(), parent.height())
@@ -241,7 +246,7 @@ class UiRunner2(QObject):
         theme.set_appearance("light")
         self.app.setStyleSheet(theme.qss())
 
-        self.icon = QIcon(str(theme.asset("screen-switch.ico")))
+        self.icon = theme.app_icon()
         self.app.setWindowIcon(self.icon)
 
         hotkey_label = hotkey.describe() if hotkey else "未启用"
@@ -258,7 +263,15 @@ class UiRunner2(QObject):
             ),
         )
         self.settings_page = SettingsPage(cfg, self.cfg_file)
-        self.window.attach_pages(self.switch_page, self.clipboard_page, self.settings_page)
+        self.pairing_page = PairingPage(
+            clip_engine, default_port=cfg.clipboard.effective_peer_port()
+        )
+        self.window.attach_pages(
+            self.switch_page, self.clipboard_page, self.settings_page, self.pairing_page
+        )
+        # 配对落盘要用「当前」cfg（设置页保存后 runner 会换成新对象）
+        if self.clip_engine is not None:
+            self.clip_engine.set_config_saver(lambda: save_config(self.cfg, self.cfg_file))
 
         self.toast = Toast(self.window)
         self.confirm = ConfirmOverlay(self.window)
@@ -274,7 +287,13 @@ class UiRunner2(QObject):
         self.window.forceRequested.connect(self.do_force)
         self.window.deviceClicked.connect(lambda host: self.do_switch())
         self.window.hiddenToBackground.connect(self._enter_background)
-        self.window.quitRequested.connect(self.quit)
+        self.window.quitRequested.connect(self.quit_application)
+        self.window.pageChanged.connect(self._on_page_changed)
+        self._last_page = PAGE_SWITCH
+        self._pair_text = ""
+        self.pairing_page.toastRequested.connect(self.toast.show_text)
+        self.pairing_page.pairedChanged.connect(self._on_paired_changed)
+        self.pairing_page.confirmRequested.connect(self._ask_confirm)
         self.switch_page.clipboardRequested.connect(lambda: self.show_page(PAGE_CLIP))
         self.switch_page.toastRequested.connect(self.toast.show_text)
         self.clipboard_page.toastRequested.connect(self.toast.show_text)
@@ -303,6 +322,14 @@ class UiRunner2(QObject):
         self._refresh_menu()
         self._refresh_hotkey_ui()
         self._refresh_conn_ui()
+        self._refresh_pair_ui()
+
+        # 配对状态（侧栏状态灯 + 托盘菜单右侧文字）1s 刷一次；
+        # 与 mac2 同频，比 250ms 的 _poll_state 轻（pairing_status() 会读引擎锁）。
+        self.pair_timer = QTimer(self)
+        self.pair_timer.setInterval(1000)
+        self.pair_timer.timeout.connect(self._refresh_pair_ui)
+        self.pair_timer.start()
 
         self.poll = QTimer(self)
         self.poll.setInterval(250)
@@ -418,13 +445,20 @@ class UiRunner2(QObject):
             log.debug("重建托盘图标失败", exc_info=True)
 
     def _enter_background(self) -> None:
-        """Windows 没有程序坞；收进托盘只是隐藏窗口。"""
+        """Windows 没有程序坞；收进托盘只是隐藏窗口。
+
+        关窗 = 离开配对页：显示中的配对码立即失效（§12.5），否则码会在托盘里白挂 5 分钟。
+        """
+        if getattr(self, "pairing_page", None) is not None:
+            self.pairing_page.deactivate()
         log.debug("窗口收进托盘")
 
     def show_window(self) -> None:
         self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()
+        if self.window.current_page() == PAGE_PAIR:
+            self.pairing_page.activate()
 
     def hide_window(self) -> None:
         self.window.hide()
@@ -437,6 +471,38 @@ class UiRunner2(QObject):
         if index == PAGE_CLIP:
             self.clipboard_page.refresh()
             self.clipboard_page.search_edit.setFocus(Qt.ShortcutFocusReason)
+
+    # ---- 配对电脑（INTERACTIONS §12.3：侧栏 / 托盘 / 剪贴板引导共用一个入口）----
+    def open_pair_page(self) -> None:
+        self.show_page(PAGE_PAIR)
+
+    def _on_page_changed(self, index: int) -> None:
+        """切页即生命周期：进配对页 activate，离开 deactivate（码作废、不落盘）。"""
+        previous, self._last_page = self._last_page, index
+        if index == PAGE_PAIR:
+            self.pairing_page.activate()
+        elif previous == PAGE_PAIR:
+            self.pairing_page.deactivate()
+
+    def _on_paired_changed(self, paired: bool) -> None:  # noqa: ARG002
+        self.clipboard_page.mark_dirty()
+        self._refresh_pair_ui()
+        self._refresh_menu()
+
+    def _refresh_pair_ui(self) -> None:
+        if getattr(self, "pairing_page", None) is None:
+            return
+        text = self.pairing_page.status_text()
+        self.window.nav_pair.set_status_dot(self.pairing_page.status_tone(), text)
+        if text != self._pair_text:
+            self._pair_text = text
+            self._refresh_menu()
+
+    def _ask_confirm(self, request: ConfirmRequest) -> None:
+        """配对页的「替换配对 / 解除配对」→ 窗口内遮罩（§14.1，不弹 QDialog）。"""
+        self.confirm.ask(
+            request.title, request.sub, request.confirm_text, request.on_confirm
+        )
 
     def do_switch(self, target: str | None = None) -> None:
         if self._busy:
@@ -491,7 +557,12 @@ class UiRunner2(QObject):
     # ---- 高级组（§7.5）----
     def _ask_clear(self, count: int) -> None:
         """剪贴板页 🗑 / 设置页「清理」→ 窗口内遮罩（§8）。"""
-        self.confirm.ask(count, self.clipboard_page.clear_confirmed)
+        self.confirm.ask(
+            f"清空本机全部 {count} 条记录？",
+            "只清空本机列表，不影响另一台机器；此操作不可撤销。",
+            "清空",
+            self.clipboard_page.clear_confirmed,
+        )
 
     def do_probe(self) -> None:
         """探测显示器 / 读取输入源：结果进日志 + toast（不阻塞界面）。"""
@@ -538,6 +609,8 @@ class UiRunner2(QObject):
         if event.type() == QEvent.ApplicationActivate:
             if not self._quitting and self.window.isHidden():
                 self.window.showNormal()
+                if self.window.current_page() == PAGE_PAIR:
+                    self.pairing_page.activate()
             if self._retry_on_activate and self.hotkey is None and not self._hotkey_suspended:
                 QTimer.singleShot(250, self.retry_hotkey)
         return super().eventFilter(obj, event)
@@ -704,7 +777,10 @@ class UiRunner2(QObject):
             "force": lambda: self.do_force(),
             "clipboard": lambda: self.show_page(PAGE_CLIP),
             "settings": lambda: self.show_page(PAGE_SETTINGS),
-            "quit": self.quit,
+            # 托盘第 7 行「配对电脑…」：与侧栏同一个入口、同一份状态文字（§14.3）
+            "pair": self.open_pair_page,
+            "pair_state": lambda: self.pairing_page.status_text(),
+            "quit": self.quit_application,
             "remote_ready": self._remote_ready,
         }
 
@@ -741,7 +817,8 @@ class UiRunner2(QObject):
             return
         self._shown_hotkey = label
         self.switch_page.set_hotkey(label)
-        self.window.set_side_hotkey(f"热键 {label}")
+        # 侧栏自己决定显示「热键 ⌥Space」还是「热键未启用」（§14 跟随项）
+        self.window.set_side_hotkey(label)
         self._refresh_menu()
 
     def on_config_saved(self, cfg) -> None:  # noqa: ANN001
@@ -869,14 +946,27 @@ class UiRunner2(QObject):
         self._retry_on_activate = False
         self._rebuild_hotkey(self.cfg)
 
-    def quit(self) -> None:
+    def quit_application(self) -> None:
+        """唯一退出路径：侧栏「退出应用」/ 托盘菜单 / 设置关掉托盘后关窗（§13.3）。"""
         log.info("用户从界面退出")
         self._quitting = True
+        try:
+            self.pair_timer.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.pairing_page.deactivate()
+        except Exception:  # noqa: BLE001
+            log.debug("取消配对失败", exc_info=True)
         try:
             self.clip_timer.stop()
             if self.clip_poll is not None:
                 self.clip_poll.stop()
-            self.clip_feed.close()
+            if self.clip_engine is not None:
+                # 退出按钮必须真的停同步引擎，而不是只停本地采集
+                self.clip_engine.stop()
+            else:
+                self.clip_feed.close()
         except Exception:  # noqa: BLE001
             log.debug("停止剪贴板采集失败", exc_info=True)
         try:
@@ -899,6 +989,9 @@ class UiRunner2(QObject):
                     pass
             self.window.quit_completely()
             self.app.quit()
+
+    #: 兼容旧调用点（设置页 / 事件过滤器里还叫 quit）
+    quit = quit_application
 
     def run(self) -> int:
         return self.app.exec()

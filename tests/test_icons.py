@@ -44,3 +44,33 @@ def test_menubar_template_icon_present():
     assert head[:8] == b"\x89PNG\r\n\x1a\n", "menubar.png 不是 PNG"
     width, height = struct.unpack(">II", head[16:24])
     assert (width, height) == (36, 36), f"模板图应为 36×36（18pt@2x），实际 {width}×{height}"
+
+
+def _load_builder():
+    """把 design/icon/build_icon.py 当模块加载（它不是包内模块，import 不到）。"""
+    import importlib.util
+
+    path = ROOT / "design" / "icon" / "build_icon.py"
+    spec = importlib.util.spec_from_file_location("_dualswitch_build_icon", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_icon_builder_runs_on_both_platforms():
+    """出图脚本不能只在 macOS 上跑（2026-10-22 之前它写死了 Chrome 的 mac 路径）。
+
+    Windows 端换图标 / 排查「图标是旧的」时也得能自己出一份，所以：
+    候选浏览器列表里必须同时有 darwin 与 win32，且允许用环境变量覆盖。
+    """
+    builder = _load_builder()
+    for plat in ("darwin", "win32"):
+        assert builder.BROWSER_CANDIDATES.get(plat), f"缺少 {plat} 的浏览器候选"
+    assert callable(builder.find_browser)
+    assert builder.RUNTIME_DIR == RUNTIME
+
+
+def test_icon_builder_check_mode_detects_stale_copy():
+    """`--check` 是「我这边图标是不是旧的」的答案，两端都要能跑（不需要浏览器）。"""
+    builder = _load_builder()
+    assert builder.check() == 0, "母版与运行时副本不一致 —— 跑一遍 build_icon.py"
