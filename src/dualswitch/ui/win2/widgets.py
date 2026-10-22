@@ -997,10 +997,15 @@ def settings_row(title: str, sub: str, control: QWidget | None) -> QFrame:
     col = QVBoxLayout()
     col.setContentsMargins(0, 0, 0, 0)
     col.setSpacing(3)
-    col.addWidget(label(title, "setTitle"))
+    # 标题与副行都用 ElidedLabel：普通 QLabel 的最小宽 = 整段文字宽度，
+    # 一旦右侧控件的固定宽度加上来超出行宽，布局压不下去 —— 控件会直接**叠在文字上**
+    # （2026-10-22 用户截的「存储上限」行：清理按钮盖住了 MB）。Elided 之后
+    # 文字先省略，控件永远完整。
+    t = ElidedLabel(title, "setTitle")
+    col.addWidget(t)
     if sub:
-        s = label(sub, "setSub")
-        s.setWordWrap(True)
+        s = ElidedLabel(sub, "setSub")
+        s.setToolTip(sub)             # 省略后仍能看到全文
         col.addWidget(s)
     lay.addLayout(col, 1)
     if control is not None:

@@ -28,7 +28,14 @@ from PySide6.QtWidgets import (
 from ...config import Config, ConfigError, from_dict, save as save_config
 from ...hotkey.base import HotkeyError, parse_hotkey
 from . import theme
-from .widgets import KeyCaps, Segmented, ToggleSwitch, label, settings_row
+from .widgets import (
+    ElidedLabel,
+    KeyCaps,
+    Segmented,
+    ToggleSwitch,
+    label,
+    settings_row,
+)
 
 #: 剪贴板热键在 Windows 上的默认值。配置里的默认值是 mac 口径 `cmd+shift+v`
 #: （`cmd` 解析成 Win 键），Windows 端按设计 §2 用 `Ctrl+Shift+V`。
@@ -216,7 +223,7 @@ class SettingsPage(QWidget):
         # 会被算成 1px（文字完全看不见）。这里自己校验范围，改动后回车/失焦即保存。
         self.edit_storage = QLineEdit(str(int(getattr(self.cfg.clipboard, "storage_limit_mb", 200))))
         self.edit_storage.setObjectName("numEdit")
-        self.edit_storage.setFixedSize(62, 28)
+        self.edit_storage.setFixedSize(54, 28)
         self.edit_storage.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.edit_storage.setValidator(QIntValidator(10, 5000, self))
         self.edit_storage.editingFinished.connect(self._apply)
@@ -349,19 +356,25 @@ class SettingsPage(QWidget):
         return max(0, min(255, value))
 
     def _storage_control(self) -> QWidget:
-        """存储上限：可编辑的数字框 + 旁边一个「清理」按钮。"""
+        """存储上限：可编辑的数字框 + 旁边一个「清理」按钮。
+
+        宽度要卡死：这一行右侧是「已用 0.0 MB + 输入框 + MB + 清理」四段，
+        字号一变大就会顶出行宽（2026-10-22 用户截图里清理按钮盖住了 MB）。
+        所以这里数字框收窄、间距压到 6，`已用` 用 ElidedLabel 让位。
+        """
         box = QWidget()
         row = QHBoxLayout(box)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        row.setSpacing(6)
         self.btn_clean = QPushButton("清理")
         self.btn_clean.setObjectName("ghostBtn")
-        self.btn_clean.setFixedSize(56, 28)
-        self.btn_clean.setFont(theme.qfont(11.5, 600))
+        self.btn_clean.setFixedSize(52, 28)
+        self.btn_clean.setFont(theme.qfont(theme.FS_META, theme.W_MED))
         self.btn_clean.setCursor(Qt.PointingHandCursor)
         self.btn_clean.setToolTip("清空本机剪贴板记录")
         self.btn_clean.clicked.connect(self.clearRequested)
         self.lbl_used = label("", "setVal")
+        self.lbl_used.setToolTip("已用容量 / 存储上限")
         unit = label("MB", "setVal")
         row.addWidget(self.lbl_used, 0, Qt.AlignVCenter)
         row.addWidget(self.edit_storage, 0, Qt.AlignVCenter)

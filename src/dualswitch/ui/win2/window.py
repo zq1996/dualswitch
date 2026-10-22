@@ -459,20 +459,9 @@ class MainWindow(QWidget):
         self._handle_timer.timeout.connect(self._sync_sidebar_handle)
         self._handle_timer.start()
 
-        # ---- 底栏 ----
-        footer = QFrame()
-        footer.setObjectName("footer")
-        footer.setFixedHeight(theme.FOOTER_H)
-        fl = QHBoxLayout(footer)
-        fl.setContentsMargins(16, 0, 16, 0)
-        fl.setSpacing(7)
-        self.foot_dot = dot(theme.tokens().ok, 6)
-        self.foot_text = label("对端未连接", "footerText")
-        self.foot_ver = label(version, "footerText")
-        fl.addWidget(self.foot_dot, 0, Qt.AlignVCenter)
-        fl.addWidget(self.foot_text, 1)
-        fl.addWidget(self.foot_ver, 0)
-        root_lay.addWidget(footer)
+        # ---- 底栏已删除（2026-10-22 用户：「最下边的版本号那行不要了」）----
+        # 原来那 30px 放「● 已连接 Mac · 剪贴板已开启 … v1.0.0」，侧栏 footer 已经有
+        # 连接状态，版本号对日常使用没价值 —— 与 mac2 一样删掉，窗口高度全给内容。
 
         # 导航
         self._nav_group = QButtonGroup(self)
@@ -620,12 +609,11 @@ class MainWindow(QWidget):
             self.side_hotkey_text.setText("热键未启用")
             self.side_hotkey_text.setStyleSheet(f"color:{t.warn};font-size:10px;")
 
-    def set_footer(self, text: str, ok: bool = True) -> None:
-        t = theme.tokens()
-        self.foot_text.setText(text)
-        self.foot_dot.setStyleSheet(
-            f"background:{t.ok if ok else t.idle};border-radius:3px;border:0;"
-        )
+    def set_footer(self, text: str, ok: bool = True) -> None:  # noqa: ARG002
+        """底栏已删除（2026-10-22）：保留空实现，免得旧调用点炸。
+
+        连接状态看侧栏 footer 的状态行（`set_side_status`）。
+        """
 
     # ------------------------------------------------------------------ 事件
     def closeEvent(self, event: QCloseEvent):  # noqa: N802

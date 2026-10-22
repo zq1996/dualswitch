@@ -514,6 +514,32 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-22 **[win2] 按四条反馈返工：字体标准 / 删底栏 / 去焦点虚框 / 修「清理」遮挡**。
+  · **字体**（用户：「字体怎么感觉怪怪的，去找一下设计标准」）：字体链从「雅黑打头」改成
+    **西文打头、中文回退** —— `Segoe UI Variable Text → Segoe UI → Microsoft YaHei UI →
+    Microsoft YaHei → SimHei`。Qt 6 的 `setFamilies` 是逐字符回退，所以实际效果是
+    「Latin/数字 = Segoe UI，汉字 = 微软雅黑」；之前雅黑打头时 `Windows` / `1729×1339`
+    全用雅黑的西文字形（挤、不对齐），这就是"怪"的来源。**不能只写 Segoe**：那样汉字会掉到宋体。
+    等宽字体改由 `mono_family()` 先问 `QFontDatabase`（QSS 的 `font-family` 只认单个族名，
+    写没装的会静默落宋体）。
+  · **字阶**：8 档（9.5/10/10.5/11/11.5/12/12.5/13）挤在 4px 内等于没有层级 → 收成五档
+    **27 / 17 / 14 / 12 / 10**（依据 Windows 11 Fluent 的 12/14/20/28，密集版把 20/28 收成 17/27），
+    字重只留 **400 / 600 / 700**（雅黑只有 Regular 与 Bold 两个真字形，中间值全靠描边合成）。
+    `qfont()` 与 `qss()` 两个入口统一吸附（`snap_px` / `snap_weight`），页面里写 12.5 也不会再出伪层级；
+    配对码 22/25 与收起徽章 7.5 作为显示字号豁免。标准写进 `docs/UI-WINDOWS2-DESIGN.md` §3.3。
+  · **删底栏**（用户：「最下边的版本号那行不要了」）：去掉 30px 底栏与 `#footer`/`#footerText`，
+    连接状态只留侧栏 footer 一处；`set_footer()` 保留空实现兼容旧调用点，`FOOTER_H` 标记废弃。
+  · **焦点虚框**（用户：「好几处有这个虚线的框框」）：新增 `ui/win2/focus_style.py`，
+    `QProxyStyle` 拦掉 `PE_FrameFocusRect`（不逐控件 `NoFocus`，否则 Tab / Enter 一起失效）。
+    踩到一个坑：设过 QSS 后 `app.style()` 只报壳子的基类，**不能用 isinstance 判断装没装** ——
+    会每次重装、旧壳子被销毁留下野指针；幂等判断改查 `app._dualswitch_focus_style`。
+  · **「清理」遮挡**（用户截图 1）：设置行右侧四段固定宽度顶出行宽，而行题/副行是普通 QLabel
+    （最小宽 = 文字宽）压不下去 → 控件叠到文字上。`settings_row` 的文字改 `ElidedLabel`，
+    存储行数字框 62→54、间距 8→6、清理按钮 56→52。
+  · 自测：`QT_QPA_PLATFORM=offscreen pytest -q` → **391 passed / 10 skipped**；
+    新增 4 例（字阶吸附 / QSS 只用五档 / 存储行不重叠 / 焦点框画不出来）；
+    四页 + 托盘菜单 + 确认遮罩逐张出图核对（`outputs/v2-*-new.png`）。
+
 - 2026-10-22 **[win2] 跟随 mac2：配对电脑页 + 侧栏 156/可收起 + 退出按钮 + 新图标**。
   · 用户拍板「配对页 + 侧栏全跟」（`docs/UI-WINDOWS2-DESIGN.md` §14.2 从待拍板变已拍板）。
     底层 `sync/*`（配对状态机、`set_key`、发现广播扩字段）是共享层，pull 即生效，**Windows 侧零行底层代码**。

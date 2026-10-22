@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 from ... import __version__, logging_setup
 from ...config import SOURCE_UNKNOWN, save as save_config
 from ..clipboard_feed import LocalClipFeed
-from . import openers, theme, tray
+from . import focus_style, openers, theme, tray
 from .clipboard_page import ClipboardPage
 from .pairing_page import ConfirmRequest, PairingPage
 from .settings_page import SettingsPage
@@ -245,6 +245,8 @@ class UiRunner2(QObject):
         # 外观固定浅色（§2「主题」）
         theme.set_appearance("light")
         self.app.setStyleSheet(theme.qss())
+        # 点过的按钮不留灰色虚线焦点框（噪音，见 ui/win2/focus_style.py）
+        focus_style.install(self.app)
 
         self.icon = theme.app_icon()
         self.app.setWindowIcon(self.icon)
@@ -757,17 +759,13 @@ class UiRunner2(QObject):
         self._notify(f"已切换到 {label} · {ms:.1f} ms")
 
     def _refresh_conn_ui(self) -> None:
+        """侧栏 footer 的连接状态（底栏 2026-10-22 已删除，状态只在这一处）。"""
         connected = self._remote_ready()
         peer = "Windows" if self.cfg.other_host() == "windows" else "Mac"
-        clip_on = bool(getattr(getattr(self.cfg, "clipboard", None), "enabled", True))
         if connected:
             self.window.set_side_status(f"已连接 {peer}", ok=True)
-            self.window.set_footer(
-                f"已连接 {peer} · 剪贴板{'已开启' if clip_on else '已关闭'}", ok=True
-            )
         else:
             self.window.set_side_status("对端离线 · 仅本机", ok=False)
-            self.window.set_footer("对端未连接", ok=False)
 
     # ------------------------------------------------------------------ 菜单
     def _status_actions(self) -> dict:

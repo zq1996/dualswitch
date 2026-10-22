@@ -283,6 +283,8 @@ def file_pixmap(path_or_name: str, size: int, fg: str = "", stroke: float = 1.5)
     if ext:
         from PySide6.QtGui import QFont
 
+        # 这是画进 46px 缩略图角标的「文件扩展名」字样（PNG/PDF…），属于**图标内容**，
+        # 不参与 theme 的字阶（FS_* 只管页面文字）。9px 是为了塞进 13px 的角标条。
         font = QFont()
         font.setFamilies(theme.MONO_FAMILIES)
         font.setPixelSize(9)

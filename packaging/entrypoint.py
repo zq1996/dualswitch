@@ -111,6 +111,7 @@ def _selfcheck() -> int:
             "dualswitch.ui.win2.pairing_page",
             "dualswitch.ui.win2.preview",
             "dualswitch.ui.win2.tray",
+            "dualswitch.ui.win2.focus_style",
             "dualswitch.ui.win2.openers",
             "dualswitch.ui.win2.apps",
         ]

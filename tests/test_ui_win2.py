@@ -27,7 +27,7 @@ pytest.importorskip("PySide6", reason="未安装 PySide6，跳过界面测试")
 from PySide6.QtCore import QEvent, Qt  # noqa: E402
 from PySide6.QtGui import QKeyEvent  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
 from dualswitch.config import SOURCE_UNKNOWN, platform_defaults  # noqa: E402
 from dualswitch.sync.engine import ClipRecord  # noqa: E402
@@ -150,14 +150,19 @@ def test_window_is_frameless_with_two_caption_buttons(app, cfg):
     win.close()
 
 
-def test_window_geometry_tokens(app):
+def test_window_geometry_tokens(app, cfg):
     # 2026-10-22 用户拍板「侧栏跟 mac2」：188 → 156，且可收到 56（§14.2 已拍板）
     assert theme.SIDEBAR_W == 156
     assert theme.SIDEBAR_W_COLLAPSED == 56
     assert (theme.SIDEBAR_HANDLE_W, theme.SIDEBAR_HANDLE_H) == (15, 46)
-    assert theme.FOOTER_H == 30            # Windows 保留底栏（托盘不可用时的状态出口）
     assert theme.RADIUS_WIN == 12          # Windows 取 12（mac 是 16）
     assert theme.MENU_W == 240 and theme.MENU_ROW_H == 32
+    # 底栏 30px 已删除（2026-10-22 用户：「最下边的版本号那行不要了」）
+    win = MainWindow(cfg, "Alt+Space", "v0")
+    assert win.findChild(QWidget, "footer") is None, "底栏不许再出现"
+    assert win.findChild(QLabel, "footerText") is None
+    win.set_footer("对端未连接", ok=False)      # 旧调用点不炸（空实现）
+    win.close()
 
 
 def test_sidebar_switches_three_pages(app, cfg):
@@ -292,11 +297,39 @@ def test_theme_is_windows_light_only():
     t = theme.tokens()
     assert t.name == "light"
     assert t.ink3 == "#7A8494"               # 元信息提深一档
-    # 2026-10-21 用户反馈「字看不清、有点模糊」→ 中文界面以雅黑 UI 打头
-    assert theme.FONT_FAMILIES[0] == "Microsoft YaHei UI"
-    assert "Segoe UI Variable Text" in theme.FONT_FAMILIES
+    # 2026-10-22 定稿：**西文打头、中文回退**（Qt 的 families 是逐字符回退链）。
+    # 西文/数字走 Segoe UI，汉字走微软雅黑 UI；反过来的话数字会用雅黑的西文字形，
+    # 看着"怪"。雅黑必须在链里，否则汉字掉到宋体（有衬线）。
+    assert theme.FONT_FAMILIES[0] in ("Segoe UI Variable Text", "Segoe UI")
+    assert "Segoe UI" in theme.FONT_FAMILIES
+    assert theme.FONT_FAMILIES.index("Microsoft YaHei UI") < theme.FONT_FAMILIES.index("SimHei")
     assert "Segoe UI Emoji" in theme.FONT_FAMILIES
     assert theme.MONO_FAMILIES[0] == "Cascadia Mono"
+
+
+def test_type_scale_is_five_steps():
+    """字阶只有 10/12/14/17/27 五档，页面里写 12.5 也会被吸附过去（§3.3）。"""
+    assert theme.RAMP_PX == (10, 12, 14, 17, 27)
+    assert theme.snap_px(12.5) == 12 and theme.snap_px(13.5) == 14
+    assert theme.snap_px(9.5) == 10 and theme.snap_px(11.5) == 12
+    assert theme.snap_px(25) == 25, "配对码大数字是显示字号，不参与吸附"
+    assert theme.snap_px(7.5) == 7.5, "收起态徽章的小字也不能被放大"
+    # 字重只留三档（雅黑只有 Regular / Bold 两个真字形，中间值全靠合成）
+    assert (theme.W_REG, theme.W_MED, theme.W_BOLD) == (400, 600, 700)
+    for raw in (550, 620, 650):
+        assert theme.snap_weight(raw) == 600
+    assert theme.snap_weight(680) == 700
+
+
+def test_qss_only_uses_type_scale():
+    """整张 QSS 里不许出现字阶以外的字号/字重 —— 否则层级又会糊成一片。"""
+    import re
+
+    css = theme.qss()
+    sizes = {float(v) for v in re.findall(r"font-size:\s*([\d.]+)px", css)}
+    assert sizes <= {10.0, 12.0, 14.0, 17.0, 22.0, 25.0, 27.0}, f"越界字号：{sorted(sizes)}"
+    weights = {int(v) for v in re.findall(r"font-weight:\s*(\d+)", css)}
+    assert weights <= {400, 600, 700}, f"越界字重：{sorted(weights)}"
 
 
 def test_qss_has_no_oversized_radius():
@@ -1191,3 +1224,66 @@ def test_nav_pair_status_dot(app, cfg):
     win.nav_pair.set_collapsed(True)
     assert win.nav_pair._status_dot.width() == 7, "收起态状态灯缩到 7px"
     win.close()
+
+
+# --------------------------------------------------------------------------- #
+# 9. 排版与视觉噪音（2026-10-22 用户反馈：字体怪 / 虚线框 / 底栏 / 遮挡）
+# --------------------------------------------------------------------------- #
+def test_focus_rect_style_installed(app):
+    """点过的按钮不许留灰色虚线框（用户截图点了「取消」「清理」两处）。
+
+    注意：**不能**用 `isinstance(app.style(), NoFocusRectStyle)` 断言 —— 一旦设了
+    QSS，Qt 会把应用样式包进内部的 QStyleSheetStyle，`app.style()` 只能报出壳子的
+    基类（QCommonStyle），壳子其实还在链上。所以这里直接验证「PE_FrameFocusRect
+    画不出东西」，并用插桩确认它真的会被调用到（2026-10-22 实测：装壳子后
+    ghostBtn 的 PE_FrameFocusRect 确实进了壳子并被吞掉）。
+    """
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from PySide6.QtWidgets import QStyle, QStyleOption
+
+    from dualswitch.ui.win2 import focus_style
+
+    proxy = focus_style.NoFocusRectStyle(app.style())
+    img = QImage(48, 24, QImage.Format_ARGB32)
+    img.fill(QColor("#FFFFFF"))
+    painter = QPainter(img)
+    option = QStyleOption()
+    option.rect = QRect(0, 0, 48, 24)
+    proxy.drawPrimitive(QStyle.PE_FrameFocusRect, option, painter)
+    painter.end()
+    assert img.pixelColor(1, 1) == QColor("#FFFFFF"), "焦点虚线框被画出来了"
+
+    # install 幂等：重复装不会套娃，壳子挂在 app 上（防 use-after-free）
+    focus_style.install(app)
+    first = getattr(app, "_dualswitch_focus_style")
+    focus_style.install(app)
+    assert getattr(app, "_dualswitch_focus_style") is first
+    assert isinstance(first, focus_style.NoFocusRectStyle)
+
+
+def test_settings_storage_row_children_do_not_overlap(app, cfg):
+    """「已用 0.0 MB [200] MB [清理]」四段不许互相压住（用户截图里 MB 被盖掉了）。"""
+    from itertools import combinations
+
+    from dualswitch.ui.win2.widgets import ElidedLabel
+
+    page = SettingsPage(cfg, os.path.join(HOME, "cfg-test.json"))
+    page.resize(624, 620)
+    page.show()
+    QTest.qWait(20)
+    box = page.btn_clean.parentWidget()
+    kids = [
+        w for w in box.children()
+        if isinstance(w, QWidget) and w.isVisible() and w.width() > 0
+    ]
+    for a, b in combinations(kids, 2):
+        assert not a.geometry().intersects(b.geometry()), (
+            f"{a.objectName() or type(a).__name__} 与 {b.objectName() or type(b).__name__} 重叠"
+        )
+    # 行题 / 副行改成 ElidedLabel：字号变大时先省略文字，而不是让控件压上来
+    row = page.btn_clean.parentWidget().parentWidget()
+    assert row.findChildren(ElidedLabel), "设置行的文字必须可省略（否则会顶出行宽）"
+    page.close()
+
+

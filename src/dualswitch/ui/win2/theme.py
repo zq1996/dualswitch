@@ -32,7 +32,9 @@ TITLEBAR_H = 40                  # 设计稿 .win-bar 高度
 SIDEBAR_W = 156
 SIDEBAR_W_COLLAPSED = 56         # 收起态：只留图标（内容宽 40 = 56 − 左右各 8）
 SIDEBAR_HANDLE_W, SIDEBAR_HANDLE_H = 15, 46   # 边缘收起把手（方案 A，不占布局）
-FOOTER_H = 30
+#: 底栏高度：**已废弃**（2026-10-22 用户要求删掉版本号那行）。
+#: 常量留着只为兼容旧引用；窗口里已经没有这条 bar 了。
+FOOTER_H = 0
 TOOLBAR_H = 40
 CONTENT_PAD_H, CONTENT_PAD_V = 18, 20
 RADIUS_WIN = 12                  # Windows 取 12（系统窗口约 8，自绘 12 不显钝）
@@ -72,24 +74,117 @@ MENU_W = 240                     # 托盘菜单宽（设计 §4.2）
 MENU_ROW_H = 32
 
 FONT_FAMILIES = [
-    # 2026-10-21 用户反馈「字看不清、有点模糊」：中文界面以雅黑 UI 打头。
-    # 之前 Segoe UI Variable Text 打头时，中文全靠回退到雅黑 —— 96dpi 下 12px 的
-    # 回退字形又细又糊（可变字体的 weight 轴在像素字号上也占不到便宜）。
-    "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI Variable Text", "Segoe UI",
+    # 2026-10-22 定稿（用户：「页面的字体怎么感觉怪怪的」）：**西文打头、中文回退**。
+    #
+    # Qt 6 的 `QFont.setFamilies([...])` 是**逐字符**回退链：西文/数字用第一个字体，
+    # 第一个字体没有的字（汉字）才用第二个。所以这条链的实际效果是
+    # 「Latin + 数字 = Segoe UI，汉字 = 微软雅黑 UI」—— 这正是 Windows 自己的做法
+    # （系统 UI 全是 Segoe UI，CJK 由雅黑补齐）。
+    #
+    # 之前反过来写（雅黑打头）时，`Windows` / `1729×1339` 这些西文数字全用雅黑的
+    # 西文字形 —— 雅黑的 Latin 是出了名的挤，数字还不对齐，界面整体就"怪"。
+    # 但**不能**只写 Segoe 不写雅黑：那样汉字会落到系统默认的宋体（有衬线），
+    # 2026-10-21 那次「字发糊」就是这么来的。两条一起写才对。
+    "Segoe UI Variable Text",    # Win11 才有；没有会被自动跳过
+    "Segoe UI",                  # Win10/11 都在，主力
+    "Microsoft YaHei UI",        # 汉字主力（微软雅黑 UI）
+    "Microsoft YaHei",
+    "SimHei",                    # 黑体兜底：**别让汉字掉到宋体**
     # emoji 不在上面几个字体里：显式列出来，别指望 Qt 的隐式回退
-    "Segoe UI Emoji", "sans-serif",
+    "Segoe UI Emoji",
 ]
-APP_FONT_PX = 13                 # 全局默认字号（设计稿 12.5px，Windows 上浮到 13 更清楚）
-BODY_FS = 12.5
-META_FS = 11
-MONO_FAMILIES = ["Cascadia Mono", "Consolas", "monospace"]
+MONO_FAMILIES = ["Cascadia Mono", "Consolas", "Courier New"]
 
-# 设计稿字号档（§3.3）
-FS_PAGE = 27                     # hero 平台名
-FS_ROW = 13                      # 行题
-FS_META = 11                     # 元信息
-FS_SECTION = 11                  # 分组小标题
-FS_SMALL = 12
+# --------------------------------------------------------------------------- #
+# 字号档（px，逻辑像素）—— 一份表管全界面，页面里不要再写裸数字
+#
+# 依据：Windows 11 Fluent 的字阶是 Caption 12 / Body 14 / Subtitle 20 / Title 28
+# （Segoe UI Variable）。这套界面是 780×580 的密集版，把 20/28 收成 17/27，
+# 并保留 10 给「药丸 / 键帽 / 徽章」这类非正文小件。
+#
+# **为什么把 9.5/10.5/11.5/12.5/13.5 全砍掉**：96dpi 下相差 0.5–1px 的两档在屏幕上
+# 分不出来，只让界面看起来"每处都差一点、没有层次"（用户 2026-10-22 的原话是
+# 「字体怎么感觉怪怪的」）。现在相邻两档至少差 2px，五档就是五个清楚的层级。
+# --------------------------------------------------------------------------- #
+FS_HERO = 27                     # hero 平台名（Windows / Mac）
+FS_TITLE = 17                    # 页面标题（配对电脑）
+FS_ROW = 14                      # 行题 / 设备名 / 主按钮 / 空态标题 / 对话框标题
+FS_META = 12                     # 副行 / 元信息 / 分组小标题 / 提示 / chip / 输入框
+FS_MICRO = 10                    # 药丸 / 键帽 / 徽章 / 预览脚注（非正文小件）
+
+#: 字重只留三档，理由同上：微软雅黑只有 Regular(400) 与 Bold(700) 两个真字形，
+#: 550/650/680 这些中间值全靠合成（描边加粗），小字号下会糊成一团。
+#: 强调优先靠**字号与颜色**，其次才是 600（Segoe 有真 Semibold；汉字会落到 Bold）。
+W_REG, W_MED, W_BOLD = 400, 600, 700
+
+APP_FONT_PX = FS_ROW             # 全局默认字号 = 正文档（Windows 的 Body 是 14px）
+BODY_FS = FS_ROW
+META_FS = FS_META
+
+#: 旧名保留（页面里引用过），值统一指向新档位
+FS_PAGE = FS_HERO
+FS_SECTION = FS_META
+FS_SMALL = FS_META
+
+#: 字阶（从小到大）。任何字号都会被 `snap_px()` 吸附到最近的这一档。
+RAMP_PX = (FS_MICRO, FS_META, FS_ROW, FS_TITLE, FS_HERO)
+#: 不参与吸附的「显示字号」：配对码数字 22/25、收起态小徽章 7.5。
+RAW_PX = {7.5, 22.0, 25.0}
+
+
+def snap_px(px: float) -> int | float:
+    """把任意字号吸附到字阶上最近的一档。
+
+    页面里写 12.5 / 13.5 / 11.5 / 9.5 这些「设计稿像素」时，实际会落到 12/14/12/10 ——
+    这样就不必逐处改数字，也不会再有 0.5px 的伪层级。
+    """
+    if float(px) in RAW_PX:
+        return px
+    return min(RAMP_PX, key=lambda step: abs(step - float(px)))
+
+
+def snap_weight(weight: int) -> int:
+    """字重只留 400 / 600 / 700：雅黑只有 Regular 与 Bold 两个真字形。"""
+    if weight < 500:
+        return W_REG
+    if weight < 680:
+        return W_MED
+    return W_BOLD
+
+
+def mono_family() -> str:
+    """等宽字体：取本机**真的装了**的第一个（Cascadia Mono → Consolas → Courier New）。
+
+    QSS 里 `font-family` 只认单个族名，写一个没装的族名会静默回落到默认字体
+    （在中文系统上就是宋体），所以这里先问一遍 QFontDatabase。
+    """
+    from PySide6.QtGui import QFontDatabase
+
+    try:
+        installed = set(QFontDatabase.families())
+    except Exception:  # noqa: BLE001 - 没有 GUI 时退回首选名
+        return MONO_FAMILIES[0]
+    for name in MONO_FAMILIES:
+        if name in installed:
+            return name
+    return MONO_FAMILIES[0]
+
+
+def _normalize_qss(text: str) -> str:
+    """QSS 收口：字号吸附字阶、字重只留三档（页面里的裸数字不必逐个改）。"""
+    import re
+
+    text = re.sub(
+        r"font-size:\s*([\d.]+)px",
+        lambda m: f"font-size: {snap_px(float(m.group(1)))}px",
+        text,
+    )
+    text = re.sub(
+        r"font-weight:\s*(\d+)",
+        lambda m: f"font-weight: {snap_weight(int(m.group(1)))}",
+        text,
+    )
+    return text
 
 
 # --------------------------------------------------------------------------- #
@@ -231,14 +326,17 @@ def type_tile(kind: str) -> tuple[str, str]:
 # 字体（像素尺度）
 # --------------------------------------------------------------------------- #
 def qfont(px: float = APP_FONT_PX, weight: int | None = None, mono: bool = False):
-    """按设计稿像素字号造字体；`weight` 用 400/550/650/700。"""
+    """按字阶造字体：`px` 会被 `snap_px()` 吸附（10/12/14/17/27），`weight` 只留 400/600/700。
+
+    页面里照旧写设计稿像素（12.5 / 13.5 之类）没问题，落到的就是最近的那一档。
+    """
     from PySide6.QtGui import QFont
 
     f = QFont()
     f.setFamilies(MONO_FAMILIES if mono else FONT_FAMILIES)
-    f.setPixelSize(max(1, int(px + 0.5)))   # 12.5→13、10.5→11：向上取整，别把 12.5 压成 12
+    f.setPixelSize(max(1, int(round(float(snap_px(px))))))
     if weight is not None:
-        f.setWeight(QFont.Weight(int(weight)))
+        f.setWeight(QFont.Weight(snap_weight(int(weight))))
     return f
 
 
@@ -328,8 +426,14 @@ def is_wide_key(label: str) -> bool:
 # QSS
 # --------------------------------------------------------------------------- #
 def qss(t: Tokens | None = None) -> str:
+    """整窗样式表。
+
+    字号/字重在这里**统一收口**（`_normalize_qss`）：下面每条规则照设计稿写像素值，
+    出表前吸附到 10/12/14/17/27 五档、字重吸附到 400/600/700 ——
+    这样既保留「设计稿怎么写就怎么抄」的可读性，又不会出现 11.5/12.5 这种伪层级。
+    """
     t = t or _CURRENT
-    return f"""
+    return _normalize_qss(f"""
     /* ---------- 基础 ---------- */
     QWidget {{
         color: {t.ink};
@@ -482,7 +586,7 @@ def qss(t: Tokens | None = None) -> str:
     QPushButton#quickRow:hover {{ background: {t.card2}; }}
     #rowTitle {{ color: {t.ink}; font-size: 13px; font-weight: 550; }}
     #rowSub {{ color: {t.ink3}; font-size: 11px; }}
-    #rowHint {{ color: {t.ink3}; font-size: 11px; font-family: "{MONO_FAMILIES[0]}"; }}
+    #rowHint {{ color: {t.ink3}; font-size: 11px; font-family: "{mono_family()}"; }}
     #chev {{ color: {t.ink3}; font-size: 13px; }}
 
     /* ---------- 剪贴板页 ---------- */
@@ -517,7 +621,7 @@ def qss(t: Tokens | None = None) -> str:
     #clipSep {{ background: {t.line_soft}; border: 0; }}
     #clipTitle {{ color: {t.ink}; font-size: 13px; font-weight: 550; }}
     #clipTitleMono {{ color: {t.ink}; font-size: 11px; font-weight: 500;
-        font-family: "{MONO_FAMILIES[0]}"; }}
+        font-family: "{mono_family()}"; }}
     #clipMeta {{ color: {t.ink3}; font-size: 11px; }}
     #clipMetaSrc {{ color: {t.ink2}; font-size: 11px; font-weight: 700; }}
     #clipDot {{ color: {t.ink3}; font-size: 11px; }}
@@ -544,11 +648,11 @@ def qss(t: Tokens | None = None) -> str:
     #pvText {{ color: {t.ink2}; font-size: 12px; }}
     #pvCode {{
         background: {t.card2}; border: 1px solid {t.line_soft}; border-radius: 9px;
-        color: {t.ink}; font-size: 11px; font-family: "{MONO_FAMILIES[0]}";
+        color: {t.ink}; font-size: 11px; font-family: "{mono_family()}";
     }}
     #pvLink {{
         background: {t.accent_soft}; border-radius: 9px; color: {t.accent_deep};
-        font-size: 11px; font-family: "{MONO_FAMILIES[0]}";
+        font-size: 11px; font-family: "{mono_family()}";
     }}
     #pvFileCard {{ background: {t.card2}; border: 1px solid {t.line_soft};
         border-radius: 12px; }}
@@ -578,7 +682,7 @@ def qss(t: Tokens | None = None) -> str:
     #setSep {{ background: {t.line_soft}; border: 0; }}
     #setTitle {{ color: {t.ink}; font-size: 13px; font-weight: 550; }}
     #setSub {{ color: {t.ink3}; font-size: 11px; }}
-    #setVal {{ color: {t.ink3}; font-size: 12px; font-family: "{MONO_FAMILIES[0]}"; }}
+    #setVal {{ color: {t.ink3}; font-size: 12px; font-family: "{mono_family()}"; }}
     #segTrack {{ background: {t.card3}; border: 1px solid {t.line}; border-radius: 8px; }}
     QPushButton#segBtn {{
         background: transparent; border: 0; border-radius: 6px;
@@ -595,16 +699,12 @@ def qss(t: Tokens | None = None) -> str:
     /* ---------- 数字框 / 单行输入 ---------- */
     QLineEdit#numEdit, QLineEdit#textEdit {{
         background: {t.card}; border: 1px solid {t.line}; border-radius: 8px;
-        color: {t.ink}; font-size: 12px; font-family: "{MONO_FAMILIES[0]}";
+        color: {t.ink}; font-size: 12px; font-family: "{mono_family()}";
         padding: 0 8px;
     }}
     QLineEdit#numEdit:focus, QLineEdit#textEdit:focus {{ border-color: {t.accent}; }}
 
-    /* ---------- 底栏 ---------- */
-    #footer {{ background: {t.card2}; border-top: 1px solid {t.line_soft};
-        border-bottom-left-radius: {RADIUS_WIN}px;
-        border-bottom-right-radius: {RADIUS_WIN}px; }}
-    #footerText {{ color: {t.ink3}; font-size: 11px; }}
+    /* ---------- 底栏：已删除（2026-10-22，版本号那行不要了） ---------- */
 
     /* ---------- 窗口内确认遮罩（§8） ---------- */
     #confirmMask {{ background: rgba(16,24,40,0.28); }}
@@ -653,7 +753,7 @@ def qss(t: Tokens | None = None) -> str:
         background: {t.card3}; color: {t.ink3}; font-size: 9.5px; font-weight: 700;
         border-radius: 8px; padding: 1.5px 6px;
     }}
-    #peerMeta {{ color: {t.ink3}; font-size: 10.5px; font-family: "{MONO_FAMILIES[0]}"; }}
+    #peerMeta {{ color: {t.ink3}; font-size: 10.5px; font-family: "{mono_family()}"; }}
     QPushButton#peerBtn {{
         background: {t.accent}; color: {t.on_accent}; border: 0;
         border-radius: 7px; font-size: 11.5px; font-weight: 650; padding: 0 12px;
@@ -671,12 +771,12 @@ def qss(t: Tokens | None = None) -> str:
     QLineEdit#pairIp:focus {{ border-color: {t.accent}; }}
     #pinBlock {{
         background: {t.card}; border: 1px solid {t.line}; border-radius: 11px;
-        color: {t.ink}; font-family: "{MONO_FAMILIES[0]}";
+        color: {t.ink}; font-family: "{mono_family()}";
         font-size: 25px; font-weight: 700;
     }}
     QLineEdit#pinInput {{
         background: {t.card}; border: 1px solid {t.line}; border-radius: 10px;
-        color: {t.ink}; font-family: "{MONO_FAMILIES[0]}";
+        color: {t.ink}; font-family: "{mono_family()}";
         font-size: 22px; font-weight: 700;
     }}
     QLineEdit#pinInput:focus {{ border: 2px solid {t.accent}; background: {t.accent_soft}; }}
@@ -695,10 +795,10 @@ def qss(t: Tokens | None = None) -> str:
     #pairFactK {{ color: {t.ink3}; font-size: 9.5px; }}
     #pairFactV {{
         color: {t.ink2}; font-size: 11px;
-        font-family: "{MONO_FAMILIES[0]}";
+        font-family: "{mono_family()}";
     }}
     #pairNote {{ background: {t.card3}; border-radius: 8px; }}
     #pairNoteText {{ color: {t.ink3}; font-size: 10.5px; }}
     #pairCenterTitle {{ color: {t.ink}; font-size: 14px; font-weight: 680; }}
     #pairCenterSub {{ color: {t.ink3}; font-size: 11.5px; }}
-    """
+    """)
