@@ -514,6 +514,37 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-22 **[win2] 跟随 mac2：配对电脑页 + 侧栏 156/可收起 + 退出按钮 + 新图标**。
+  · 用户拍板「配对页 + 侧栏全跟」（`docs/UI-WINDOWS2-DESIGN.md` §14.2 从待拍板变已拍板）。
+    底层 `sync/*`（配对状态机、`set_key`、发现广播扩字段）是共享层，pull 即生效，**Windows 侧零行底层代码**。
+  · **配对页**（新文件 `ui/win2/pairing_page.py`，约 1000 行）：7 个状态与 mac2 逐条对齐 ——
+    附近设备列表（平台牌 + 配对状态 + 替换配对/管理按钮）、本机显示 6 位码（5:00 倒计时、换一个码）、
+    输入码（自动跳格 / 退格回退 / 整段粘贴 / 剩余次数）、配对中（800ms 转圈，15s 超时）、
+    配对成功（对端 ID + 地址 + 复制测试文本）、已配对管理（连接状态与配对状态分开显示、旧版配置提示）、
+    失败（地址 + 防火墙提示 + 重试）。手动 IP 兜底同样搬过来。
+    **确认走窗口内遮罩**：页面发 `confirmRequested(ConfirmRequest)`，runner 的 `ConfirmOverlay` 盖整窗
+    （`ask()` 因此从「只能清空剪贴板」泛化成通用确认），页内不放确认卡片、不弹 `QDialog`。
+  · **侧栏 188 → 156，可收到 56**：边缘 15×46 把手（方案 A，不占布局）鼠标进侧栏才出现；
+    收起只留图标，剪贴板徽章缩成 9px、配对状态灯缩到 7px 贴图标右上角，tooltip 补回文字。
+    新增第 4 页「系统 → 配对电脑」（右侧状态灯灰=未配对/绿=已配对/红=需重新配对，悬浮显示文字）。
+  · **footer 加「退出应用」**（自绘 `QuitButton`，16px 引导列 + power 图标，hover 只加淡红底、文字不变红）：
+    Windows 关窗=最小化，这个入口比 mac 上更有价值。底栏 30px 保留（托盘不可用时的状态出口）。
+  · **托盘第 7 行「配对电脑…  已配对/未配对」**：与侧栏灯同一份 `pairing_status()`，不各算一遍；
+    点击与侧栏共用 `runner.open_pair_page()`。菜单 8 行 → 9 行、4 条分隔线 → 5 条。
+  · **生命周期**：切页 `pageChanged` → 进页 `activate()`、离页 `deactivate()`（配对码立即作废）；
+    关窗收托盘也 deactivate（否则码在托盘里白挂 5 分钟）；退出路径改名 `quit_application()`，
+    顺手修掉「退出只停本地采集、没停同步引擎」。
+  · **图标**：运行时统一走 `theme.app_icon()`（win2 只有 .ico，读 `ui/assets` 里的副本 ——
+    新图标由 `design/icon/build_icon.py` 自动同步过去）。出图脚本改成**两端可跑**：
+    macOS 找 Chrome、Windows 找 Chrome/Edge、可用 `DUALSWITCH_CHROME` 覆盖，另加 `--check`
+    只校验「母版 ↔ 运行时副本」一致性（不需要浏览器）。Windows 重新出图与 mac 输出**逐字节一致**，已验证。
+  · **打包**（§14.4 授权的共享层改动）：`default_ui` 无条件 `"ui2"` —— Windows 双击也进 win2，
+    v1 仍可 `dualswitch ui`；`--selfcheck` 点名 win2 的 15 个模块（含 `pairing_page`），
+    Windows 侧自检 32 个模块通过。
+  · 自测：`QT_QPA_PLATFORM=offscreen pytest -q` → **387 passed / 10 skipped**；`test_ui_win2.py` 新增 12 例、
+    `test_icons.py` 新增 2 例；离屏抓图核对三态（配对页 / 收起侧栏 / 展开侧栏）。
+    **真机两端同网验收（§14.6 第 2–6 条）待用户在场点一次** —— 本机自测不写真实 DDC / 不配对真机。
+
 - 2026-10-21 **[ui] 补来源应用名与图标 + 修「运行中」药丸圆角（QSS 圆角在 19px 控件上失效）**。
   · **来源应用**（用户：「取不到图标，有应用名称也行啊」）：`clipboard/windows.py` 读到新内容时抓
     前台窗口 → 进程 exe 路径 → `FileDescription`（本地化显示名：`Windows 资源管理器` / `记事本` / `微信`），

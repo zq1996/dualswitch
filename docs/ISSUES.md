@@ -177,8 +177,38 @@
   1. `pytest -q tests/test_pairing.py` 全绿（**共享用例，不许整文件 skip**）
   2. 两端真机：mac 显示码、Windows 输码 → 5s 内「已配对」；输错 5 次码失效；关窗（收托盘）码即作废
   3. `pytest -q` 全绿
+- **状态**: 已合并 `bc70669`（2026-10-22，Windows 端）
+  · 新建 `ui/win2/pairing_page.py`（7 状态、6 位码、倒计时、附近设备、手动 IP）；
+    确认块走 runner 的窗口内遮罩（`confirmRequested` → `ConfirmOverlay.ask()` 泛化），
+    页内不放确认卡片、不弹 `QDialog`（有守卫用例）
+  · 侧栏第 4 项「配对电脑」+ 状态灯（灰/绿/红，悬浮显示文字）；托盘第 7 行
+    「配对电脑…  已配对/未配对」，与侧栏同一份 `status_text()`
+  · 切页 / 关窗收托盘即 `deactivate()`，码立即作废；退出路径真停同步引擎
+  · 同批跟随 §14.2 的拍板：侧栏 188→156 可收到 56、footer「退出应用」、`default_ui="ui2"`
+  · 验收 1 ✅（`tests/test_pairing.py` 16 例共享用例 + `test_ui_win2.py` 新增 12 例 UI 用例）；
+    2 ❌ **待真机**（需两台机器同网，本机不配对真机）；3 ✅ 全量 387 passed / 10 skipped
+  · 落地要点见 `docs/UI-WINDOWS2-DESIGN.md` §14.7；接口清单见 `CLIPBOARD-SYNC-CONTRACT.md` §0
+
+---
+
+## ISSUE-008 配对页设备列表首帧的按钮文案是错的（「配对」应为「替换配对」/「管理」）
+
+- **owner**: mac
+- **影响**: 仅 mac（**Windows 端已修**，2026-10-22 `bc70669`）
+- **现象**: 打开配对页，已与别的电脑配对的设备第一次出现时按钮写「配对」，
+  已配对的那台写「配对」而不是「管理」；约 1.5 秒后才变成正确文案。
+- **根因**: `pairing_page._rebuild_peer_rows()` 建行时按钮统一写死「配对」，
+  正确文案只在 `_update_peer_row()` 里算，而它只在「设备 id 列表没变」的刷新路径上被调用。
+- **期望**: 建完行立刻按当前状态定一次文案（Windows 端就是在 `_rebuild_peer_rows` 末尾
+  对每个 peer 调一次 `_update_peer_row(p)`，一行）。
+- **验收**:
+  1. `QT_QPA_PLATFORM=offscreen pytest -q tests/test_pairing.py tests/test_ui_mac2.py --basetemp=.pytest-tmp`
+     （建议补一条：两台设备一台 `paired=true`、一台未配对，`activate()` 后**立即**断言
+     按钮文案分别是「替换配对」与「配对」）
+  2. `pytest -q` 全绿
 - **状态**: 待做
-  · 落地要点见 `docs/UI-WINDOWS2-DESIGN.md` §14.1～§14.3；接口清单见 `CLIPBOARD-SYNC-CONTRACT.md` §0
+  · Windows 参考实现：`src/dualswitch/ui/win2/pairing_page.py::_rebuild_peer_rows` 末尾
+    `self._update_peer_row(p)`；用例 `tests/test_ui_win2.py::test_pairing_page_discover_lists_peers`
 
 ---
 
