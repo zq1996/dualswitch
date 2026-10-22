@@ -29,11 +29,20 @@ from dualswitch.config import Config, SOURCE_UNKNOWN, platform_defaults  # noqa:
 from dualswitch.sync.engine import ClipRecord  # noqa: E402
 from dualswitch.ui.mac2 import openers, statusmenu, theme  # noqa: E402
 from dualswitch.ui.mac2.clipboard_page import ClipboardPage, ClipRow, Thumb  # noqa: E402
+from dualswitch.ui.mac2.pairing_page import PairingPage, PinGroup  # noqa: E402
 from dualswitch.ui.mac2.preview import PreviewController  # noqa: E402
 from dualswitch.ui.mac2.settings_page import HotkeyKeycaps  # noqa: E402
 from dualswitch.ui.mac2.switch_page import SwitchPage  # noqa: E402
 from dualswitch.ui.mac2.widgets import KeyCap, KeyCaps  # noqa: E402
-from dualswitch.ui.mac2.window import PAGE_CLIP, PAGE_SETTINGS, PAGE_SWITCH, MainWindow  # noqa: E402
+from dualswitch.ui.mac2.window import (  # noqa: E402
+    FOOT_PAD_L,
+    FOOT_TEXT_X,
+    PAGE_CLIP,
+    PAGE_PAIR,
+    PAGE_SETTINGS,
+    PAGE_SWITCH,
+    MainWindow,
+)
 
 
 # 这棵 UI 树是 macOS 端的，但用例在 Windows 开发机上也要能跑：
@@ -84,6 +93,58 @@ class FakeEngine:
     def clear_records(self):
         self._records = []
         self.cleared = True
+
+
+class FakePairEngine:
+    """配对页测试用的假引擎：只回状态，不碰网络 / 配置。"""
+
+    def __init__(self, **status):
+        self.status = {
+            "state": "idle", "outcome": "", "error": "", "error_kind": "",
+            "pin": "", "expires_in": 0.0, "attempts_left": 5,
+            "paired": False, "legacy": False, "mismatch": False,
+            "connected": False, "peer_device": "", "peer_name": "",
+            "paired_at": 0.0, "addr": "", "last_sync_at": 0.0,
+        }
+        self.status.update(status)
+        self.begin_calls = 0
+        self.cancel_calls = 0
+        self.unpair_calls = 0
+        self.refresh_calls = 0
+        self.pair_result = {
+            "ok": True, "kind": "", "reason": "",
+            "peer_device": "windows-3f2a91c4", "peer_name": "DESKTOP-8Q2K",
+            "addr": "192.168.1.31:47823",
+        }
+        self.peers = [
+            {"device": "windows-3f2a91c4", "host": "DESKTOP-8Q2K", "ip": "192.168.1.31",
+             "port": 47823, "plat": "windows", "pairing": True, "paired": False},
+        ]
+
+    def pairing_status(self):
+        return dict(self.status)
+
+    def discovered_peers(self):
+        return [dict(p) for p in self.peers]
+
+    def begin_pairing(self):
+        self.begin_calls += 1
+        self.status.update(state="showing", pin="483921", expires_in=300.0)
+        return "483921"
+
+    def cancel_pairing(self):
+        self.cancel_calls += 1
+        self.status.update(state="idle", pin="", expires_in=0.0)
+
+    def unpair(self):
+        self.unpair_calls += 1
+        self.status.update(paired=False, peer_device="", peer_name="", paired_at=0.0)
+
+    def refresh_discovery(self):
+        self.refresh_calls += 1
+
+    def pair_with_peer(self, addr, pin):
+        return dict(self.pair_result)
 
 
 def make_records() -> list[ClipRecord]:
@@ -165,21 +226,285 @@ def test_hotkey_recorder_captures(app, cfg):
 
 
 # --------------------------------------------------------------------------- #
+# 1.5 配对入口与退出按钮（INTERACTIONS §12.3 / §13）
+# --------------------------------------------------------------------------- #
+def test_sidebar_footer_keeps_status_and_drops_version_bar(app, cfg):
+    win = MainWindow(cfg, "Option+Space", "v1.0.0")
+    # 状态行恢复；热键键帽只显示「⌥ Space」，不能再出现「热键 Option」
+    assert win.side_conn.text() == "未连接对端"
+    assert win.side_hotkey_text.text() == "热键"
+    assert win.side_hotkey.labels() == ["⌥", "Space"]
+    # 底部 30px 版本条已删除
+    assert not hasattr(win, "foot_ver")
+    assert not hasattr(win, "foot_text")
+    # 侧栏收窄到只够放图标 + 文字 + 状态灯
+    assert theme.SIDEBAR_W == 156
+
+
+def test_quit_button_hover_shows_red_tint(app, cfg):
+    """自绘退出按钮必须自己跟踪 hover：Enter 后粉底出现，Leave 后恢复透明。"""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication
+
+    win = MainWindow(cfg, "Option+Space", "v1.0.0")
+    win.show()
+    app.processEvents()
+    btn = win.btn_quit
+
+    QApplication.sendEvent(btn, QEvent(QEvent.Enter))
+    btn.update()
+    app.processEvents()
+    img = btn.grab().toImage()
+    px = img.pixelColor(img.width() - 3, img.height() // 2)
+    assert px.red() - px.blue() >= 8, "hover 没有淡红底"
+
+    QApplication.sendEvent(btn, QEvent(QEvent.Leave))
+    btn.update()
+    app.processEvents()
+    img = btn.grab().toImage()
+    px = img.pixelColor(img.width() - 3, img.height() // 2)
+    assert abs(px.red() - px.blue()) <= 3, "离开后粉底没有消失"
+    win.close()
+
+
+def test_collapsed_badges_hug_top_right_corner(app, cfg):
+    """收起态两个角标统一右对齐：离按钮右边缘 6px。"""
+    win = MainWindow(cfg, "Option+Space", "v1.0.0")
+    win.set_nav_count(4)
+    win.nav_pair.set_status_dot("ok", "已配对")
+    win.set_sidebar_collapsed(True)
+    win.show()
+    app.processEvents()
+
+    dot = win.nav_pair._status_dot
+    assert dot.x() == win.nav_pair.width() - 6 - dot.width()
+
+    # 数量徽章：扫描顶部 12 行里的主色像素，量它离右边缘的距离
+    nav = win.nav_clip
+    img = nav.grab().toImage()
+    scale = max(1, img.width() // max(1, nav.width()))
+    xs = []
+    for y in range(12 * scale):
+        for x in range(img.width()):
+            c = img.pixelColor(x, y)
+            if c.blue() > 200 and 50 < c.red() < 160:
+                xs.append(x)
+    assert xs, "收起态数量徽章没有画出来"
+    inset = (img.width() - 1 - max(xs)) / scale
+    assert 3 <= inset <= 7, f"角标离右边缘 {inset}px，应约 6px"
+    win.close()
+
+
+def test_sidebar_footer_rows_share_the_same_text_column(app, cfg):
+    from PySide6.QtCore import QPoint
+
+    win = MainWindow(cfg, "Option+Space", "v1.0.0")
+    win.resize(theme.WIN_W, theme.WIN_H)
+    win.show()
+    app.processEvents()
+    x_conn = win.side_conn.mapTo(win, QPoint(0, 0)).x()
+    x_hotkey = win.side_hotkey_text.mapTo(win, QPoint(0, 0)).x()
+    x_quit_text = win.btn_quit.mapTo(win, QPoint(0, 0)).x() + FOOT_TEXT_X
+    # 侧栏 10 + 行内边距 10 + 16 引导列 + 8 间距 = 44
+    assert x_conn == x_hotkey == x_quit_text == 44
+    win.close()
+
+
+def test_quit_button_icon_has_left_padding_and_handle_has_arrow(app, cfg):
+    """退出图标不能贴粉底左边缘；收起把手里必须真的画出箭头。"""
+    win = MainWindow(cfg, "Option+Space", "v1.0.0")
+    win.show()
+    app.processEvents()
+
+    # 按钮铺满 footer 宽度，粉底从按钮 0 开始 → 图标左侧必须留出 FOOT_PAD_L。
+    img = win.btn_quit.grab().toImage()
+    scale = max(1, img.width() // max(1, win.btn_quit.width()))
+    dark = 0
+    for x in range(FOOT_PAD_L * scale):
+        for y in range(img.height()):
+            if img.pixelColor(x, y).value() < 150:
+                dark += 1
+    assert dark == 0, "退出图标侵入了左侧 padding 区"
+    icon_dark = sum(
+        1
+        for x in range(FOOT_PAD_L * scale, (FOOT_PAD_L + 16) * scale)
+        for y in range(img.height())
+        if img.pixelColor(x, y).value() < 200
+    )
+    assert icon_dark > 0, "退出图标没有画出来"
+
+    # 把手中央必须有箭头像素（深浅取决于主题 ink2）
+    handle = win.side_handle
+    handle.set_collapsed(False)
+    himg = handle.grab().toImage()
+    hs = max(1, himg.width() // max(1, handle.width()))
+    cx = himg.width() // 2
+    cy = himg.height() // 2
+    arrow = sum(
+        1
+        for x in range(cx - 4 * hs, cx + 4 * hs)
+        for y in range(cy - 7 * hs, cy + 7 * hs)
+        if himg.pixelColor(x, y).value() < 170
+    )
+    assert arrow > 0, "收起把手里没有箭头"
+    win.close()
+
+
+def test_pair_nav_uses_status_dot_with_tooltip(app, cfg):
+    win = MainWindow(cfg, "Option+Space", "v1.0.0")
+    win.nav_pair.set_status_dot("bad", "需重新配对")
+    dot = win.nav_pair._status_dot
+    assert dot is not None and not dot.isHidden()
+    assert dot.width() == dot.height() == 8
+    assert win.nav_pair.status_dot_tooltip() == "需重新配对"
+    assert win.nav_pair._count == ""          # 不再显示文字徽章
+    win.nav_pair.set_status_dot("ok", "已配对")
+    assert win.nav_pair.status_dot_tooltip() == "已配对"
+
+
+def test_sidebar_collapses_to_icons_only(app, cfg):
+    win = MainWindow(cfg, "Option+Space", "v1.0.0")
+    win.set_nav_count(12)
+    win.nav_pair.set_status_dot("idle", "未配对")
+    win.set_sidebar_collapsed(True)
+
+    assert win.is_sidebar_collapsed()
+    assert win.sidebar.width() == theme.SIDEBAR_W_COLLAPSED == 56
+    assert win.sec_core.isHidden() and win.sec_system.isHidden()
+    assert win.conn_box.isHidden() and win.hk_box.isHidden()
+    assert win.quit_sep.isHidden()
+    assert win.btn_quit._collapsed
+    assert win.side_handle.toolTip() == "展开侧栏"
+    assert win.side_handle.x() == win.sidebar.width() - win.side_handle.W // 2
+    for nav in (win.nav_switch, win.nav_clip, win.nav_pair, win.nav_settings):
+        assert nav.is_collapsed()
+    # 数量还在，收起时改画成图标右上角的小徽章
+    assert win.nav_clip._count == "12"
+    assert win.nav_clip.toolTip() == "剪贴板"
+    # 配对状态灯缩小并压在图标右上角
+    dot = win.nav_pair._status_dot
+    assert dot.width() == dot.height() == 7
+    assert dot.x() + dot.width() <= win.nav_pair.width()
+    assert win.nav_pair.status_dot_tooltip() == "未配对"
+
+    win.toggle_sidebar()
+    assert not win.is_sidebar_collapsed()
+    assert win.sidebar.width() == theme.SIDEBAR_W == 156
+    assert not win.conn_box.isHidden() and not win.hk_box.isHidden()
+    assert not win.btn_quit._collapsed
+    assert win.side_handle.toolTip() == "收起侧栏"
+
+
+def test_sidebar_has_pair_nav_and_quit_button(app, cfg):
+    win = MainWindow(cfg, "alt+space", "v0")
+    assert win.nav_pair.text() == "配对电脑"
+    assert win.btn_quit.text() == "退出应用"
+    assert "⌘Q" in win.btn_quit.toolTip()
+    assert win.btn_quit.height() == 31
+
+    hits = []
+    win.quitRequested.connect(lambda: hits.append(True))
+    win.btn_quit.click()
+    assert hits == [True], "退出按钮应只触发一次统一退出入口"
+
+
+def test_pair_nav_opens_pair_page(app, cfg):
+    win = MainWindow(cfg, "alt+space", "v0")
+    win.attach_pages(
+        SwitchPage(cfg, "alt+space", ""),
+        ClipboardPage(FakeEngine([])),
+        __import__(
+            "dualswitch.ui.mac2.settings_page", fromlist=["SettingsPage"]
+        ).SettingsPage(cfg, "/tmp/dualswitch-test-cfg.json"),
+        PairingPage(FakePairEngine()),
+    )
+    changed = []
+    win.pageChanged.connect(changed.append)
+    win.nav_pair.click()
+    assert win.current_page() == PAGE_PAIR
+    assert changed[-1] == PAGE_PAIR
+
+
+def test_pairing_page_goes_through_states(app):
+    engine = FakePairEngine()
+    page = PairingPage(engine)
+    page.resize(592, 520)
+    page.show()
+    page.activate()
+    assert page._state == "discover"
+    assert len(page._peer_rows) == 1
+
+    page._start_show_code()
+    assert page._state == "showcode"
+    assert engine.begin_calls == 1
+    assert [b.text() for b in page._pin_blocks] == list("483921")
+
+    page._cancel_to_discover()
+    assert engine.cancel_calls == 1
+    assert page._state == "discover"
+
+    page._select_peer(engine.peers[0])
+    assert page._state == "entercode"
+    page.pin_group.fill(0, "123456")
+    assert page.btn_pair.isEnabled()
+
+    page._handle_result(engine.pair_result)
+    assert page._state == "success"
+    assert page.success_title.text() == "已和 DESKTOP-8Q2K 配对"
+
+
+def test_pairing_page_unpair_needs_inline_confirm(app):
+    engine = FakePairEngine(paired=True, peer_device="windows-3f2a91c4",
+                            peer_name="DESKTOP-8Q2K", addr="192.168.1.31:47823")
+    page = PairingPage(engine)
+    page.activate()
+    assert page._state == "paired"
+    assert page.confirm_box.isHidden()
+    page._ask_unpair()
+    assert not page.confirm_box.isHidden()
+    page._do_unpair()
+    assert engine.unpair_calls == 1
+    assert page._state == "discover"
+
+
+def test_pairing_page_status_text(app):
+    engine = FakePairEngine()
+    page = PairingPage(engine)
+    assert page.status_text() == "未配对"
+    engine.status.update(paired=True, peer_device="windows-3f2a91c4")
+    assert page.status_text() == "已配对"
+    engine.status.update(mismatch=True)
+    assert page.status_text() == "需重新配对"
+
+
+def test_pin_group_paste_and_backspace(app):
+    group = PinGroup()
+    group.fill(0, "48a39 21")          # 非数字要过滤
+    assert group.pin() == "483921"
+    first = group.edit(0)
+    first.setText("")
+    assert group.pin() == "83921"
+    group.clear()
+    assert group.pin() == ""
+
+
+# --------------------------------------------------------------------------- #
 # 2. 菜单栏菜单结构（INTERACTIONS §1）
 # --------------------------------------------------------------------------- #
 def test_menu_structure_rows(app, cfg):
     entries = statusmenu.build_menu_entries(cfg, "windows", "Right Option+Space", {})
     kinds = [e.kind for e in entries]
     titles = [e.title for e in entries if e.title]
-    # 8 行内容 + 4 条分隔线（§1 表格）
-    assert kinds.count("sep") == 4
-    assert len(entries) == 12
+    # 9 行内容 + 5 条分隔线（§1 表格 + §12.3 配对入口）
+    assert kinds.count("sep") == 5
+    assert len(entries) == 14
     assert titles[0] == "当前画面：Windows"
     assert "打开主界面" in titles
     assert any(t.startswith("切换到 Mac（USB-C）") for t in titles)
     assert any(t.startswith("强制切到 Mac（USB-C）") for t in titles)
     assert "剪贴板" in titles
     assert "设置…" in titles
+    assert any(t.startswith("配对电脑…") for t in titles)
     assert any(t.startswith("热键：") for t in titles)
     assert "退出 屏幕切换" in titles
     # 已移除的调试入口不许回来
@@ -207,6 +532,22 @@ def test_menu_unknown_uses_remote_text(app, cfg):
     actions_off = {"remote_ready": lambda: False}
     entries2 = statusmenu.build_menu_entries(cfg, SOURCE_UNKNOWN, "alt+space", actions_off)
     assert all("切过来" not in e.title for e in entries2)
+
+
+def test_menu_pair_entry_carries_state(app, cfg):
+    actions = {
+        "pair": lambda: None,
+        "pair_state": lambda: "已配对",
+    }
+    entries = statusmenu.build_menu_entries(cfg, "windows", "alt+space", actions)
+    pair_row = [e for e in entries if e.title.startswith("配对电脑…")][0]
+    assert pair_row.action is actions["pair"]
+    assert pair_row.title.endswith("已配对")
+    # 状态为「未配对」时同一行只换后缀，标题不变
+    actions["pair_state"] = lambda: "未配对"
+    entries = statusmenu.build_menu_entries(cfg, "windows", "alt+space", actions)
+    pair_row = [e for e in entries if e.title.startswith("配对电脑…")][0]
+    assert pair_row.title.endswith("未配对")
 
 
 def test_menu_danger_quit(app, cfg):
@@ -431,14 +772,17 @@ def test_window_geometry_and_pages(app, cfg):
     from dualswitch.ui.mac2.settings_page import SettingsPage
 
     st = SettingsPage(cfg, "/tmp/dualswitch-test-cfg.json")
-    win.attach_pages(sp, cp, st)
-    assert win.pages.count() == 3
+    pair = PairingPage(FakePairEngine())
+    win.attach_pages(sp, cp, st, pair)
+    assert win.pages.count() == 4
     win.show_page(PAGE_CLIP)
     assert win.on_clipboard_page()
     win.show_page(PAGE_SWITCH)
     assert win.current_page() == PAGE_SWITCH
     win.show_page(PAGE_SETTINGS)
     assert win.current_page() == PAGE_SETTINGS
+    win.show_page(PAGE_PAIR)
+    assert win.current_page() == PAGE_PAIR
     win.close()
 
 
@@ -1270,3 +1614,33 @@ def test_file_reference_url_resolves_to_real_path(app, tmp_path):
     backend._pb = FakePasteboard()
     got = backend._file_url_path(["public.file-url"])
     assert got == str(target), "引用型 URL 必须解析成真实路径，否则文件打不开"
+
+
+def test_hero_pill_is_rounded(app, cfg):
+    """「运行中 / 待确认」药丸必须是圆角。
+
+    2026-10-22 的现场：QSS 里写的是 `border-radius: 999px`（照 CSS 的胶囊写法搬过来），
+    Qt 遇到「圆角 > 控件高度的一半」会**整块退化成直角** —— 20px 高的标签上就是一个方框，
+    用户一眼看到「待确认没切圆角」。所以圆角必须写成具体像素，且改高度时要跟着改。
+    """
+    old = app.styleSheet()
+    app.setStyleSheet(theme.qss())
+    try:
+        page = SwitchPage(cfg, "alt+space", "Q2790R3")
+        page.set_state(SOURCE_UNKNOWN)
+        page.show()
+        app.processEvents()
+        pill = page.hero.pill
+        assert pill.objectName() == "pillWarn"
+        img = pill.grab().toImage()
+        corner = img.pixelColor(0, 0).alpha()
+        edge = img.pixelColor(img.width() - 3, img.height() // 2).alpha()
+        assert edge > 0, "药丸底色没画出来"
+        # 直角时角与边一样实；圆角时角明显更透
+        assert corner < edge * 0.75, (
+            f"药丸圆角没生效：角 alpha={corner} / 边 alpha={edge}"
+            f"（{pill.width()}×{pill.height()}，圆角必须 ≤ 高度一半）"
+        )
+        page.close()
+    finally:
+        app.setStyleSheet(old)

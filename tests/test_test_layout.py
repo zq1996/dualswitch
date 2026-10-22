@@ -28,6 +28,16 @@ import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
 
+#: 旧 `ui/mac` 树已被 `ui/mac2` 取代并冻结（2026-10-22 用户要求）：
+#: 这几个文件在 mac 上整文件跳过，Windows 侧仍照常运行旧 `ui/win` 覆盖。
+#: 它们不是"共享层必须两端都跑"的对象，而是历史遗留的平台 UI 用例。
+FROZEN_MAC_UI_SUITES = {
+    "test_chrome_contract.py",
+    "test_clipboard_page.py",
+    "test_focus_style.py",
+    "test_ui.py",
+}
+
 #: 文件名后缀 → 该文件只属于哪个平台（`sys.platform` 口径）
 SUFFIX_PLATFORM = {
     "_macos": "darwin",
@@ -168,6 +178,7 @@ def test_shared_suites_are_not_gated():
     gated = [
         p.name for p in _python_test_files()
         if _platform_of(p) is None
+        and p.name not in FROZEN_MAC_UI_SUITES
         and any(
             isinstance(node, ast.If) and any(_is_module_level_skip(s) for s in node.body)
             for node in ast.parse(p.read_text(encoding="utf-8")).body

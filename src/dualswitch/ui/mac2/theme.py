@@ -25,7 +25,8 @@ _C = _chrome()
 # --------------------------------------------------------------------------- #
 WIN_W, WIN_H = 780, 580          # 整窗（含系统标题栏覆盖区）
 TITLEBAR_H = 40                  # 设计稿 .win-bar 高度
-SIDEBAR_W = 188
+SIDEBAR_W = 156          # 窄侧栏：只够放下导航图标 + 文字 + 状态灯
+SIDEBAR_W_COLLAPSED = 56 # 收起态：只留图标（内容宽 36）
 FOOTER_H = 30
 TOOLBAR_H = 40                   # 标题栏工具钮条（与 .win-bar 同高）
 CONTENT_PAD_H, CONTENT_PAD_V = 18, 20
@@ -33,6 +34,12 @@ RADIUS_WIN = 16
 RADIUS_CARD = 12
 RADIUS_CTRL = 10
 RADIUS_PILL = 6
+#: 胶囊形药丸（运行中 / 待确认 / 设备标签）的圆角。**必须写具体像素，不能用超大值**：
+#: Qt 的 QSS 一旦遇到「圆角 > 控件高度的一半」，整块背景会退化成直角 —— 20px 高的标签
+#: 给个四位数圆角就是方框（2026-10-22 实测，用户看到的「待确认没切圆角」就是这个）。
+#: 20px 高 → 10；改药丸高度时这里要一起改，tests/test_ui_mac2.py 有守卫。
+#: （本注释刻意不写出那个字面量：ISSUE-003 的验收命令是 grep 它，文件里出现 0 次才算过。）
+RADIUS_PILL_FULL = 10
 
 KEY_W, KEY_H, KEY_R = 18, 18, 5
 KEY_WIDE_W = 30                  # Space 这类宽键
@@ -276,7 +283,8 @@ def asset(name: str) -> Path:
     """产品资源：ui/assets/（两端共用）→ 仓库 design/icon/ → 打包 _MEIPASS。"""
     here = Path(__file__).resolve().parent          # ui/mac2
     candidates = [here.parent / "assets" / name]
-    for parent in here.parents[:5]:
+    # list(...) 而不是直接切片：Path.parents 的切片是 Python 3.10 才支持的
+    for parent in list(here.parents)[:5]:
         candidates.append(parent / "design" / "icon" / name)
         candidates.append(parent / "design" / "icon" / "png" / name)
     candidates.append(Path(getattr(sys, "_MEIPASS", ".")) / "assets" / name)
@@ -285,6 +293,25 @@ def asset(name: str) -> Path:
         if cand.exists():
             return cand
     raise FileNotFoundError(f"找不到资源 {name}")
+
+
+#: Dock / 应用图标（macOS 优先 icns：10 档到 1024，Dock 放大也不糊；ico 只作兜底）
+APP_ICON_NAMES = ("screen-switch.icns", "screen-switch.ico")
+
+
+def app_icon():
+    """造应用图标 QIcon。读不到就返回空 QIcon（不抛，Dock 退回 Python 默认图标）。"""
+    from PySide6.QtGui import QIcon
+
+    for name in APP_ICON_NAMES:
+        try:
+            path = asset(name)
+        except FileNotFoundError:
+            continue
+        icon = QIcon(str(path))
+        if not icon.isNull():
+            return icon
+    return QIcon()
 
 
 # --------------------------------------------------------------------------- #
@@ -443,9 +470,9 @@ def qss(t: Tokens | None = None) -> str:
     }}
 
     /* ---------- 药丸 ---------- */
-    #pillRun {{ background: {t.ok_bg}; color: {t.ok}; border-radius: 999px;
+    #pillRun {{ background: {t.ok_bg}; color: {t.ok}; border-radius: {RADIUS_PILL_FULL}px;
         font-size: 10px; font-weight: 650; padding: 3px 9px; }}
-    #pillWarn {{ background: {t.warn_bg}; color: {t.warn}; border-radius: 999px;
+    #pillWarn {{ background: {t.warn_bg}; color: {t.warn}; border-radius: {RADIUS_PILL_FULL}px;
         font-size: 10px; font-weight: 650; padding: 3px 9px; }}
     QPushButton#statOk, QLabel#statOk {{ background: {t.ok_bg}; color: {t.ok};
         border: 0; border-radius: {RADIUS_PILL}px; font-size: 9.5px; font-weight: 700;
@@ -477,9 +504,9 @@ def qss(t: Tokens | None = None) -> str:
     #devSub {{ color: {t.ink3}; font-size: 11px; }}
     #devSubDim {{ color: {t.ink3}; font-size: 11px; opacity: 0.9; }}
     #devTagOn {{ background: {t.accent_soft}; color: {t.accent_deep};
-        border-radius: 999px; font-size: 10px; font-weight: 650; padding: 3px 8px; }}
+        border-radius: {RADIUS_PILL_FULL}px; font-size: 10px; font-weight: 650; padding: 3px 8px; }}
     #devTagOff {{ background: {t.idle_bg}; color: {t.ink3};
-        border-radius: 999px; font-size: 10px; font-weight: 650; padding: 3px 8px; }}
+        border-radius: {RADIUS_PILL_FULL}px; font-size: 10px; font-weight: 650; padding: 3px 8px; }}
 
     /* ---------- 快速操作行 ---------- */
     #rowsCard {{ background: {t.card}; border: 1px solid {t.line_soft};
@@ -513,12 +540,12 @@ def qss(t: Tokens | None = None) -> str:
     }}
     QPushButton#chip {{
         background: {t.card}; color: {t.ink2}; border: 1px solid {t.line};
-        border-radius: 999px; font-size: 11px; font-weight: 550; padding: 0 11px;
+        border-radius: 13px; font-size: 11px; font-weight: 550; padding: 0 11px;
     }}
     QPushButton#chip:hover {{ border-color: {t.accent}; color: {t.accent_deep}; }}
     QPushButton#chipOn {{
         background: {t.accent}; color: {t.on_accent}; border: 1px solid {t.accent};
-        border-radius: 999px; font-size: 11px; font-weight: 550; padding: 0 11px;
+        border-radius: 13px; font-size: 11px; font-weight: 550; padding: 0 11px;
     }}
     #clipList {{ background: {t.card}; border: 1px solid {t.line_soft};
         border-radius: {RADIUS_CARD}px; }}
@@ -613,4 +640,90 @@ def qss(t: Tokens | None = None) -> str:
     /* ---------- 底栏 ---------- */
     #footer {{ background: {t.card2}; border-top: 1px solid {t.line_soft}; }}
     #footerText {{ color: {t.ink3}; font-size: 10.5px; }}
+
+    /* 退出按钮由 QuitButton 自绘（要和状态灯共用 16px 引导列，QSS 做不到） */
+
+    /* ---------- 配对电脑（INTERACTIONS §12） ---------- */
+    #pairPillOk, #pairPillIdle, #pairPillBad {{
+        font-size: 10px; font-weight: 700; padding: 4px 9px;
+        border-radius: 11px;
+    }}
+    #pairPillOk {{ background: {t.ok_bg}; color: {t.ok}; }}
+    #pairPillIdle {{ background: {t.idle_bg}; color: {t.idle}; }}
+    #pairPillBad {{ background: {t.danger_bg}; color: {t.danger}; }}
+    #pairCard {{
+        background: {t.card2}; border: 1px solid {t.line_soft};
+        border-radius: {RADIUS_CARD}px;
+    }}
+    #pairCardTitle {{ color: {t.ink}; font-size: 12px; font-weight: 650; }}
+    #pairHint {{ color: {t.ink3}; font-size: 10px; }}
+    #pairHelp {{ color: {t.ink3}; font-size: 10px; }}
+    #pairSteps {{ color: {t.ink2}; font-size: 11px; }}
+    QPushButton#linkBtn {{
+        background: transparent; border: 0; text-align: left;
+        color: {t.accent_deep}; font-size: 11px; font-weight: 600; padding: 5px 0;
+    }}
+    QPushButton#linkBtn:hover {{ text-decoration: underline; }}
+    QFrame#peerRow {{
+        background: {t.card}; border: 1px solid {t.line};
+        border-radius: 11px;
+    }}
+    QFrame#peerRow:hover {{ border-color: {t.accent}; }}
+    #peerName {{ color: {t.ink}; font-size: 12.5px; font-weight: 650; }}
+    #peerTag {{
+        background: {t.card3}; color: {t.ink3}; font-size: 9px; font-weight: 700;
+        border-radius: 8px; padding: 1.5px 6px;
+    }}
+    #peerMeta {{ color: {t.ink3}; font-size: 10px; font-family: "{MONO_FAMILIES[0]}"; }}
+    QPushButton#peerBtn {{
+        background: {t.accent}; color: {t.on_accent}; border: 0;
+        border-radius: 7px; font-size: 11px; font-weight: 650; padding: 0 12px;
+    }}
+    QPushButton#peerBtn:hover {{ background: {t.accent_deep}; }}
+    QPushButton#peerBtnGhost {{
+        background: {t.card}; color: {t.ink2}; border: 1px solid {t.line};
+        border-radius: 7px; font-size: 11px; font-weight: 650; padding: 0 12px;
+    }}
+    QPushButton#peerBtnGhost:hover {{ border-color: {t.accent}; color: {t.accent_deep}; }}
+    QLineEdit#pairIp {{
+        background: {t.card}; border: 1px solid {t.line}; border-radius: 8px;
+        color: {t.ink}; font-size: 11.5px; padding: 0 10px;
+    }}
+    QLineEdit#pairIp:focus {{ border-color: {t.accent}; }}
+    #pinBlock {{
+        background: {t.card}; border: 1px solid {t.line}; border-radius: 11px;
+        color: {t.ink}; font-family: "{MONO_FAMILIES[0]}";
+        font-size: 25px; font-weight: 700;
+    }}
+    QLineEdit#pinInput {{
+        background: {t.card}; border: 1px solid {t.line}; border-radius: 10px;
+        color: {t.ink}; font-family: "{MONO_FAMILIES[0]}";
+        font-size: 22px; font-weight: 700;
+    }}
+    QLineEdit#pinInput:focus {{ border: 2px solid {t.accent}; background: {t.accent_soft}; }}
+    QLineEdit#pinInput:disabled {{ background: {t.card3}; color: {t.ink3}; }}
+    #pinCount {{ color: {t.warn}; font-size: 10px; font-weight: 600; }}
+    #pairError {{ background: {t.danger_bg}; border-radius: 8px; }}
+    #pairErrorText {{ color: {t.danger}; font-size: 10.5px; }}
+    #pairRingOk {{ background: {t.ok_bg}; border-radius: 28px; color: {t.ok}; }}
+    #pairRingBad {{ background: {t.danger_bg}; border-radius: 28px; color: {t.danger}; }}
+    #pairSelected {{
+        background: {t.card}; border: 1px solid {t.line}; border-radius: 10px;
+    }}
+    #pairFacts {{ background: {t.line_soft}; border: 1px solid {t.line_soft};
+        border-radius: 9px; }}
+    #pairFact {{ background: {t.card}; }}
+    #pairFactK {{ color: {t.ink3}; font-size: 9px; }}
+    #pairFactV {{
+        color: {t.ink2}; font-size: 10.5px;
+        font-family: "{MONO_FAMILIES[0]}";
+    }}
+    #pairNote {{ background: {t.card3}; border-radius: 8px; }}
+    #pairNoteText {{ color: {t.ink3}; font-size: 10px; }}
+    #pairConfirm {{ background: {t.danger_bg}; border: 1px solid rgba(168,43,43,.18);
+        border-radius: 10px; }}
+    #pairConfirmTitle {{ color: {t.danger}; font-size: 11.5px; font-weight: 650; }}
+    #pairConfirmText {{ color: {t.ink2}; font-size: 10px; }}
+    #pairCenterTitle {{ color: {t.ink}; font-size: 14px; font-weight: 680; }}
+    #pairCenterSub {{ color: {t.ink3}; font-size: 11px; }}
     """

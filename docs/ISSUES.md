@@ -76,7 +76,17 @@
   2. `QT_QPA_PLATFORM=offscreen python tools/shots_v2.py` 出图，`v2-switch` 里「运行中」是胶囊形
   3. 新增一条守卫用例：自绘 pill 抓图后**角落像素 ≠ 中心像素**（方角时两者相同）
   4. `pytest -q` 全绿
-- **状态**: 待做
+- **状态**: 已修复（2026-10-22，**未提交**）
+  · 实测把规律钉死了：Qt 只在「圆角 ≤ 控件高度的一半」时才画圆角。同一个 20px 高的标签，
+    `10px` 生效、`12px` 起直接退化成直角（角像素 alpha 从 28 跳到 53，可量化）。
+    Windows 端「19px 上 9/10/999 全方」是另一回事（那边控件类型不同）。
+  · 因此**没有**照 Windows 那套加自绘 `Pill`，而是把圆角写成具体像素：
+    `theme.RADIUS_PILL_FULL = 10` 用于 `#pillRun / #pillWarn / #devTagOn / #devTagOff`；
+    另按各自高度把 `#chip`(26→13) / `#pairPill*`(→11) / `#peerTag`(→8) 的 `999px` 一并换掉。
+    两端实现不同（win2 是自绘 Pill）、视觉一致，不必强行统一。
+  · 验收 1 ✅（0 处）／2 ✅（`tools/shots_v2.py` 出图，运行中·当前画面·未使用 均为胶囊）／
+    3 ✅（`tests/test_ui_mac2.py::test_hero_pill_is_rounded`，把值改回 999px 会红，已验证）／4 ✅ 全量绿
+  · 细节与「改高度要同步改圆角」的提醒写在 `docs/UI-MAC2-IMPLEMENTATION.md`。
   · Windows 参考实现：`src/dualswitch/ui/win2/widgets.py::Pill`（自绘）+ `theme.py`（chip 12 / 标签 10）
     + `tests/test_ui_win2.py::test_pill_is_drawn_with_rounded_corners` 与 `test_qss_has_no_oversized_radius`
 
@@ -105,6 +115,70 @@
 - **状态**: 待做
   · Windows 参考实现：`src/dualswitch/ui/win2/preview.py`（`SHADOW=14` / `paintEvent` 画阴影 /
     `_measure_body_child` 用 `heightForWidth`）+ `tests/test_ui_win2.py` 的两条用例
+
+---
+
+## ISSUE-005 换图标后应用还是旧的（母版与运行时副本是两处）
+
+- **owner**: mac
+- **影响**: 两端（`ui/assets/screen-switch.ico` 是共享资源，Windows 打包直接取它；
+  `ui/assets/menubar.png` 只 mac 用）
+- **现象**: `design/icon/` 里的母版重做过，`dualswitch ui2` 起来的 Dock 还是旧图标。
+- **根因**: 程序取图标走 `theme.asset()`，它**先查 `src/dualswitch/ui/assets/`**，找不到才回落
+  `design/icon/`。换图标那次只覆盖了母版，运行时副本还是几天前的旧文件。
+- **期望**:
+  - `design/icon/build_icon.py` 出图时**自动**把 ico/icns 同步到 `ui/assets/`；
+  - macOS 的 Dock 走 `theme.app_icon()`：先 `.icns`（有 1024 档，放大不糊），`.ico` 兜底；
+  - 菜单栏模板图改成「正方形底板（620×620，圆角 20%）+ 屏内两支箭头镂空」，
+    箭头几何逐字照抄 Dock 图标、只做等比缩放（`SIDE` / `RX_RATIO` / `ARROW_SCALE`）。
+- **验收**:
+  1. `pytest -q tests/test_icons.py --basetemp=.pytest-tmp`（母版与副本逐字节比对 + menubar 必须 36×36）
+  2. `python design/icon/build_icon.py` 后再跑一遍，上面仍然绿（说明同步是自动的）
+- **状态**: 已修复（2026-10-22，**未提交**）
+  · 守卫用例不分平台，Windows 端 pull 后跑全量会自动带上；他们的打包会拿到新 `screen-switch.ico`。
+
+---
+
+## ISSUE-006 配对只能在命令行做，界面上没有入口
+
+- **owner**: mac
+- **影响**: 两端 —— 底层（`sync/*`、`config.py`）是共享层，Windows 端 pull 即生效；**界面各写各的**（见 ISSUE-007）
+- **现象**: 想配对新电脑只能 `dualswitch clip pair --pin <码>`，两端都得开终端、还得自己商量同一个码；
+  界面上看不出「未配对 / 已配对 / 需重新配对」，剪贴板不通用时用户不知道是网络问题还是没配对。
+- **期望**:
+  - 一端点「显示配对码」出 6 位码（5 分钟有效），另一端在附近设备列表里选它、输码 → 两端变已配对；
+  - 输错给剩余次数，5 次后码作废；过期、超时、连不上各有明确文案（不是统一「连接失败」）；
+  - 配对后按 device_id 绑定，别的设备即使知道密钥也连不上；解除配对只清本机；
+  - 配对期间不推不收剪贴板；临时 key 只在内存，取消/超时/关窗都不落盘。
+- **验收**:
+  1. `QT_QPA_PLATFORM=offscreen pytest -q tests/test_pairing.py --basetemp=.pytest-tmp`
+     （状态机 / PIN 错误 / 过期 / 5 次上限 / 取消回滚 / 解除 / 身份绑定 / 配对中不传输）
+  2. `python tools/shots_v2.py` 出 `outputs/v2-pair-*.png`，7 个状态逐张对照 §12.5
+  3. `pytest -q --basetemp=.pytest-tmp` 全绿
+- **状态**: 已实现（2026-10-22）
+  · 新增 `ui/mac2/pairing_page.py`；`sync/engine.py` 加 `begin_pairing / cancel_pairing / pair_with_peer /
+    unpair / pairing_status / discovered_peers / refresh_discovery / set_config_saver`；
+    `transport.py` 加 `set_key(drop_links) / set_expected_peer_device / on_auth_failed`；
+    `discovery.py` 广播补 `plat/ver/pairing/paired`，`host` 改电脑名，20s TTL；
+    `config.py` 加 `clipboard.paired_at`
+  · 协议帧零改动。给 Windows 端的说明写在 `CLIPBOARD-SYNC-CONTRACT.md` §0 / §4.3.1 / §4.4.1 / §4.6
+    与 `docs/UI-WINDOWS2-DESIGN.md` §14
+
+---
+
+## ISSUE-007 Windows 端配对页（win2）
+
+- **owner**: win
+- **影响**: 仅 win（界面层；底层不用动）
+- **依赖**: ISSUE-006 已合并，pull 后 `sync/*` 自带配对能力
+- **期望**: `ui/win2/pairing_page.py` + 侧栏第 4 项（状态灯灰/绿/红）+ 托盘菜单「配对电脑…」；
+  行为与 mac2 一致，确认块用窗口内遮罩而不是 `QDialog`（守「一个窗口」）。
+- **验收**:
+  1. `pytest -q tests/test_pairing.py` 全绿（**共享用例，不许整文件 skip**）
+  2. 两端真机：mac 显示码、Windows 输码 → 5s 内「已配对」；输错 5 次码失效；关窗（收托盘）码即作废
+  3. `pytest -q` 全绿
+- **状态**: 待做
+  · 落地要点见 `docs/UI-WINDOWS2-DESIGN.md` §14.1～§14.3；接口清单见 `CLIPBOARD-SYNC-CONTRACT.md` §0
 
 ---
 

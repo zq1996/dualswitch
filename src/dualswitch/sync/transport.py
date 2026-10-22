@@ -56,12 +56,17 @@ class Link:
         on_frame: Callable[["Link", P.Frame], None],
         on_ready: Callable[["Link"], None],
         on_closed: Callable[["Link", str], None],
+        expected_peer_device: str = "",
+        on_auth_failed: Callable[["Link", str], None] | None = None,
     ) -> None:
         self.sock = sock
         self.key = key
         self.device_id = device_id
         self.host_label = host_label
         self.direction = direction          # "in" | "out"
+        # 配对后的身份绑定：只接受 HELLO.device 等于它的连接
+        self.expected_peer_device = expected_peer_device
+        self._on_auth_failed = on_auth_failed
         self.peer_addr = _peer_addr(sock)
         self.peer_device = ""
         self.peer_host = ""
@@ -182,6 +187,9 @@ class Link:
             ok, reason = P.verify_hello(frame.header, self.key)
             self.peer_device = str(frame.header.get("device") or "")
             self.peer_host = str(frame.header.get("host") or "")
+            if ok and self.expected_peer_device and self.peer_device != self.expected_peer_device:
+                # 密钥对了但不是已配对的那台：契约只支持一对一
+                ok, reason = False, "已与另一台设备配对"
             self.authenticated = ok
             if self.device_id and self.peer_device == self.device_id:
                 self.close("连到了自己")
@@ -196,19 +204,30 @@ class Link:
                 },
             )
             if not ok:
-                # 不立刻断：先让对方收到 HELLO_OK 里的原因，再关
                 log.warning("对端 %s 未通过认证：%s", self.peer_device or "?", reason)
+                if self._on_auth_failed is not None:
+                    try:
+                        self._on_auth_failed(self, reason)
+                    except Exception:  # noqa: BLE001
+                        log.exception("on_auth_failed 回调出错")
+                # 先让对方收到 HELLO_OK 里的原因，再断开（未认证的连接没有用）
+                self.close(reason or "认证失败")
+                return
             self._mark_ready()
             return
 
         if frame.type == P.T_HELLO_OK:
             ok = bool(frame.header.get("ok"))
+            reason = str(frame.header.get("reason") or "未知原因")
             self.peer_device = str(frame.header.get("device") or self.peer_device)
             self.peer_host = str(frame.header.get("host") or self.peer_host)
             self.authenticated = ok
             if not ok:
-                log.warning("对端拒绝了握手：%s", frame.header.get("reason") or "未知原因")
+                log.warning("对端拒绝了握手：%s", reason)
             self._mark_ready()
+            if not ok:
+                # 对端拒绝（密钥不一致 / 它已配了别的设备）—— 这条连接不必留着
+                self.close(reason)
             return
 
         if frame.type == P.T_PING:
@@ -274,17 +293,21 @@ class Transport:
         on_switch: Callable[[dict[str, Any]], None] | None = None,
         on_switch_ack: Callable[[dict[str, Any]], None] | None = None,
         on_state: Callable[[str, str], None] | None = None,
+        on_auth_failed: Callable[[str, str], None] | None = None,
+        expected_peer_device: str = "",
     ) -> None:
         self.device_id = device_id
         self.listen_port = int(listen_port)
         self.host_label = host_label
         self.key = key
         self.peer = peer
+        self.expected_peer_device = expected_peer_device
         self._on_clip = on_clip or (lambda header, payload: None)
         self._on_ack = on_ack or (lambda header: None)
         self._on_switch = on_switch or (lambda header: None)
         self._on_switch_ack = on_switch_ack or (lambda header: None)
         self._on_state = on_state or (lambda state, detail: None)
+        self._on_auth_failed = on_auth_failed or (lambda ip, reason: None)
 
         self._lock = threading.Lock()
         self._link: Link | None = None
@@ -363,6 +386,39 @@ class Transport:
             return f"未连接（对端 {self.peer[0]}:{self.peer[1]}）"
         return "未连接（等对端来连）"
 
+    def peer_addr(self) -> str:
+        """当前尝试连接 / 已连接的对端地址（配对页失败态要显示它）。"""
+        link = self._link
+        if self.connected and link is not None:
+            return f"{link.peer_addr[0]}:{link.peer_addr[1]}"
+        if self.peer:
+            return f"{self.peer[0]}:{self.peer[1]}"
+        return ""
+
+    def set_key(self, key: bytes | None, *, drop_links: bool = True) -> None:
+        """切换共享密钥。配对时先换成临时 PIN key，取消/失败再换回来。
+
+        `drop_links=True` 会主动断开旧连接，让监听/拨号线程用新 key 重新握手；
+        没有这一步，线上那条用旧 key 认证的连接会一直活着，临时 key 永远不生效。
+        """
+        with self._lock:
+            self.key = key
+            links = list(self._links.values()) if drop_links else []
+            if drop_links:
+                self._links.clear()
+                self._link = None
+                self.authenticated = False
+                self.peer_device = ""
+                self.peer_host = ""
+        for link in links:
+            link.close("配对密钥切换", notify=False)
+        if drop_links:
+            self._set_state("idle", "配对密钥已更新")
+
+    def set_expected_peer_device(self, device_id: str) -> None:
+        """配对后的身份绑定；空串 = 接受任何知道密钥的设备（旧 CLI 配置）。"""
+        self.expected_peer_device = str(device_id or "")
+
     def _set_state(self, state: str, detail: str = "") -> None:
         changed = state != self._state or detail != self.last_error
         self._state = state
@@ -425,6 +481,8 @@ class Transport:
             on_frame=self._handle_frame,
             on_ready=self._handle_ready,
             on_closed=self._handle_closed,
+            expected_peer_device=self.expected_peer_device,
+            on_auth_failed=self._handle_auth_failed,
         )
 
     def _install(self, link: Link, direction: str) -> bool:
@@ -474,6 +532,13 @@ class Transport:
             self._set_state("connected", link.describe())
         else:
             self._set_state("unpaired", "两端密钥不一致或尚未配对")
+
+    def _handle_auth_failed(self, link: Link, reason: str) -> None:
+        ip = str(link.peer_addr[0])
+        try:
+            self._on_auth_failed(ip, reason)
+        except Exception:  # noqa: BLE001
+            log.exception("on_auth_failed 回调出错")
 
     def _handle_closed(self, link: Link, reason: str) -> None:
         with self._lock:

@@ -89,6 +89,7 @@ class ClipboardConfig:
     device_id: str = ""                # 首次运行生成 {host}-{8hex}
     peer_device: str = ""              # 最近一次握手的对端 device_id
     peer_name: str = ""                # 对端主机名（界面上显示）
+    paired_at: float = 0.0             # 完成配对的时间戳（配对页显示）
     psk: str = ""                      # 配对后的共享密钥（hex）
     max_image_mb: int = 32
     record_limit: int = 10             # 内存里保留的记录条数，退出即清
@@ -229,6 +230,8 @@ def _merge_clipboard(raw: dict[str, Any], base: ClipboardConfig) -> ClipboardCon
         current = getattr(cfg, key)
         if isinstance(current, bool):
             setattr(cfg, key, _coerce_bool(value))
+        elif isinstance(current, float):
+            setattr(cfg, key, float(value))
         elif isinstance(current, int) and not isinstance(current, bool):
             setattr(cfg, key, int(value))
         elif value is None:

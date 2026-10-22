@@ -38,7 +38,7 @@ from typing import Any, Callable
 
 from ..clipboard.base import ClipItem, ClipboardError, create_backend
 from . import protocol as P
-from .discovery import Discovery
+from .discovery import Discovery, computer_name
 from .transport import LinkError, Transport
 
 log = logging.getLogger(__name__)
@@ -46,6 +46,9 @@ log = logging.getLogger(__name__)
 POLL_INTERVAL_S = 0.15
 ACK_TIMEOUT_S = 5.0
 RESEND_WINDOW_S = 30.0
+PAIRING_TTL_S = 300.0          # 显示端配对码有效期 5 分钟
+PAIRING_CONNECT_TIMEOUT_S = 15.0
+PAIRING_MAX_ATTEMPTS = 5
 
 
 @dataclass
@@ -86,6 +89,8 @@ class SyncEngine:
         clock: Callable[[], float] = time.time,
         switch_executor: Callable[[int], "tuple[bool, str]"] | None = None,
         vcp_code: int = 0x60,
+        save_config: Callable[[], None] | None = None,
+        version: str = "",
     ) -> None:
         self.cfg = cfg
         self.host_label = host_label or "mac"
@@ -94,6 +99,8 @@ class SyncEngine:
         self._transport = transport
         self._discovery: Discovery | None = None
         self._owns_transport = transport is None
+        self._save_config = save_config
+        self.version = version
 
         # 远端代发切屏（ISSUE-002）：对端来到的请求交给它，返回值是 (ok, detail)
         self._switch_executor = switch_executor
@@ -129,6 +136,27 @@ class SyncEngine:
         self.last_sync_at = 0.0
         self.state = "idle"
         self._last_reason = ""
+
+        # ---- 配对（INTERACTIONS-v2 §12.6）----
+        # role: "" 空闲 / "show" 本机显示码 / "enter" 本机输入码
+        self._pair_role = ""
+        self._pair_pin = ""
+        self._pair_key: bytes | None = None
+        self._pair_prev_key: bytes | None = None
+        self._pair_prev_peer: tuple[str, int] | None = None
+        self._pair_prev_expected = ""
+        self._pair_prev_psk = ""
+        self._pair_prev_device = ""
+        self._pair_prev_name = ""
+        self._pair_prev_paired_at = 0.0
+        self._pair_expires = 0.0
+        self._pair_attempts: dict[str, int] = {}
+        self._pair_event = threading.Event()
+        self._pair_ok = False
+        self._pair_error = ""
+        self._pair_error_kind = ""
+        self._pair_outcome = ""          # "" | ok | failed | cancelled
+        self._pair_target: dict[str, Any] = {}
 
     # ------------------------------------------------------------------ 生命周期
     def start(self) -> None:
@@ -168,6 +196,7 @@ class SyncEngine:
             self._thread = None
         if self._transport is not None and self._owns_transport:
             self._transport.stop()
+            self._transport = None        # 重新 start 时要按最新配置重建
         if self._discovery is not None:
             self._discovery.stop()
             self._discovery = None
@@ -182,10 +211,11 @@ class SyncEngine:
     def _build_transport(self) -> Transport:
         key = bytes.fromhex(self.cfg.psk) if self.cfg.psk else None
         peer = parse_peer(self.cfg.peer, self.cfg.effective_peer_port())
+        display_name = computer_name(self.host_label)
         transport = Transport(
             device_id=self.device_id,
             listen_port=int(self.cfg.port),
-            host_label=self.host_label,
+            host_label=display_name,
             key=key,
             peer=peer,
             on_clip=self._on_remote_clip,
@@ -193,17 +223,21 @@ class SyncEngine:
             on_switch=self._on_switch_request,
             on_switch_ack=self._on_switch_ack,
             on_state=self._on_state,
+            on_auth_failed=self._on_auth_failed,
+            expected_peer_device=self.cfg.peer_device,
         )
-        if peer is None:
-            # 没手填对端就靠广播找；找到谁连谁（本工具只有"另一台"）
-            self._discovery = Discovery(
-                device_id=self.device_id,
-                host_label=self.host_label,
-                service_port=int(self.cfg.port),
-                discover_port=int(self.cfg.discover_port),
-                on_peer=self._on_peer_found,
-            )
-            self._discovery.start()
+        # 发现必须常开：手填 peer 只用于「立即先拨一次」，不能变成永久地址依赖。
+        self._discovery = Discovery(
+            device_id=self.device_id,
+            host_label=display_name,
+            service_port=int(self.cfg.port),
+            discover_port=int(self.cfg.discover_port),
+            platform="macos" if self.host_label == "mac" else "windows",
+            version=self.version,
+            on_peer=self._on_peer_found,
+        )
+        self._discovery.paired = bool(self.cfg.psk)
+        self._discovery.start()
         return transport
 
     @property
@@ -215,10 +249,34 @@ class SyncEngine:
     def _on_peer_found(self, ip: str, port: int, info: dict[str, Any]) -> None:
         if self._transport is None:
             return
+        # 配对中不允许发现结果改拨号目标，否则可能连到第三台、把配对流程搅乱
+        if self._pair_pin:
+            return
+        device = str(info.get("device") or "")
+        # 已配对：只认记住的那台；广播里的其他设备最多显示在列表里，不拨号
+        if self.cfg.peer_device and device != self.cfg.peer_device:
+            return
         if self._transport.peer == (ip, port):
             return
         log.info("发现对端 %s（%s:%s）", info.get("host") or "?", ip, port)
         self._transport.peer = (ip, port)
+
+    def _on_auth_failed(self, ip: str, reason: str) -> None:
+        """显示端限流：同一来源 IP 认证失败 5 次 → 当前配对码立即作废。"""
+        with self._lock:
+            if not self._pair_pin or self._pair_role != "show":
+                return
+            count = int(self._pair_attempts.get(ip, 0)) + 1
+            self._pair_attempts[ip] = count
+            if count >= PAIRING_MAX_ATTEMPTS:
+                self._pair_error = "配对码已失效，请让对方重新显示配对码"
+                self._pair_error_kind = "max_attempts"
+                should_cancel = True
+            else:
+                should_cancel = False
+        if should_cancel:
+            log.warning("配对码因来自 %s 的 %d 次认证失败作废", ip, count)
+            self.cancel_pairing(errors=True)
 
     def _on_state(self, state: str, detail: str) -> None:
         self.state = state
@@ -227,6 +285,18 @@ class SyncEngine:
         if state == "connected":
             self.last_error = ""
             # 连上后立刻把当前剪贴板同步过去一次？不。切屏时才推，避免"一启动就覆盖对端"。
+            self._pair_on_connected()
+        elif state == "unpaired" and self._pair_role == "enter" and self._pair_pin:
+            self._pair_fail("密钥不匹配（PIN 不正确或对端不在配对状态）", "auth")
+        elif state == "error" and self._pair_role == "enter" and self._pair_pin:
+            self._pair_fail(detail or "连接失败", "network")
+
+    def _pair_on_connected(self) -> None:
+        """任一端认证通过后落盘。A 端在状态回调里走到这里，B 端在等待线程里也会走。"""
+        transport = self._transport
+        if transport is None or not self._pair_pin or not transport.authenticated:
+            return
+        self._complete_pairing(transport.peer_device, transport.peer_host)
 
     # ------------------------------------------------------------------ 对外接口
     def push_now(self, reason: str = "hotkey") -> None:
@@ -260,6 +330,292 @@ class SyncEngine:
             "error": self.last_error or "-",
             "types": str(backend_info.get("types", "-")),
         }
+
+    # ------------------------------------------------------------------ 配对
+    @property
+    def pairing_active(self) -> bool:
+        return bool(self._pair_pin)
+
+    def begin_pairing(self) -> str:
+        """A 端：生成 6 位码并切到临时 key，返回要显示的 PIN。
+
+        临时 key 只进 Transport 的内存，不写 config；取消/超时会换回原 key。
+        """
+        transport = self._transport
+        if transport is None:
+            raise RuntimeError("剪贴板同步未启动")
+        with self._lock:
+            if (
+                self._pair_role == "show"
+                and self._pair_pin
+                and self._clock() < self._pair_expires
+            ):
+                return self._pair_pin                # 再点一次只沿用，不叠加
+        self.cancel_pairing()
+
+        pin = P.random_pin()
+        key = P.derive_key(pin)
+        with self._lock:
+            self._pair_prev_key = bytes.fromhex(self.cfg.psk) if self.cfg.psk else None
+            self._pair_prev_peer = transport.peer
+            self._pair_prev_expected = transport.expected_peer_device
+            self._pair_role = "show"
+            self._pair_pin = pin
+            self._pair_key = key
+            self._pair_expires = self._clock() + PAIRING_TTL_S
+            self._pair_attempts.clear()
+            self._pair_error = ""
+            self._pair_error_kind = ""
+            self._pair_outcome = ""
+            self._pair_target = {}
+            self._pair_event.clear()
+        # 重新配对时先解绑旧设备，否则新设备即使 PIN 正确也会被身份绑定挡掉
+        transport.set_expected_peer_device("")
+        transport.set_key(key)
+        if self._discovery is not None:
+            self._discovery.set_status(pairing=True, paired=bool(self.cfg.psk))
+        log.info("开始显示配对码（5 分钟内有效，只能成功一次）")
+        return pin
+
+    def cancel_pairing(self, *, errors: bool = False) -> None:
+        """丢弃临时 key，恢复原 key；本次不落盘。"""
+        with self._lock:
+            was_active = bool(self._pair_role or self._pair_pin)
+            prev_key = self._pair_prev_key
+            prev_peer = self._pair_prev_peer
+            prev_expected = self._pair_prev_expected
+            self._pair_role = ""
+            self._pair_pin = ""
+            self._pair_key = None
+            self._pair_expires = 0.0
+            self._pair_attempts.pop("self", None)
+            self._pair_event.set()       # 叫醒可能还在等 15s 的输入码线程
+            self._pair_ok = False
+            if errors:
+                self._pair_outcome = "failed"
+            elif was_active:
+                self._pair_outcome = "cancelled"
+            if was_active:
+                self._pair_error = self._pair_error or ""
+        if not was_active:
+            return
+        transport = self._transport
+        if transport is not None:
+            transport.set_key(prev_key)
+            transport.set_expected_peer_device(prev_expected)
+            if prev_key is not None and prev_peer is not None:
+                transport.peer = prev_peer
+        if self._discovery is not None:
+            self._discovery.set_status(pairing=False, paired=bool(self.cfg.psk))
+        log.info("已取消配对（临时密钥丢弃）")
+
+    def pair_with_peer(self, addr, pin: str, timeout: float = PAIRING_CONNECT_TIMEOUT_S) -> dict[str, Any]:
+        """B 端：用 PIN 派生 key，连 `addr` 并等双向认证（阻塞到成功/失败/超时）。
+
+        调用方应放到后台线程，UI 线程只用 `pairing_status()` 轮询结果。
+        """
+        pin = str(pin).strip()
+        transport = self._transport
+        if transport is None:
+            return {"ok": False, "kind": "disabled", "reason": "剪贴板同步未启动"}
+        if not (len(pin) == 6 and pin.isdigit()):
+            return {"ok": False, "kind": "bad_pin", "reason": "配对码必须是 6 位数字"}
+        with self._lock:
+            used = int(self._pair_attempts.get("self", 0))
+            if used >= PAIRING_MAX_ATTEMPTS:
+                return {
+                    "ok": False,
+                    "kind": "max_attempts",
+                    "reason": "配对码已失效，请让对方重新显示配对码",
+                }
+            self._pair_attempts["self"] = used + 1
+            self._pair_prev_key = bytes.fromhex(self.cfg.psk) if self.cfg.psk else None
+            self._pair_prev_peer = transport.peer
+            self._pair_prev_expected = transport.expected_peer_device
+            self._pair_role = "enter"
+            self._pair_pin = pin
+            self._pair_key = P.derive_key(pin)
+            self._pair_expires = self._clock() + float(timeout)
+            self._pair_error = ""
+            self._pair_error_kind = ""
+            self._pair_outcome = ""
+            self._pair_ok = False
+            self._pair_event.clear()
+            target = dict(self._pair_target)
+            target.update({"addr": _addr_text(addr)})
+            self._pair_target = target
+            key = self._pair_key
+
+        # 配对时先解除旧的身份绑定，否则新设备即使 PIN 正确也会被当成「别的设备」
+        transport.set_expected_peer_device("")
+        transport.set_key(key)
+        transport.peer = addr
+        transport.reconnect_now()
+
+        self._pair_event.wait(float(timeout))
+        with self._lock:
+            ok = self._pair_ok
+            reason = self._pair_error
+            kind = self._pair_error_kind
+            still_waiting = bool(self._pair_pin and self._pair_role == "enter")
+            peer_device = self.cfg.peer_device
+            peer_name = self.cfg.peer_name
+        if ok:
+            return {
+                "ok": True, "kind": "", "reason": "",
+                "peer_device": peer_device, "peer_name": peer_name,
+                "addr": _addr_text(addr),
+            }
+        if still_waiting:
+            kind = kind or "timeout"
+            reason = reason or "连接超时"
+            self._pair_fail(f"{_addr_text(addr)} 没有响应，请检查两台电脑是否在同一局域网、防火墙是否放行", "timeout")
+        return {"ok": False, "kind": kind or "failed", "reason": reason or "配对失败",
+                "addr": _addr_text(addr)}
+
+    def unpair(self) -> None:
+        """解除配对：只清本机，不向对端发消息。"""
+        self.cancel_pairing()
+        self.cfg.psk = ""
+        self.cfg.peer_device = ""
+        self.cfg.peer_name = ""
+        self.cfg.paired_at = 0.0
+        transport = self._transport
+        if transport is not None:
+            transport.set_expected_peer_device("")
+            transport.set_key(None)
+        if self._discovery is not None:
+            self._discovery.set_status(pairing=False, paired=False)
+        self.last_error = "已解除配对"
+        self._save()
+        log.info("已解除配对（仅清本机）")
+
+    def pairing_status(self) -> dict[str, Any]:
+        """UI 用的配对快照：状态、PIN、倒计时、剩余尝试次数。"""
+        self._expire_pairing()
+        transport = self._transport
+        with self._lock:
+            role = self._pair_role
+            pin = self._pair_pin
+            expires = self._pair_expires
+            attempts_left = max(0, PAIRING_MAX_ATTEMPTS - int(self._pair_attempts.get("self", 0)))
+            outcome = self._pair_outcome
+            error = self._pair_error
+            kind = self._pair_error_kind
+            target = dict(self._pair_target)
+        if role == "show" and pin:
+            state = "showing"
+        elif role == "enter" and pin:
+            state = "connecting"
+        elif self.cfg.psk:
+            state = "paired"
+        else:
+            state = "idle"
+        connected = bool(transport and transport.connected and transport.authenticated)
+        mismatch = bool(self.cfg.psk and self.state == "unpaired" and not connected)
+        addr = ""
+        if transport is not None:
+            addr = transport.peer_addr()
+        return {
+            "state": state,
+            "outcome": outcome,
+            "error": error,
+            "error_kind": kind,
+            "pin": pin,
+            "expires_in": max(0.0, expires - self._clock()) if pin else 0.0,
+            "attempts_left": attempts_left,
+            "paired": bool(self.cfg.psk),
+            "legacy": bool(self.cfg.psk and not self.cfg.peer_device),
+            "mismatch": mismatch,
+            "connected": connected,
+            "peer_device": self.cfg.peer_device or (transport.peer_device if transport else ""),
+            "peer_name": self.cfg.peer_name or (transport.peer_host if transport else ""),
+            "paired_at": float(self.cfg.paired_at or 0.0),
+            "addr": target.get("addr") or addr,
+            "last_sync_at": self.last_sync_at,
+        }
+
+    def set_config_saver(self, saver: Callable[[], None] | None) -> None:
+        """UI 会把保存动作换成「保存当前 runner.cfg」（设置页保存后对象会换新）。"""
+        self._save_config = saver
+
+    def discovered_peers(self) -> list[dict[str, Any]]:
+        if self._discovery is None:
+            return []
+        return self._discovery.alive_peers()
+
+    def refresh_discovery(self) -> None:
+        if self._discovery is not None:
+            self._discovery.announce_now()
+
+    def _expire_pairing(self) -> None:
+        with self._lock:
+            if not self._pair_pin or self._pair_role != "show":
+                return
+            if self._clock() < self._pair_expires:
+                return
+            self._pair_error = "配对码已过期，请重新生成"
+            self._pair_error_kind = "expired"
+        self.cancel_pairing(errors=True)
+
+    def _pair_fail(self, reason: str, kind: str) -> None:
+        """结束一次输入码尝试：清临时 key、恢复原配对，并让等待线程醒来。"""
+        with self._lock:
+            if self._pair_role != "enter" or not self._pair_pin:
+                return
+            prev_key = self._pair_prev_key
+            prev_peer = self._pair_prev_peer
+            prev_expected = self._pair_prev_expected
+            self._pair_error = reason
+            self._pair_error_kind = kind
+            self._pair_outcome = "failed"
+            self._pair_role = ""
+            self._pair_pin = ""
+            self._pair_key = None
+            self._pair_expires = 0.0
+            self._pair_event.set()
+        transport = self._transport
+        if transport is not None:
+            transport.set_key(prev_key)
+            transport.set_expected_peer_device(prev_expected)
+            if prev_key is not None and prev_peer is not None:
+                transport.peer = prev_peer
+        if self._discovery is not None:
+            self._discovery.set_status(pairing=False, paired=bool(self.cfg.psk))
+
+    def _complete_pairing(self, peer_device: str, peer_name: str) -> None:
+        with self._lock:
+            if not self._pair_pin or not self._pair_key:
+                return
+            key = self._pair_key
+            self._pair_role = ""
+            self._pair_pin = ""
+            self._pair_key = None
+            self._pair_expires = 0.0
+            self._pair_outcome = "ok"
+            self._pair_ok = True
+            self._pair_error = ""
+            self._pair_error_kind = ""
+            self.cfg.psk = key.hex()
+            self.cfg.peer_device = str(peer_device or "")
+            self.cfg.peer_name = str(peer_name or "")
+            self.cfg.paired_at = time.time()
+            self._pair_event.set()
+        transport = self._transport
+        if transport is not None:
+            transport.set_expected_peer_device(self.cfg.peer_device)
+        if self._discovery is not None:
+            self._discovery.set_status(pairing=False, paired=True)
+        self._save()
+        log.info("配对成功：%s（%s）", self.cfg.peer_name or "?", self.cfg.peer_device or "?")
+
+    def _save(self) -> None:
+        if self._save_config is None:
+            return
+        try:
+            self._save_config()
+        except Exception:  # noqa: BLE001 - 落盘失败不该把配对流程搞崩
+            log.exception("配对信息落盘失败")
 
     # ------------------------------------------------------------ 远端代发切屏
     @property
@@ -467,9 +823,15 @@ class SyncEngine:
             # 消费掉 changeCount，避免恢复后把暂停期间复制的内容补发出去
             log.debug("已暂停记录，丢弃一条本机剪贴板内容")
             return
+        if self.pairing_active:
+            # 配对中临时 key 还没转正：不把本机内容按临时 key 发出去
+            log.debug("配对中，暂不推送本机剪贴板")
+            return
         self._send(item)
 
     def _send(self, item: ClipItem, *, force: bool = False) -> None:
+        if self.pairing_active:
+            return
         if item.digest == self._last_applied_digest:
             self.stats["dropped"] += 1
             log.debug("丢弃自写回弹（%s）", item.digest[:8])
@@ -592,6 +954,8 @@ class SyncEngine:
             self._apply_remote(header, payload)
 
     def _apply_remote(self, header: dict[str, Any], payload: bytes) -> None:
+        if self.pairing_active:
+            return
         digest = str(header.get("digest") or "")
         transport = self._transport
         try:
@@ -726,6 +1090,13 @@ class SyncEngine:
         if transport is None:
             return ""
         return transport.peer_host or ""
+
+
+def _addr_text(addr) -> str:
+    """(ip, port) / "ip:port" → 界面显示用的 `ip:port`。"""
+    if isinstance(addr, tuple) and len(addr) >= 2:
+        return f"{addr[0]}:{int(addr[1])}"
+    return str(addr or "")
 
 
 def parse_peer(text: str, default_port: int) -> tuple[str, int] | None:

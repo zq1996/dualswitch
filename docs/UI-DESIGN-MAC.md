@@ -181,10 +181,22 @@ PYINSTALLER_CONFIG_DIR="$PWD/build/pyi-cache" ./packaging/macos/build.sh
   `LSMinimumSystemVersion=11.0`
 - 打包后会跑一次 ad-hoc `codesign --sign -`：TCC 按「签名 + 路径」记授权，不签名的话每次重打包
   都可能被系统当成新应用，用户得反复去勾「辅助功能」
-- 图标：`design/icon/screen-switch.icns`（由 `python design/icon/build_icns.py` 从 PNG 母版
-  手写 ICNS 容器生成；`design/icon/build_icns.sh` 只是它的薄壳，方便沿用旧命令）
+- 图标：`python design/icon/build_icon.py` 一次出全套（母版 `icon-master.svg` + 16…1024 十一档 PNG
+  + `screen-switch.ico` + `screen-switch.icns`），**并自动覆盖 `src/dualswitch/ui/assets/` 下的
+  ico/icns 运行时副本**。运行时 `theme.asset()` 是 `ui/assets/` 优先，只更新 `design/icon/`
+  就会出现「图标明明重新生成了、Dock 还是旧的那只」—— 2026-10-22 踩过。
+- 双击 `.app` 进去的是 **v2 界面（ui2）**：`packaging/entrypoint.py` 在 macOS 上把默认子命令
+  设成 `ui2`，Windows 仍是 `ui`（等 win2 验收完由 Windows 端改那一行，属共享层）。
+  `--selfcheck` 也会逐个 import mac2 的 15 个模块，漏收就构建失败。
+- Dock 图标取 `theme.app_icon()`：macOS 先读 `.icns`（有 1024 档，Dock 放大也清晰），`.ico` 兜底。
 - 菜单栏模板图：`python design/icon/build_menubar_icon.py` → `src/dualswitch/ui/assets/menubar.png`
-  （36×36 纯黑透明图，系统按深浅色自动反色）
+  （36×36 纯黑透明图，`setTemplate_(True)` 后系统按深浅色自动反色）
+  · 构图 = **正方形**底板（620×620，圆角 = 边长×20%）+ 屏内两支箭头**镂空**（箭头几何逐字照抄
+    `build_icon.py`，含半尖三角头，只做等比缩放；`SIDE` / `RX_RATIO` / `ARROW_SCALE` 可调）
+  · 底板改正方形（2026-10-22 用户定）是为了撑满菜单栏格子：横向屏那版实际只占 17×10.6pt
+  · 必须是镂空不能用白箭头：模板图只看 alpha，白色像素同样不透明，画白箭头结果是一整块实心
+- `build_icns.py` / `build_icns.sh` 是上一代（从 JPG 抠图）留下的入口，现在只在 icns 缺失时
+  被 `packaging/macos/build.sh` 兜底调用，日常出图走 `build_icon.py`。
 - 开机自启：把 `.app` 加入 **系统设置 → 通用 → 登录项**（推荐）；launchd 方式见 `packaging/macos/install.sh`
 - **辅助功能授权**（mac 上唯一必须手动做的一步）：热键走 `CGEventTap`，没有权限就建不起来。
   · 授权对象 = **启动它的那个程序**：用终端跑 `dualswitch ui` 时为「终端」/「iTerm」；

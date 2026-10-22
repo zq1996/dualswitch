@@ -13,6 +13,12 @@
     design/icon/png/icon-*.png          16…1024 共 11 档
     design/icon/screen-switch.ico
     design/icon/screen-switch.icns
+    src/dualswitch/ui/assets/screen-switch.{ico,icns}   ← 运行时副本（自动同步）
+
+为什么要有运行时副本：程序里取图标一律走 `theme.asset("screen-switch.icns")`，
+它**先查** `ui/assets/`，找不到才回落到 `design/icon/`。只更新 design/ 里的母版，
+源码运行和打包产物都会继续用 ui/assets 里的旧文件（2026-10-22 就是这么出现的
+「新图标生成了但 Dock 还是旧的」）。所以出图时一并覆盖过去。
 """
 
 from __future__ import annotations
@@ -25,6 +31,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PNG_DIR = HERE / "png"
 MASTER_SVG = HERE / "icon-master.svg"
+#: 运行时副本目录（theme.asset 第一个查这里）
+RUNTIME_DIR = HERE.parent.parent / "src" / "dualswitch" / "ui" / "assets"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 # ---- 画面内容（原样照抄，勿改） ---------------------------------------------
@@ -116,6 +124,21 @@ def main() -> None:
     print(f"ICO  -> {HERE / 'screen-switch.ico'}")
     write_icns(HERE / "screen-switch.icns", files)
     print(f"ICNS -> {HERE / 'screen-switch.icns'}")
+    sync_runtime()
+
+
+def sync_runtime() -> None:
+    """把 ico / icns 覆盖到 ui/assets —— 少这一步，源码运行与打包产物都还是旧图标。"""
+    if not RUNTIME_DIR.is_dir():
+        print(f"[warn] 没找到 {RUNTIME_DIR}，跳过运行时副本同步")
+        return
+    for name in ("screen-switch.ico", "screen-switch.icns"):
+        src = HERE / name
+        if not src.exists():
+            continue
+        dst = RUNTIME_DIR / name
+        dst.write_bytes(src.read_bytes())
+        print(f"COPY -> {dst}")
 
 
 if __name__ == "__main__":

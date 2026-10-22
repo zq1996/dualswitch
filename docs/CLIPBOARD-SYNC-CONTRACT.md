@@ -1,6 +1,10 @@
 # 剪贴板同步 · 设计与并行开发契约
 
 > 2026-10-18 立 · 适用 `src/dualswitch/clipboard/` 与 `src/dualswitch/sync/`
+> **2026-10-22 更新**：配对从「CLI 两端输同一个码」升级成「一端显示码、另一端输码」，
+> 并给发现广播补了四个字段。协议帧**一个字节都没改**，老实现不受影响 ——
+> 新增内容见 §4.3.1（认证语义）、§4.4.1（配对流程）、§4.6（发现广播），
+> Windows 端界面待办见 §0。
 > **这份文档是给"另一端的 AI"看的**。开工前读第 1、3、5、7 节，动手时只碰第 5 节分配给你的文件。
 > 方案背景与工作量评估见 `docs/CLIPBOARD-SYNC-PLAN.md`（只看结论的话：文字简单、图片中等、文件暂不做）。
 
@@ -35,6 +39,33 @@ python tools/clip_selftest.py --role windows
 > **联调的完整流程、已踩过的坑、需要用户做的事**，见
 > [`docs/CLIPBOARD-SYNC-HANDOFF.md`](CLIPBOARD-SYNC-HANDOFF.md)（联调前必读）。
 > 合并后全量：**216 passed / 5 skipped**（Windows 本机，`QT_QPA_PLATFORM=offscreen`）。
+
+**2026-10-22 新增待办：配对 UI（底层已就绪，你只写界面）**
+
+`sync/*` 已经把「显示配对码 / 输入配对码 / 解除配对」做成共享能力，Windows 端**一行底层代码都不用写**：
+`git pull` 后 CLI 立刻可用（`dualswitch clip pair --pin <同一个6位码>`，两端同一口径）。
+要做的是把界面补上：
+
+| 要写 | 位置 | 参考实现 |
+|---|---|---|
+| 配对页（7 个状态 + 6 位码输入 + 倒计时） | `src/dualswitch/ui/win2/pairing_page.py`（新建） | `ui/mac2/pairing_page.py` |
+| 侧栏第 4 项「配对电脑」+ 右侧状态灯（灰/绿/红） | `ui/win2/window.py` | `ui/mac2/window.py`（`PAGE_PAIR` / `nav_pair.set_status_dot`） |
+| 托盘菜单「配对电脑…」 | `ui/win2/tray.py` | `ui/mac2/statusmenu.py`（`actions["pair"]` + `pair_state`） |
+| 接线：离开页面即作废配对码、剪贴板页提示重刷新 | `ui/win2/runner.py` | `ui/mac2/runner.py::_on_page_changed` |
+
+引擎侧接口（**共享层已实现，不要在 Windows 侧再写一份**）：
+
+```python
+engine.begin_pairing()              # 显示端：生成 6 位码并切到临时 key，返回 PIN
+engine.cancel_pairing()             # 丢弃临时 key，恢复原 key
+engine.pair_with_peer(addr, pin)    # 输入端：阻塞到成功/失败/超时（默认 15s），必须放后台线程
+engine.unpair()                     # 解除配对（只清本机）
+engine.pairing_status()             # dict：state/outcome/error/error_kind/pin/expires_in/attempts_left/...
+engine.discovered_peers()           # 附近设备（按最近广播倒序，20s 没再广播就不显示）
+engine.refresh_discovery()          # 立刻重播一次广播（「重新搜索」按钮）
+```
+
+交互规格见 `design/redesign/INTERACTIONS-v2.md` §12；Windows 端落地差异见 `docs/UI-WINDOWS2-DESIGN.md` §14。
 
 ### macOS 端 AI —— 你要做的事
 
@@ -178,16 +209,55 @@ ImageData(png: bytes, width: int, height: int)
 P0 只实现 `HELLO / HELLO_OK / ONECLIP / ACK / PING / PONG`。**没有 PULL/分块**——P1 的图片最大 32MB，
 一次写完交给 TCP 分片即可；分块是 P2（文件）才需要的。
 
+#### 4.3.1 认证结果的语义（2026-10-22 修订，**两端行为必须一致**）
+
+| 情况 | 对端回的 `HELLO_OK` |
+|---|---|
+| 本端未配对（`key is None`） | `ok=false, reason="本端未配对"` |
+| 两端密钥不一致 | `ok=false, reason="密钥不匹配（两端 PIN 不一致）"` |
+| 已配对，但来的是另一台设备 | `ok=false, reason="已与另一台设备配对"` |
+
+- **收到 `ok=false` 的那一端要立刻关掉这条连接**（旧实现会留着，形成一条永远发不出东西的半死连接，
+  界面上还显示「已连接」）。发送端失败同理：回完 `HELLO_OK` 就 `close`。
+- `reason` 直接透到界面（配对页红条 / 侧栏「需重新配对」），不要统一吞成「连接失败」。
+- **配对后的身份绑定**：本机记住 `clipboard.peer_device`，此后的 `Link` 只接受 HELLO 里
+  `device` 等于它的连接。密钥对了但不是那台 → 按上表第三行拒绝。空串 = 不绑定（旧 CLI 配置兼容）。
+- 显示端限流：同一来源 IP 认证失败累计 5 次 → 当前配对码立即作废（见 4.4.1）。
+
+
 ### 4.4 认证与加密
 
 **配对**（一次性，两端各做一次）：
 
 ```
 A 端界面显示 6 位 PIN（随机，5 分钟有效）
-B 端输入 PIN → 计算 key = PBKDF2-HMAC-SHA256(PIN, salt=device_id_A, 200_000)
+B 端输入 PIN → 计算 key = PBKDF2-HMAC-SHA256(PIN, salt="dualswitch-v1-clipboard", 200_000)
             → 连 A，HELLO 里带 auth = HMAC(key, nonce)
 A 端同法算 key，校验通过 → HELLO_OK，双方把 key 存进 config（clipboard.psk）
 ```
+
+> 盐是**固定串**不是 `device_id_A`（第 11 节 2026-10-18 条）。固定盐让「两端输入同一个 PIN
+> ⇒ 同一个 key」成立，所以**不需要先交换 device_id、也不需要把 PIN 或 key 发到网上**。
+
+#### 4.4.1 配对的实际流程（2026-10-22 起有界面，**两端照这个实现**）
+
+1. **A（显示端）**：`derive_key(pin)` 得到临时 key，交给 transport（`set_key(key, drop_links=True)`，
+   立刻断开旧连接让监听线程用新 key 重新握手）；**临时 key 只在内存，不写 config**；
+   `Discovery.set_status(pairing=True)` 让广播里 `pairing=true`；5 分钟倒计时。
+2. **B（输入端）**：同样算出 key，`set_key` + 把对端地址设为 `peer` + `reconnect_now()`，
+   HELLO 带 `auth=HMAC(key, nonce)`，等双向认证（超时 15s）。
+3. **成功**：任一端看到 `transport.authenticated == true` 后各自落盘 ——
+   `clipboard.psk = key.hex()`、`clipboard.peer_device`、`clipboard.peer_name`、`clipboard.paired_at`；
+   A 的临时 key 转正，`pairing=false`；`transport.expected_peer_device` 立即设成对端 device_id。
+4. **失败 / 取消 / 超时 / 关窗**：临时 key 丢弃、恢复原 key（未配对则为空）、**不落盘**。
+5. **配对进行中**（`engine.pairing_active`）：本机的剪贴板**不推也不收**（临时 key 还没转正，
+   按它发出去的对端收不了），切屏触发的 `push_now` 也一并跳过。
+6. `pairing_status()` 的 `state` 取值：`idle` / `showing`（A 显示码）/ `connecting`（B 等认证）/
+   `paired`；另有 `outcome`（`""/ok/failed/cancelled`）、`error_kind`
+   （`auth`/`network`/`timeout`/`expired`/`max_attempts`/`bad_pin`/`disabled`）、`attempts_left`。
+
+**输错次数**：B 侧本地 5 次上限（`attempts_left` 递减，用尽后必须让 A 重新显示码）；
+A 侧按来源 IP 累计 5 次认证失败同样作废当前码。两侧上限都是 5，别各自改。
 
 **每帧**：`seal(key, plaintext)` = `SHA256(key + counter)` 生成 keystream，XOR 后附 `HMAC-SHA256(key, ciphertext)[:16]`。
 `counter` 每条消息自增，接收端校验单调（防重放）。
@@ -208,6 +278,36 @@ A 端同法算 key，校验通过 → HELLO_OK，双方把 key 存进 config（c
 
 联调时如果出现"两台机器互相刷屏"，按这个顺序查：先看层 1 的单元测试过没过。
 
+### 4.6 发现广播（UDP 47824，2026-10-22 扩字段）
+
+每 5s 从本机 UDP 47824 广播一次 UTF-8 JSON（`sync/discovery.py::announce_now`）。**旧实现忽略新字段即可，
+不会崩**；新实现字段缺失时按「未知」显示，不要当成故障。
+
+| 字段 | 值 | 用途 |
+|---|---|---|
+| `ds` | 固定 `"ds-clip"` | 过滤非本应用的包 |
+| `v` | `1` | 广播格式版本（**不是**应用版本） |
+| `device` | `{host}-{8位hex}` | 设备 ID，配对后用来做身份绑定 |
+| `host` | **电脑名**（macOS `scutil --get ComputerName`、Windows `COMPUTERNAME`，取不到回落 `device_id`） | 列表里显示的名字 |
+| `port` | TCP 服务端口（47823） | 拨号目标 |
+| `ts` | 广播时刻 | 调试用 |
+| `plat` | `"macos"` / `"windows"` 🆕 | 列表行左侧平台牌 |
+| `ver` | 应用版本号 🆕 | 版本不一致给提示，**不阻断**同步 |
+| `pairing` | `true/false` 🆕 | 对端正在显示配对码（B 端据此决定能不能输码） |
+| `paired` | `true/false` 🆕 | 对端已有配对对象（「替换配对」文案要用） |
+
+规则：
+
+- **`host` 不再是 `mac` / `windows`**（那只是开发机的主机名）。界面上要显示平台请用 `plat`；
+  旧版本发来的广播没有 `plat`，此时才回落到按 `host` 猜。
+- 接收端给每条 peer 记 `seen = 收到时刻`，**20s 没再广播就从列表里剔除**（换 Wi-Fi / 关机后不残留）。
+- **发现始终开启**：`clipboard.peer` 手填地址只是「立即先拨一次」的提示，不再关闭 Discovery
+  （旧实现 `if peer is None` 才起发现，等于手填一次 IP 就永久绑死那个地址）。
+- **已配对时只认记住的那台**：`clipboard.peer_device` 非空 → 广播里别的设备只显示在列表里，不改拨号目标。
+- 发现不参与认证：它只是「告诉你对端在哪」，数据仍只走认证后的 TCP。
+- 配对中（临时 key 阶段）**不要**让发现结果改拨号目标，否则可能连到第三台把流程搅乱。
+
+
 ---
 
 ## 5. 文件所有权（防冲突的唯一规则）
@@ -221,7 +321,9 @@ A 端同法算 key，校验通过 → HELLO_OK，双方把 key 存进 config（c
 | `src/dualswitch/clipboard/mock.py` | **macOS** | 契约参考实现 |
 | `src/dualswitch/clipboard/macos.py` | **macOS** | — |
 | `src/dualswitch/clipboard/windows.py` | **Windows** | **你唯一要写的源码** |
-| `src/dualswitch/sync/*.py` | **macOS** | 网络/协议/引擎，平台无关 |
+| `src/dualswitch/sync/*.py` | **macOS** | 网络/协议/引擎，平台无关。含配对流程（§4.4.1），两端同一份 |
+| `src/dualswitch/ui/mac2/pairing_page.py` | **macOS** | 配对页（mac v2 树） |
+| `src/dualswitch/ui/win2/pairing_page.py` | **Windows** | 配对页（win v2 树，**2026-10-22 待建**，照 §4.4.1 的接口写） |
 | `src/dualswitch/ui/clipboard_page.py` | **macOS** | 剪贴板页主体（共享代码，用 `chrome()` 取外壳） |
 | `src/dualswitch/ui/settings.py` `runner.py` `window.py` `widgets.py` | **macOS** | 含新增的「剪贴板」设置页与页面栈接线 |
 | `src/dualswitch/ui/chrome/win.py` | **Windows** | 标题栏加剪贴板图标 + 两个新字段（约 12 行） |
@@ -454,6 +556,8 @@ dualswitch clip selftest               # 本机格式矩阵
 - [ ] `dualswitch clip probe` 输出的类型列表贴在 PR 里（两端对照用）
 - [ ] 资源管理器复制 3 个文件时，`probe` 里能看到 `CF_HDROP`（P2 备料，不实现）
 - [ ] 只改了 `clipboard/windows.py` 和 `tests/test_clipboard_windows.py`（`git diff --stat` 自证）
+- [ ] `pytest -q tests/test_pairing.py` 全绿（配对状态机是**共享用例**，两端都必须跑，不许整文件 skip）
+- [ ] 配对页落地后：A 显示码、B 输码 → 两端 5s 内变「已配对」；输错 5 次码失效；关窗不落盘
 
 **macOS 端**
 
@@ -479,6 +583,9 @@ dualswitch clip selftest               # 本机格式矩阵
 | 2026-10-21 | macOS | `ClipItem` 增加**可选**字段 `file_size`（**不上网**） | 列表/预览要显示文件真实大小（849 KB / 3 MB），而 `wire_size()` 是入库字节数（文件名几个字节），两者不能混用。同样不参与跨端 | 已实现（mac） |
 | 2026-10-21 | macOS | **文件条目的语义**：`path` 非空 = 本机文件 | 没有图片数据的文件条目**永不发送**（文件本身传不过去，P2）；带 png 的图片文件仍按 `kind=mixed` 正常同步。Windows 端不必实现文件采集，收到也不是自己的路径 | 已实现（mac） |
 | 2026-10-21 | windows | 无契约字段变更；`clipboard/windows.py` 落地 `CF_HDROP` 读写（第 70 行里程碑 P2 的 Windows 半边） | 用户反馈「复制本地文件后列表里没有这条」。资源管理器复制文件时剪贴板里只有 `CF_HDROP`（`CF_UNICODETEXT` 只是文件名），不解析就等于整条丢掉。读：路径 → `make_file()`（图片文件抽缩略图，其它只要名字/目录/字节数；8.3 短名转长名；文件不在则退回文本；多选取第一个）。写：`item.path` 存在时同时写 `CF_HDROP` + 文本，粘到资源管理器是文件、粘到输入框是名字 | 已实现（windows）。**未改 `base.py` 任何字段**，也没动 mac 的文件；`ui/clipboard_feed.py` 顺带补上 `path/file_size/app/app_id` 透传（以前只有引擎那条路有，没有引擎时文件行点不开） |
+| 2026-10-22 | macOS | **配对 UI 化，帧格式一字节没改**：A 显示 PIN → B 输码（§4.4.1）；`HELLO_OK(ok=false)` 后双方立刻断开（§4.3.1）；配对后按 `peer_device` 做身份绑定；配对中不推不收剪贴板 | 之前只有 `clip pair --pin` 一条 CLI 路径，用户要的是「一端显示码、另一端输码」，且要能看见「未配对 / 已配对 / 需重新配对」三态。全部复用现有 HELLO 挑战应答，不新增帧类型 —— 这正是 §4.4 最初的设计，只是补上了界面与限流 | 已实现（mac）。**Windows 端只需补界面**（`ui/win2/pairing_page.py`），底层 `sync/*` pull 即可用 |
+| 2026-10-22 | macOS | 发现广播补 `plat` / `ver` / `pairing` / `paired` 四个**可选**字段；`host` 改为电脑名；接收端 20s TTL；发现始终开启 | 配对页要显示「附近有哪台电脑、什么平台、对方是否正在显示配对码」。原来 `host` 填的是 `mac`/`windows`（开发机名），拿不到真名字；原来手填 `clipboard.peer` 就永久关掉发现，换 IP 后必须重填 | 已实现（mac，§4.6）。字段纯增量，旧实现忽略即可 |
+| 2026-10-22 | macOS | `clipboard` 配置段新增 `paired_at`（float，配对完成时间戳） | 配对页要显示「上次配对时间」；`_merge_clipboard` 原来只把 int/bool 强转，float 会被当成未知类型跳过 | 已实现（mac）。**Windows 端只读**，pull 后 `config.py` 自动带上；自己写配置时别丢这个字段 |
 
 格式：`| 2026-10-19 | windows | ClipItem 增加 files 字段 | P2 需要传目录 | 待 macOS 端评估 |`
 

@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 
 import pytest
@@ -182,6 +183,7 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="旧 ui/mac 已由 ui/mac2 取代")
 def test_window_renders_unknown_without_guessing(qt_app):
     from dualswitch.ui.window import MainWindow
 
@@ -200,6 +202,7 @@ def test_window_renders_unknown_without_guessing(qt_app):
     assert win.card_win._active is True
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="旧 ui/mac 已由 ui/mac2 取代")
 def test_busy_false_keeps_button_disabled_in_unknown(qt_app):
     from dualswitch.ui.window import MainWindow
 
@@ -210,6 +213,7 @@ def test_busy_false_keeps_button_disabled_in_unknown(qt_app):
     assert win.hero.button.isEnabled() is False
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="旧 ui/mac 已由 ui/mac2 取代")
 def test_menu_unknown_disables_switch_entries():
     from dualswitch.ui.statusitem import build_menu_entries
 

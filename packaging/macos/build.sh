@@ -19,6 +19,18 @@ PYTHON="${PYTHON:-python3}"
 APP="dist/dualswitch.app"
 ICNS="design/icon/screen-switch.icns"
 
+# PyInstaller 默认把构建缓存写到 ~/Library/Application Support/pyinstaller。受限环境
+# （只读 / 沙箱拦删）写不进去会直接失败，换到仓库内的 build/.pyinstaller-cache。
+export PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$ROOT/build/.pyinstaller-cache}"
+mkdir -p "$PYINSTALLER_CONFIG_DIR"
+
+# --clean 会删掉上一轮的 bincache，受限环境里常常被拦（报 Operation not permitted）。
+# 需要干净构建时再用；日常增量构建 NO_CLEAN=1 跳过即可。
+# 展开用 `${ARR[@]+"${ARR[@]}"}`：macOS 自带的是 bash 3.2，空数组配 `set -u` 会报
+# "unbound variable"（踩过）。
+CLEAN_ARGS=(--clean)
+[[ "${NO_CLEAN:-0}" == "1" ]] && CLEAN_ARGS=()
+
 "$PYTHON" -m pip install --quiet --upgrade pyinstaller pystray pillow \
     PySide6-Essentials \
     pyobjc-framework-Quartz pyobjc-framework-ApplicationServices pyobjc-framework-Cocoa
@@ -45,7 +57,7 @@ done
 # 注意：带 --specpath 时，PyInstaller 会把 --add-data / 入口脚本的相对路径
 # 解析成「相对 spec 所在目录」，所以这里一律用绝对路径，避免 build/src/... 找不到。
 "$PYTHON" -m PyInstaller \
-    --noconfirm --clean \
+    --noconfirm ${CLEAN_ARGS[@]+"${CLEAN_ARGS[@]}"} \
     --name dualswitch \
     --windowed \
     --osx-bundle-identifier com.dualswitch.app \
@@ -61,6 +73,15 @@ done
     --hidden-import "dualswitch.ui.mac2" \
     --hidden-import "dualswitch.ui.mac2.runner" \
     --hidden-import "dualswitch.ui.mac2.iconlib" \
+    --hidden-import "dualswitch.ui.mac2.pairing_page" \
+    --hidden-import "dualswitch.ui.mac2.preview" \
+    --hidden-import "dualswitch.ui.mac2.statusmenu" \
+    --hidden-import "dualswitch.ui.mac2.settings_page" \
+    --hidden-import "dualswitch.ui.mac2.switch_page" \
+    --hidden-import "dualswitch.ui.mac2.clipboard_page" \
+    --hidden-import "dualswitch.ui.mac2.window" \
+    --hidden-import "dualswitch.ui.mac2.widgets" \
+    --hidden-import "dualswitch.ui.mac2.theme" \
     --hidden-import "PySide6.QtSvg" \
     "${SHIM_ARGS[@]}" \
     --add-data "$ROOT/src/dualswitch/ui/assets:dualswitch/ui/assets" \
@@ -73,13 +94,21 @@ done
 # 翻译裁剪：Qt 自带 200 个各语言翻译（.qm，约 7MB），本工具只用中文，且代码里
 # 没有安装 QTranslator —— 除 zh_CN 外全是死重量。打包后直接删掉，只留中文。
 # 必须放在 codesign 之前：删文件会让签名失效，晚了就得重新签一遍。
+# 删不掉不算致命（受限环境会拦批量删除）：留着只多 7MB，构建要继续往下走。
 PRUNED=0
+SKIPPED=0
 while IFS= read -r -d '' qm; do
     if [[ "$qm" != *_zh_CN.qm ]]; then
-        rm -f "$qm"
-        PRUNED=$((PRUNED + 1))
+        if rm -f "$qm" 2>/dev/null; then
+            PRUNED=$((PRUNED + 1))
+        else
+            SKIPPED=$((SKIPPED + 1))
+        fi
     fi
 done < <(find "$APP" -type f -name '*.qm' -print0)
+if [[ "$SKIPPED" -gt 0 ]]; then
+    echo "[warn] 有 $SKIPPED 个 .qm 删不掉（受限环境拦批量删除），产物会大 ~7MB" >&2
+fi
 echo "[ok] 翻译只保留中文（zh_CN），已删除 $PRUNED 个其它语言的 .qm"
 
 # Dock / 菜单栏「关于」里显示中文名；LSUIElement=false 保留 Dock 图标（主窗口是真实窗口）

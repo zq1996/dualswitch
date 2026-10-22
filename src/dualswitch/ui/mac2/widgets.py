@@ -50,7 +50,12 @@ TOOL_ICONS = {
 }
 
 #: 侧栏导航图标
-NAV_ICONS = {"switch": "arrow-left-right", "clip": "clipboard", "settings": "settings"}
+NAV_ICONS = {
+    "switch": "arrow-left-right",
+    "clip": "clipboard",
+    "pair": "link-2",
+    "settings": "settings",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -208,17 +213,100 @@ class NavButton(QAbstractButton):
         self._icon_name = NAV_ICONS.get(icon_name, icon_name)
         self._text = text
         self._count = ""
+        self._count_tone = "accent"          # accent | ok | warn | bad | idle
+        self._status_dot: QLabel | None = None
+        self._collapsed = False
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(34)
         self.setFocusPolicy(Qt.NoFocus)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-    def set_count(self, text: str) -> None:
-        if text == self._count:
+    def set_count(self, text: str, tone: str | None = None) -> None:
+        changed = text != self._count
+        if tone is not None and tone != self._count_tone:
+            self._count_tone = tone
+            changed = True
+        if not changed:
             return
         self._count = text
         self.update()
+
+    def count_tone(self) -> str:
+        return self._count_tone
+
+    def set_status_dot(self, tone: str, tooltip: str = "") -> None:
+        """右侧状态灯：绿灯=已配对，灰灯=未配对，红灯=需重新配对。
+
+        灯是子控件（不是画在主按钮上），这样鼠标悬浮在灯上能单独显示 tooltip。
+        """
+        if self._status_dot is None:
+            self._status_dot = QLabel(self)
+            self._status_dot.setFixedSize(8, 8)
+            self._status_dot.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        t = theme.tokens()
+        color = {
+            "ok": t.ok,
+            "warn": t.warn,
+            "bad": t.danger,
+            "idle": t.idle,
+        }.get(tone, t.idle)
+        # 1px 卡片色描边：选中行是主色底，灯不明显时用它把灯和图标分开
+        self._status_dot.setStyleSheet(
+            f"background:{color};border-radius:4px;border:1px solid {t.card};"
+        )
+        self._status_dot.setToolTip(tooltip)
+        self._status_dot.show()
+        self._count = ""
+        self._count_tone = tone
+        self._place_status_dot()
+        self.update()
+
+    def clear_status_dot(self) -> None:
+        if self._status_dot is not None:
+            self._status_dot.hide()
+
+    def status_dot_tooltip(self) -> str:
+        return self._status_dot.toolTip() if self._status_dot is not None else ""
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """收起态：只画图标，文字隐藏；徽章/状态灯缩到图标右上角。"""
+        self._collapsed = bool(collapsed)
+        self.setToolTip(self._text if self._collapsed else "")
+        self._place_status_dot()
+        self.update()
+
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def _icon_pos(self) -> tuple[int, int]:
+        size = 17
+        if self._collapsed:
+            return (self.width() - size) // 2, (self.height() - size) // 2
+        return 10, (self.height() - size) // 2
+
+    def _place_status_dot(self) -> None:
+        if self._status_dot is None:
+            return
+        if self._collapsed:
+            size = 7
+            self._status_dot.setFixedSize(size, size)
+            self._status_dot.setStyleSheet(
+                self._status_dot.styleSheet().replace("border-radius:4px", "border-radius:3px")
+            )
+            icon_y = self._icon_pos()[1]
+            # 右对齐贴图标右上角：离按钮右边缘 6px，宽窄变化也不会压到圆角
+            self._status_dot.move(self.width() - 6 - size, max(2, icon_y - 2))
+        else:
+            self._status_dot.setFixedSize(8, 8)
+            self._status_dot.setStyleSheet(
+                self._status_dot.styleSheet().replace("border-radius:3px", "border-radius:4px")
+            )
+            self._status_dot.move(self.width() - 10 - 8, (self.height() - 8) // 2)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._place_status_dot()
 
     def text(self) -> str:  # noqa: N802 - 与 QPushButton 对齐，测试用
         return self._text
@@ -243,37 +331,70 @@ class NavButton(QAbstractButton):
             self._icon_name, 17, t.on_accent if on else (t.ink if hovered else t.ink3), 2.0
         )
         gw = glyph.width() / (glyph.devicePixelRatio() or 1)
-        p.drawPixmap(10, int((self.height() - gw) / 2), glyph)
+        icon_x, icon_y = self._icon_pos()
+        p.drawPixmap(icon_x, int(icon_y + (17 - gw) / 2), glyph)
 
-        fg = theme.qcolor(t.on_accent if on else (t.ink if hovered else t.ink2))
-        p.setPen(fg)
-        f = theme.qfont(12.5, 620 if on else 550)
-        p.setFont(f)
-        text_x = 10 + 17 + 10
-        fm = QFontMetrics(f)
-        p.drawText(
-            text_x,
-            0,
-            self.width() - text_x - 10,
-            self.height(),
-            Qt.AlignLeft | Qt.AlignVCenter,
-            self._text,
-        )
+        if not self._collapsed:
+            fg = theme.qcolor(t.on_accent if on else (t.ink if hovered else t.ink2))
+            p.setPen(fg)
+            f = theme.qfont(12.5, 620 if on else 550)
+            p.setFont(f)
+            text_x = 10 + 17 + 10
+            p.drawText(
+                text_x,
+                0,
+                self.width() - text_x - 10,
+                self.height(),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                self._text,
+            )
 
         if self._count:
-            cf = theme.qfont(9.5, 700)
-            cfm = QFontMetrics(cf)
-            badge_w = cfm.horizontalAdvance(self._count) + 12
-            badge_h = 16
-            bx = self.width() - 10 - badge_w
-            by = (self.height() - badge_h) / 2
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(255, 255, 255, 64) if on else theme.qcolor(t.accent_soft))
-            p.drawRoundedRect(int(bx), int(by), badge_w, badge_h, 8, 8)
-            p.setPen(theme.qcolor(t.on_accent if on else t.accent_deep))
-            p.setFont(cf)
-            p.drawText(int(bx), int(by), badge_w, badge_h, Qt.AlignCenter, self._count)
+            if self._collapsed:
+                self._paint_collapsed_count(p, t, on)
+            else:
+                cf = theme.qfont(9.5, 700)
+                cfm = QFontMetrics(cf)
+                badge_w = cfm.horizontalAdvance(self._count) + 12
+                badge_h = 16
+                bx = self.width() - 10 - badge_w
+                by = (self.height() - badge_h) / 2
+                bg, fg = self._badge_colors(t, on)
+                p.setPen(Qt.NoPen)
+                p.setBrush(theme.qcolor(bg))
+                p.drawRoundedRect(int(bx), int(by), badge_w, badge_h, 8, 8)
+                p.setPen(theme.qcolor(fg))
+                p.setFont(cf)
+                p.drawText(int(bx), int(by), badge_w, badge_h, Qt.AlignCenter, self._count)
         p.end()
+
+    def _badge_colors(self, t, on: bool) -> tuple[str, str]:
+        if on:
+            return "#FFFFFF", t.accent_deep
+        return {
+            "ok": (t.ok_bg, t.ok),
+            "warn": (t.warn_bg, t.warn),
+            "bad": (t.danger_bg, t.danger),
+            "idle": (t.idle_bg, t.idle),
+        }.get(self._count_tone, (t.accent, t.on_accent))
+
+    def _paint_collapsed_count(self, p, t, on: bool) -> None:
+        """收起态：数量缩成 9px 小徽章，贴在图标的右上角外侧，不压住图标主体。"""
+        text = self._count if len(self._count) <= 2 else "99+"
+        cf = theme.qfont(7.5, 700)
+        cfm = QFontMetrics(cf)
+        badge_h = 9
+        badge_w = max(9, cfm.horizontalAdvance(text) + 4)
+        # 右对齐贴按钮右上角（离右边缘 6px）：一位数/两位数/99+ 都收在同一条右边线
+        bx = self.width() - 6 - badge_w
+        by = 1
+        bg, fg = self._badge_colors(t, on)
+        p.setPen(Qt.NoPen)
+        p.setBrush(theme.qcolor(bg))
+        p.drawRoundedRect(int(bx), int(by), badge_w, badge_h, 4.5, 4.5)
+        p.setPen(theme.qcolor(fg))
+        p.setFont(cf)
+        p.drawText(int(bx), int(by), badge_w, badge_h, Qt.AlignCenter, text)
 
     def enterEvent(self, event):  # noqa: N802
         self.update()

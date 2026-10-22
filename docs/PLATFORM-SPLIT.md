@@ -79,7 +79,9 @@ src/dualswitch/
 │   │   └── …（clipboard_page 走应用内全屏预览 + ←/→ 翻页；设置页用 page_header）
 │   ├── {theme,widgets,window,settings,statusitem,clipboard_page,runner,focus_style}.py
 │   │                       兼容垫片：只做 `sys.modules` 换绑，**冻结，谁都不许加实现**
-│   └── assets/            windows-logo(-dim).png / apple-logo(-dim).png / menubar.png / screen-switch.ico
+│   └── assets/            windows-logo(-dim).png / apple-logo(-dim).png / menubar.png /
+│                          screen-switch.ico + screen-switch.icns（运行时副本，由
+│                          `design/icon/build_icon.py` 自动同步，别手改）
 ```
 
 为什么垫片还在：`tests/` 与 `tools/` 里 40 多处写着 `from dualswitch.ui.window import MainWindow`

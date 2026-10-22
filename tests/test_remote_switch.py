@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 
@@ -281,6 +282,7 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="旧 ui/mac 已由 ui/mac2 取代")
 def test_unknown_state_enables_button_when_peer_ready(qt_app):
     from dualswitch.ui.window import MainWindow
 
@@ -299,6 +301,7 @@ def test_unknown_state_enables_button_when_peer_ready(qt_app):
     assert win.hero.btn_text.text() == "未检测到显示器"
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="旧 ui/mac 已由 ui/mac2 取代")
 def test_mac_unknown_state_asks_windows(qt_app):
     """反方向：Mac 端未知态时按钮写「从 Windows 切过来」。"""
     from dualswitch.ui.window import MainWindow

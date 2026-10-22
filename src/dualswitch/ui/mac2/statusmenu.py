@@ -16,8 +16,10 @@
     5  剪贴板                      可点  ⌘⇧V
     6  设置…                       可点  ⌘,
     ───
-    7  热键：⌥ Space（单击图标打开菜单）  只读行
-    8  退出 屏幕切换               可点（危险色） ⌘Q
+    7  配对电脑…  已配对 / 未配对     可点（与侧栏同一个页面）
+    ───
+    8  热键：⌥ Space（单击图标打开菜单）  只读行
+    9  退出 屏幕切换               可点（危险色） ⌘Q
 
 已按需求移除：探测显示器 / 查看日志 / 打开配置目录（调试入口，不占日常菜单）。
 """
@@ -67,6 +69,14 @@ def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> l
         led = "none"
 
     hotkey_keys = tuple(theme.keycap_labels(hotkey_label))
+    # NSMenu 没有右对齐状态列：状态直接跟在固定标题后，仍然是「标题 + 状态」两段语义。
+    pair_state = ""
+    if actions.get("pair_state") is not None:
+        try:
+            pair_state = str(actions["pair_state"]() or "")
+        except Exception:  # noqa: BLE001
+            pair_state = ""
+    pair_title = "配对电脑…" + (f"    {pair_state}" if pair_state else "")
     return [
         MenuEntry("status", status_title, led=led),
         MenuEntry("sep"),
@@ -80,6 +90,8 @@ def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> l
         MenuEntry("sep"),
         MenuEntry("item", "剪贴板", actions.get("clipboard"), icon="clip", keys=("⌘", "⇧", "V")),
         MenuEntry("item", "设置…", actions.get("settings"), icon="settings", keys=("⌘", ",")),
+        MenuEntry("sep"),
+        MenuEntry("item", pair_title, actions.get("pair"), icon="pair"),
         MenuEntry("sep"),
         MenuEntry(
             "label",

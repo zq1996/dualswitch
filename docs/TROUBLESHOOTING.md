@@ -214,3 +214,72 @@ Python 常驻 + pystray，实测约 25–40MB。需求只要求「以实际观�
 - 托盘右键 → 退出；
 - 或删掉自启快捷方式（`packaging/windows/uninstall_autostart.ps1`）；
 - 或把 `hotkey` 改成一个不会按到的组合。
+
+## 9. macOS 打包与安装（2026-10-22 实测）
+
+### 9.1 `build.sh` 在受限环境（只读 /tmp、沙箱拦删）里中途失败
+
+| 报错 | 原因 | 处理 |
+|---|---|---|
+| 卡在写 `~/Library/Application Support/pyinstaller` | PyInstaller 的默认缓存目录写不进去 | 脚本已默认 `PYINSTALLER_CONFIG_DIR=$ROOT/build/.pyinstaller-cache` |
+| `Operation not permitted` 删 bincache | `--clean` 会删上一轮缓存 | `NO_CLEAN=1 ./packaging/macos/build.sh` 跳过 |
+| 构建前 `dist/dualswitch.app` 已存在 → 删不动 | PyInstaller 先删旧产物，批量删除被拦 | 先把旧产物 `mv` 走（如 `build/prev-app/`），保证 `--distpath` 指向不存在的目录 |
+| `CLEAN_ARGS[@]: unbound variable` | macOS 自带 bash 3.2，空数组配 `set -u` 会报 | 展开写 `${ARR[@]+"${ARR[@]}"}` |
+| `.qm` 删不掉、构建中断 | 批量删除被拦 | 脚本已改成只 warn；代价是产物大 ~7MB（翻译留着不影响功能） |
+
+### 9.2 双击 `.app` 起来的是旧界面
+
+`packaging/entrypoint.py` 决定双击默认跑哪个子命令：macOS 是 `ui2`（v2 界面），
+Windows 是 `ui`。改完界面树记得确认这里，并且 `--selfcheck` 会逐个 import mac2 的
+15 个模块 —— 它报错就说明 PyInstaller 漏收了，双击必闪退。
+
+### 9.3 聚焦搜索 / 启动台里出现两个同名应用，其中一个是旧图标
+
+不是图标缓存，是**磁盘上真有两个 bundle**，外加 LaunchServices 里的失效登记：
+
+```bash
+# 1) 有几个 bundle
+mdfind "kMDItemCFBundleIdentifier == 'com.dualswitch.app'"
+# 2) 有没有指向已删除路径的死登记
+/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/\
+LaunchServices.framework/Versions/A/Support/lsregister -dump \
+  | grep -i dualswitch | grep "path:"
+# 3) 注销死路径 / 重新登记真正在用的那个
+lsregister -u /旧的/路径/dualswitch.app
+lsregister -f "/Applications/屏幕切换.app"
+# 4) 刷图标缓存
+touch "/Applications/屏幕切换.app"; mdimport "/Applications/屏幕切换.app"; killall Dock
+```
+
+罪魁祸首通常是仓库里的 `dist/dualswitch.app` —— 项目目录被 Spotlight 一起索引，
+`CFBundleDisplayName` 也是「屏幕切换」，于是多出一格。已给 `dist/`、`build/` 各放
+`.metadata_never_index` 让 Spotlight 跳过（这两个文件是本地的，不进 git）。
+兜底 `sudo mdutil -E /` 重建全盘索引（几分钟），别用 `ResetLaunchPad`——会重置启动台排列。
+
+## 10. 配对连不上 / 配对后又断了（两端通用）
+
+配对是「一端显示 6 位码、另一端输码」，底层只复用 HELLO 挑战应答，不传 PIN 也不传密钥。
+出问题时先看是哪一步：**列表里没有设备** → 发现（UDP）；**有设备但输码失败** → 密钥/状态；
+**配对成功又显示「需重新配对」** → 身份绑定或配置被改。
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 附近设备列表一直是空的 | UDP 47824 被防火墙拦，或路由器开了 AP 隔离（企业 / 酒店 Wi-Fi 常见） | 两端放行 UDP 47824 + TCP 47823；实在不行用「手动填 IP」，配对仍能完成 |
+| 列表里有设备，但 20s 后自己消失 | 该设备不再广播（休眠 / 换网 / 退出） | 正常行为（TTL 20s），唤醒后会重新出现 |
+| 输码后转圈 15s 报「没有响应」 | 对端没在显示配对码（或端口不通） | 先确认对端点过「显示配对码」；再查 TCP 47823 |
+| 立刻报「密钥不匹配（PIN 不正确或对端不在配对状态）」 | 码输错，或对端的码已过期/被上一次失败作废 | 看剩余次数；用尽 5 次要让对端**重新显示**一个新码 |
+| 「配对码已失效」 | 5 次失败上限（输入端本地 5 次，显示端按 IP 累计 5 次同样作废） | 对端重新生成码；不是 bug |
+| 「已与另一台设备配对」 | 密钥对，但对端已绑定了另一台 device_id | 在对端「解除配对」后重新配；单机重装配置也可能留下旧绑定 |
+| 配对成功，重启后变「需重新配对」 | 两端 `clipboard.psk` 不一致（比如只改了一端的配置文件） | 重新配一次；`clip status` 可看是否已配对 |
+| 升级后能看到设备但不显示平台/配对状态 | 对端版本较旧，广播里没有 `plat`/`pairing` 字段 | 两端一起升级；同步本身不受影响 |
+
+排障命令（两端同一套）：
+
+```bash
+dualswitch clip status              # 设备 ID / 对端 / 连接状态 / 已配对
+dualswitch clip pair --pin 123456   # 无界面路径：两端输入同一个码（排障用）
+```
+
+> 注意：`clip pair` 是**两端同一个码**，界面配对是**一端显示、一端输入**。两条路径产出的 psk
+> 相同（同一个 PIN → 同一个 key），可以混用，但界面上的「已配对」状态要靠 `peer_device`，
+> 纯 CLI 配对的老配置会显示「已配对（旧版配置）」并提示重新配对。

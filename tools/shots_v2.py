@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,8 +28,10 @@ from dualswitch.config import platform_defaults  # noqa: E402
 from dualswitch.sync.engine import ClipRecord  # noqa: E402
 from dualswitch.ui.mac2 import icons, theme  # noqa: E402
 from dualswitch.ui.mac2.clipboard_page import ClipboardPage  # noqa: E402
+from dualswitch.ui.mac2.pairing_page import PairingPage  # noqa: E402
 from dualswitch.ui.mac2.settings_page import SettingsPage  # noqa: E402
 from dualswitch.ui.mac2.switch_page import SwitchPage  # noqa: E402
+from dualswitch.ui.mac2.window import PAGE_PAIR, PAGE_SETTINGS, PAGE_SWITCH  # noqa: E402
 from dualswitch.ui.mac2.window import MainWindow  # noqa: E402
 
 OUT = ROOT / "outputs"
@@ -69,6 +72,50 @@ class FakeEngine:
 
     def clear_records(self):
         self._records = []
+
+
+class FakePairEngine(FakeEngine):
+    """只给出图用的配对快照，不碰网络。"""
+
+    def __init__(self):
+        super().__init__([])
+        self._status = {
+            "state": "idle", "outcome": "", "error": "", "error_kind": "",
+            "pin": "", "expires_in": 0.0, "attempts_left": 5,
+            "paired": False, "legacy": False, "mismatch": False,
+            "connected": False, "peer_device": "", "peer_name": "",
+            "paired_at": 0.0, "addr": "", "last_sync_at": 0.0,
+        }
+
+    def set_status(self, **kwargs):
+        self._status.update(kwargs)
+
+    def pairing_status(self):
+        return dict(self._status)
+
+    def discovered_peers(self):
+        return [
+            {"device": "windows-3f2a91c4", "host": "DESKTOP-8Q2K", "ip": "192.168.1.31",
+             "port": 47823, "plat": "windows", "ver": "1.0.0", "pairing": True, "paired": False},
+            {"device": "mac-9a3f21be", "host": "zq-mac-mini", "ip": "192.168.1.42",
+             "port": 47823, "plat": "macos", "ver": "1.0.0", "pairing": False, "paired": True},
+        ]
+
+    def begin_pairing(self):
+        return "483921"
+
+    def cancel_pairing(self):
+        pass
+
+    def refresh_discovery(self):
+        pass
+
+    def unpair(self):
+        self._status.update(paired=False, peer_device="", peer_name="", paired_at=0.0)
+
+    def pair_with_peer(self, addr, pin):
+        return {"ok": True, "kind": "", "reason": "", "peer_device": "windows-3f2a91c4",
+                "peer_name": "DESKTOP-8Q2K", "addr": "192.168.1.31:47823"}
 
 
 def records() -> list[ClipRecord]:
@@ -124,10 +171,11 @@ def main() -> int:
         sp = SwitchPage(cfg, "Right Option+Space", "Q2790R3")
         cp = ClipboardPage(FakeEngine(records()))
         st = SettingsPage(cfg, ROOT / "build" / "tmp" / "cfg.json")
-        win.attach_pages(sp, cp, st)
+        pair_engine = FakePairEngine()
+        pair = PairingPage(pair_engine)
+        win.attach_pages(sp, cp, st, pair)
         win.show()
         win.set_side_status("已连接 Windows", True)
-        win.set_footer("对端在线 · Windows", True)
         app.processEvents()
 
         suffix = "" if mode == "light" else "-dark"
@@ -141,9 +189,79 @@ def main() -> int:
         app.processEvents()
         win.grab().save(str(OUT / f"v2-clipboard{suffix}.png"))
 
-        win.show_page(2)
+        win.show_page(PAGE_SETTINGS)
         app.processEvents()
         win.grab().save(str(OUT / f"v2-settings{suffix}.png"))
+
+        # ---- 配对电脑（7 个状态里挑代表性的 6 张） ----
+        pair_engine.set_status(
+            state="paired", paired=True, connected=True, peer_device="windows-3f2a91c4",
+            peer_name="DESKTOP-8Q2K", paired_at=time.time() - 120,
+            addr="192.168.1.31:47823",
+        )
+        win.show_page(PAGE_PAIR)
+        win.nav_pair.set_status_dot("ok", "已配对")
+        pair.activate()
+        app.processEvents()
+        win.grab().save(str(OUT / "v2-pair-paired.png"))
+
+        pair_engine.set_status(
+            state="idle", paired=False, connected=False, peer_device="", peer_name="",
+            paired_at=0.0, addr="",
+        )
+        pair.activate()
+        win.nav_pair.set_status_dot("idle", "未配对")
+        pair._scan_started = 0.0
+        pair._refresh_peers(force=True)
+        app.processEvents()
+        win.grab().save(str(OUT / "v2-pair-discover.png"))
+
+        pair_engine.set_status(state="showing", pin="483921", expires_in=292)
+        pair.activate()
+        app.processEvents()
+        win.grab().save(str(OUT / "v2-pair-showcode.png"))
+
+        pair_engine.set_status(state="idle", pin="", expires_in=0.0)
+        pair._show_discover()
+        pair._select_peer(pair_engine.discovered_peers()[0])
+        app.processEvents()
+        win.grab().save(str(OUT / "v2-pair-entercode.png"))
+
+        pair._show_success("DESKTOP-8Q2K", "windows-3f2a91c4", "192.168.1.31:47823")
+        win.nav_pair.set_status_dot("ok", "已配对")
+        app.processEvents()
+        win.grab().save(str(OUT / "v2-pair-success.png"))
+
+        pair._last_pin = "483921"
+        pair._show_failed(
+            "没能连上 DESKTOP-8Q2K",
+            "192.168.1.31:47823 没有响应。\n请确认两台电脑在同一个局域网，且没有被防火墙拦截。",
+        )
+        win.nav_pair.set_status_dot("idle", "未配对")
+        app.processEvents()
+        win.grab().save(str(OUT / "v2-pair-failed.png"))
+
+        # 侧栏边缘把手（真实产品 hover 才出现，这里手动露出截图）
+        win.set_nav_count(12)
+        win.nav_pair.set_status_dot("idle", "未配对")
+        win.show_page(PAGE_PAIR)
+        pair.activate()
+        win._handle_timer.stop()
+        win._place_sidebar_handle()
+        win.side_handle.show()
+        app.processEvents()
+        win.grab().save(str(OUT / "v2-sidebar-handle.png"))
+        win.side_handle.hide()
+
+        # 收起侧栏：只留图标，数量徽章 / 配对状态灯缩到图标右上角
+        win.set_sidebar_collapsed(True)
+        win.show_page(PAGE_SWITCH)
+        win.side_handle.show()
+        app.processEvents()
+        win.grab().save(str(OUT / "v2-sidebar-collapsed.png"))
+        win.side_handle.hide()
+        win.set_sidebar_collapsed(False)
+        win.show_page(PAGE_SWITCH)
 
         if mode == "light":
             # 悬停态：行内动作 + 预览气泡

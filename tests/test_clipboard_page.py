@@ -20,9 +20,14 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
+
+# 旧 ui/mac 已被 ui/mac2 取代；mac 上不再维护/运行旧剪贴板页用例。
+if sys.platform == "darwin":
+    pytest.skip("旧 ui/mac 已由 ui/mac2 取代", allow_module_level=True)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

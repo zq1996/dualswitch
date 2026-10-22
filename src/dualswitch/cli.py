@@ -606,6 +606,8 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
             host_label=cfg.effective_host(),
             switch_executor=_serve_switch,
             vcp_code=cfg.vcp_code,
+            save_config=lambda: config_mod.save(cfg, cfg_file),
+            version=__version__,
         )
         engine.start()
         controller.add_before_switch(lambda source, target: engine.push_now(f"switch:{source}"))

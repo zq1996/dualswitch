@@ -10,7 +10,7 @@
 | 类别 | 文件 | 唯一作者 | 另一端 |
 |---|---|---|---|
 | **共享语义** | `app.py`、`config.py`、`ddc/base.py`、`ddc/__init__.py`、`sync/*`、`ui/clipboard_feed.py`、`clipboard/base.py`、`clipboard/mock.py` | **macOS 端** | 只读，等 pull |
-| **界面（两端各一套，物理分开）** | `ui/mac/**` ↔ `ui/win/**`（各含 theme / widgets / window / settings / statusitem / clipboard_page / runner / focus_style） | **各写各的** | 互不读 |
+| **界面（两端各一套，物理分开）** | `ui/mac/**` ↔ `ui/win/**`（各含 theme / widgets / window / settings / statusitem / clipboard_page / runner / focus_style）；v2 树 `ui/mac2/**` ↔ `ui/win2/**`（含配对页 `pairing_page.py`，各自新建） | **各写各的** | 互不读 |
 | **平台实现** | `ddc/macos.py`、`hotkey/macos.py`、`clipboard/macos.py`、`ui/chrome/mac.py`、`packaging/macos/` ↔ `ddc/windows.py`、`hotkey/windows.py`、`clipboard/windows.py`、`ui/chrome/win.py`、`packaging/windows/` | 各写各的 | 互不读 |
 | **冻结（谁都不许改）** | `ui/__init__.py`（选路）、`ui/{theme,widgets,window,settings,statusitem,clipboard_page,runner,focus_style}.py`（兼容垫片） | — | — |
 | **契约** | `sync/protocol.py` 的常量与字节格式、`ui/chrome/base.py` 的字段表、`clipboard/base.py::ClipItem` | 变更须双端确认 | 见第 4 节 |
@@ -73,6 +73,9 @@ Windows 端等 pull。**两端各改一遍不是"并行"，是在制造 merge �
   另一端看到就不会碰同一块。
 - pull 后第一件事跑测试：macOS `QT_QPA_PLATFORM=offscreen pytest -q --basetemp=.pytest-tmp`，
   Windows `pytest -q`。红就先修，别在红的基础上继续写。
+- 共享层动了配对（2026-10-22 起 `sync/*` 自带 `begin_pairing / pair_with_peer / unpair`），
+  Windows 端 pull 后先单独跑 `pytest -q tests/test_pairing.py`（共享用例，两端都必须绿），
+  再动自己的 `ui/win2/pairing_page.py`。**底层不要另写一份。**
 - 一端在**等另一端**时，去做自己平台目录里的活，不要为了"同步"去改共享层的注释。
 
 ### 5.1 测试文件归属：平台专有的一律加门禁，不要互相改断言

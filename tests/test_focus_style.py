@@ -8,8 +8,13 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
+
+# 旧 ui 样式壳已随 ui/mac 一起冻结；mac 上不再运行。
+if sys.platform == "darwin":
+    pytest.skip("旧 ui/mac 已由 ui/mac2 取代", allow_module_level=True)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

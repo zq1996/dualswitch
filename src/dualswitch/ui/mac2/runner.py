@@ -13,17 +13,18 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from ... import __version__, logging_setup
-from ...config import SOURCE_UNKNOWN
+from ...config import SOURCE_UNKNOWN, save as save_config
 from ..clipboard_feed import LocalClipFeed
 from . import openers, statusmenu, theme
 from .clipboard_page import ClipboardPage
+from .pairing_page import PairingPage
 from .settings_page import SettingsPage
 from .switch_page import SwitchPage
-from .window import PAGE_CLIP, PAGE_SETTINGS, PAGE_SWITCH, MainWindow
+from .window import PAGE_CLIP, PAGE_PAIR, PAGE_SETTINGS, PAGE_SWITCH, MainWindow
 
 log = logging_setup.get("ui")
 
@@ -90,7 +91,7 @@ class UiRunner2(QObject):
         theme.set_appearance("light")
         self.app.setStyleSheet(theme.qss())
 
-        self.icon = QIcon(str(theme.asset("screen-switch.ico")))
+        self.icon = theme.app_icon()
         self.app.setWindowIcon(self.icon)
 
         hotkey_label = hotkey.describe() if hotkey else "未启用"
@@ -107,7 +108,15 @@ class UiRunner2(QObject):
             ),
         )
         self.settings_page = SettingsPage(cfg, self.cfg_file)
-        self.window.attach_pages(self.switch_page, self.clipboard_page, self.settings_page)
+        self.pairing_page = PairingPage(
+            clip_engine, default_port=cfg.clipboard.effective_peer_port()
+        )
+        self.window.attach_pages(
+            self.switch_page, self.clipboard_page, self.settings_page, self.pairing_page
+        )
+        # 配对落盘要用「当前」cfg（设置页保存后 runner 会换成新对象）
+        if self.clip_engine is not None:
+            self.clip_engine.set_config_saver(lambda: save_config(self.cfg, self.cfg_file))
 
         self.toast = Toast(self.window)
 
@@ -121,6 +130,12 @@ class UiRunner2(QObject):
         self.window.forceRequested.connect(self.do_force)
         self.window.deviceClicked.connect(lambda host: self.do_switch())
         self.window.hiddenToBackground.connect(self._enter_background)
+        self.window.pageChanged.connect(self._on_page_changed)
+        self.window.quitRequested.connect(self.quit_application)
+        self.pairing_page.toastRequested.connect(self.toast.show_text)
+        self.pairing_page.pairedChanged.connect(self._on_paired_changed)
+        self._last_page = PAGE_SWITCH
+        self._pair_text = ""
         self.switch_page.clipboardRequested.connect(lambda: self.show_page(PAGE_CLIP))
         self.switch_page.toastRequested.connect(self.toast.show_text)
         self.clipboard_page.toastRequested.connect(self.toast.show_text)
@@ -145,6 +160,12 @@ class UiRunner2(QObject):
         self._refresh_menu()
         self._refresh_hotkey_ui()
         self._refresh_conn_ui()
+        self._refresh_pair_ui()
+
+        self.pair_timer = QTimer(self)
+        self.pair_timer.setInterval(1000)
+        self.pair_timer.timeout.connect(self._refresh_pair_ui)
+        self.pair_timer.start()
 
         self.poll = QTimer(self)
         self.poll.setInterval(250)
@@ -223,7 +244,7 @@ class UiRunner2(QObject):
 
         act_quit = QAction("退出 屏幕切换", self.window)
         act_quit.setShortcut(QKeySequence("Ctrl+Q"))
-        act_quit.triggered.connect(self.quit)
+        act_quit.triggered.connect(self.quit_application)
         app_menu.addAction(act_quit)
 
         bar.addMenu(app_menu)
@@ -231,6 +252,9 @@ class UiRunner2(QObject):
 
     # ------------------------------------------------------------------ 动作
     def _enter_background(self) -> None:
+        # 关窗 = 离开配对页：显示中的配对码立即失效（§12.5）
+        if getattr(self, "pairing_page", None) is not None:
+            self.pairing_page.deactivate()
         from ..chrome import current as chrome
 
         chrome().set_dock_visible(False)
@@ -245,6 +269,8 @@ class UiRunner2(QObject):
         self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()
+        if self.window.current_page() == PAGE_PAIR:
+            self.pairing_page.activate()
         from ..chrome import current as chrome
 
         chrome().activate(self.window)
@@ -264,6 +290,31 @@ class UiRunner2(QObject):
         chrome().activate(self.window)
         if index == PAGE_CLIP:
             self.clipboard_page.refresh()
+
+    def open_pair_page(self) -> None:
+        """侧栏 / 菜单 / 剪贴板引导共用的唯一入口（§12.3）。"""
+        self.show_page(PAGE_PAIR)
+
+    def _on_page_changed(self, index: int) -> None:
+        previous, self._last_page = self._last_page, index
+        if index == PAGE_PAIR:
+            self.pairing_page.activate()
+        elif previous == PAGE_PAIR:
+            self.pairing_page.deactivate()
+
+    def _on_paired_changed(self, paired: bool) -> None:
+        self.clipboard_page.mark_dirty()
+        self._refresh_pair_ui()
+        self._refresh_menu()
+
+    def _refresh_pair_ui(self) -> None:
+        if getattr(self, "pairing_page", None) is None:
+            return
+        text = self.pairing_page.status_text()
+        self.window.nav_pair.set_status_dot(self.pairing_page.status_tone(), text)
+        if text != self._pair_text:
+            self._pair_text = text
+            self._refresh_menu()
 
     def do_switch(self, target: str | None = None) -> None:
         if self._busy:
@@ -325,6 +376,8 @@ class UiRunner2(QObject):
             if not self._quitting and self.window.isHidden():
                 self._leave_background()
                 self.window.showNormal()
+                if self.window.current_page() == PAGE_PAIR:
+                    self.pairing_page.activate()
             if self._retry_on_activate and self.hotkey is None and not self._hotkey_suspended:
                 QTimer.singleShot(250, self.retry_hotkey)
         return super().eventFilter(obj, event)
@@ -447,10 +500,8 @@ class UiRunner2(QObject):
         peer = "Windows" if self.cfg.other_host() == "windows" else "Mac"
         if connected:
             self.window.set_side_status(f"已连接 {peer}", ok=True)
-            self.window.set_footer(f"对端在线 · {peer}", ok=True)
         else:
             self.window.set_side_status("对端离线 · 仅本机", ok=False)
-            self.window.set_footer("对端未连接", ok=False)
 
     # ------------------------------------------------------------------ 菜单
     def _status_actions(self) -> dict:
@@ -460,7 +511,9 @@ class UiRunner2(QObject):
             "force": lambda: self.do_force(),
             "clipboard": lambda: self.show_page(PAGE_CLIP),
             "settings": lambda: self.show_page(PAGE_SETTINGS),
-            "quit": self.quit,
+            "pair": self.open_pair_page,
+            "pair_state": lambda: self.pairing_page.status_text(),
+            "quit": self.quit_application,
             "remote_ready": self._remote_ready,
         }
 
@@ -488,7 +541,7 @@ class UiRunner2(QObject):
             return
         self._shown_hotkey = label
         self.switch_page.set_hotkey(label)
-        self.window.set_side_hotkey(f"热键 {label}")
+        self.window.set_side_hotkey(label)
         if self.status is not None:
             self.status.set_tooltip(f"屏幕切换 · {label}（单击图标打开菜单）")
         self._refresh_menu()
@@ -592,14 +645,27 @@ class UiRunner2(QObject):
         self._retry_on_activate = False
         self._rebuild_hotkey(self.cfg)
 
-    def quit(self) -> None:
+    def quit_application(self) -> None:
+        """唯一退出路径：按钮 / 菜单⌘Q / 菜单栏菜单都走这里（INTERACTIONS §13.3）。"""
         log.info("用户从界面退出")
         self._quitting = True
+        try:
+            self.pair_timer.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.pairing_page.deactivate()
+        except Exception:  # noqa: BLE001
+            log.debug("取消配对失败", exc_info=True)
         try:
             self.clip_timer.stop()
             if self.clip_poll is not None:
                 self.clip_poll.stop()
-            self.clip_feed.close()
+            if self.clip_engine is not None:
+                # 退出按钮必须真的停同步引擎，而不是只停本地采集
+                self.clip_engine.stop()
+            else:
+                self.clip_feed.close()
         except Exception:  # noqa: BLE001
             log.debug("停止剪贴板采集失败", exc_info=True)
         try:

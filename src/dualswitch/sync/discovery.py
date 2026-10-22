@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
+import subprocess
+import sys
 import threading
 import time
 from typing import Any, Callable
@@ -25,6 +28,33 @@ log = logging.getLogger(__name__)
 
 MAGIC = "ds-clip"
 ANNOUNCE_INTERVAL_S = 5.0
+PEER_TTL_S = 20.0            # 超过这么久没再广播的设备不再显示（换 Wi-Fi 后不残留）
+
+
+def computer_name(fallback: str = "") -> str:
+    """本机电脑名（配对页列表里显示的名字），取不到就回落 device_id / 平台名。"""
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(
+                ["scutil", "--get", "ComputerName"],
+                capture_output=True, text=True, timeout=1.0,
+            )
+            name = (out.stdout or "").strip()
+            if name:
+                return name
+        except (OSError, subprocess.SubprocessError):
+            pass
+    elif sys.platform == "win32":
+        name = (os.environ.get("COMPUTERNAME") or "").strip()
+        if name:
+            return name
+    try:
+        name = socket.gethostname().strip()
+        if name and name.lower() != "localhost":
+            return name.split(".")[0]
+    except OSError:
+        pass
+    return fallback
 
 
 class Discovery:
@@ -35,12 +65,18 @@ class Discovery:
         host_label: str,
         service_port: int,
         discover_port: int = 47824,
+        platform: str = "",
+        version: str = "",
         on_peer: Callable[[str, int, dict[str, Any]], None] | None = None,
     ) -> None:
         self.device_id = device_id
         self.host_label = host_label
         self.service_port = int(service_port)
         self.discover_port = int(discover_port)
+        self.platform = platform
+        self.version = version
+        self.pairing = False          # 本机正在显示配对码
+        self.paired = False           # 本机已有配对对象
         self._on_peer = on_peer or (lambda ip, port, info: None)
         self._sock: socket.socket | None = None
         self._stop = threading.Event()
@@ -90,18 +126,48 @@ class Discovery:
             log.debug("广播失败：%s", exc)
 
     def _announce_loop(self) -> None:
-        info = {
-            "ds": MAGIC,
-            "v": 1,
-            "device": self.device_id,
-            "host": self.host_label,
-            "port": self.service_port,
-            "ts": 0,
-        }
         while not self._stop.is_set():
-            info["ts"] = round(time.time(), 3)
-            self._announce(info)
+            self.announce_now()
             self._stop.wait(ANNOUNCE_INTERVAL_S)
+
+    def announce_now(self) -> None:
+        """立刻广播一次（配对页「重新搜索」/ 状态变化时不用等 5s）。"""
+        self._announce(
+            {
+                "ds": MAGIC,
+                "v": 1,
+                "device": self.device_id,
+                "host": self.host_label,
+                "port": self.service_port,
+                "ts": round(time.time(), 3),
+                # 配对页要显示的增量字段；旧实现不认就直接忽略。
+                "plat": self.platform,
+                "ver": self.version,
+                "pairing": bool(self.pairing),
+                "paired": bool(self.paired),
+            }
+        )
+
+    def set_status(self, *, pairing: bool | None = None, paired: bool | None = None) -> None:
+        """更新广播里的配对状态，并立刻重播一次（对端列表 1.5s 内就能看到）。"""
+        changed = False
+        if pairing is not None and bool(pairing) != self.pairing:
+            self.pairing = bool(pairing)
+            changed = True
+        if paired is not None and bool(paired) != self.paired:
+            self.paired = bool(paired)
+            changed = True
+        if changed:
+            self.announce_now()
+
+    def alive_peers(self, max_age: float = PEER_TTL_S) -> list[dict[str, Any]]:
+        """按最近一次广播倒序返回还活着的设备（本机已排除）。"""
+        now = time.time()
+        dead = [dev for dev, info in self.peers.items()
+                if now - float(info.get("seen", 0.0)) > max_age]
+        for dev in dead:
+            self.peers.pop(dev, None)
+        return sorted(self.peers.values(), key=lambda i: float(i.get("seen", 0.0)), reverse=True)
 
     def _listen_loop(self) -> None:
         while not self._stop.is_set():
@@ -126,6 +192,7 @@ class Discovery:
             ip = str(addr[0])
             port = int(info.get("port") or self.service_port)
             info["ip"] = ip
+            info["seen"] = time.time()
             self.peers[device] = info
             try:
                 self._on_peer(ip, port, info)
@@ -133,4 +200,4 @@ class Discovery:
                 log.exception("on_peer 回调出错")
 
 
-__all__ = ["Discovery"]
+__all__ = ["Discovery", "computer_name"]

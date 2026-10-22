@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>侧栏收起按钮 · 3 个方案对比</title>
+<style>
+  :root{
+    --accent:#4E87FF; --accent-deep:#2E63E8; --accent-soft:rgba(78,135,255,.13);
+    --ink:#14181F; --ink2:#4B5566; --ink3:#8A93A3;
+    --line:#E3E7EE; --line-soft:#EDF0F5;
+    --card:#FFFFFF; --card2:#F7F9FC; --card3:#F0F3F8;
+    --sidebar:#F7F8FB;
+    --ok:#0E7C4A; --ok-bg:rgba(14,124,74,.11);
+    --idle:#7C8698; --idle-bg:rgba(124,134,152,.13);
+    --danger:#A82B2B; --danger-bg:rgba(168,43,43,.11);
+    --mono:"SF Mono","JetBrains Mono",Menlo,monospace;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:34px 38px 54px;background:#F2F4F8;color:var(--ink);
+    font-family:var(--font);font-size:13px;
+  }
+  h1{margin:0;font-size:22px;line-height:1.2;letter-spacing:-.02em;font-weight:720}
+  .sub{margin:9px 0 0;max-width:760px;font-size:12.5px;line-height:1.7;color:var(--ink2)}
+  .hint{
+    display:inline-flex;align-items:center;gap:7px;margin-top:14px;padding:6px 10px;
+    background:var(--accent-soft);color:var(--accent-deep);border-radius:8px;
+    font-size:11.5px;font-weight:650;
+  }
+  .grid{
+    display:grid;grid-template-columns:repeat(3,300px);gap:22px;margin-top:26px;
+    align-items:start;
+  }
+  .option{min-width:0}
+  .option-hd{display:flex;align-items:flex-start;gap:9px;margin-bottom:10px}
+  .badge{
+    width:22px;height:22px;border-radius:7px;background:var(--ink);color:#fff;
+    font-size:11px;font-weight:750;display:flex;align-items:center;justify-content:center;
+    flex-shrink:0;margin-top:1px;
+  }
+  .option-t{font-size:13px;font-weight:700;line-height:1.35}
+  .option-s{font-size:11px;line-height:1.6;color:var(--ink3);margin-top:2px}
+  .stage{
+    position:relative;height:500px;display:flex;border:1px solid var(--line);
+    border-radius:14px;overflow:hidden;background:var(--card);
+    box-shadow:0 1px 2px rgba(16,24,40,.04),0 10px 26px rgba(16,24,40,.05);
+  }
+  .sb{
+    position:relative;width:156px;flex-shrink:0;background:var(--sidebar);
+    border-right:1px solid var(--line-soft);padding:14px 10px;display:flex;
+    flex-direction:column;transition:width .18s ease;overflow:visible;
+  }
+  .stage.collapsed .sb{width:56px;padding-left:8px;padding-right:8px}
+  .nav-sec{
+    font-size:9.5px;font-weight:700;color:var(--ink3);letter-spacing:.06em;
+    padding:8px 10px 5px;white-space:nowrap;
+  }
+  .stage.collapsed .nav-sec{display:none}
+  .nav{
+    display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:8px;
+    color:var(--ink2);font-size:12.5px;font-weight:550;cursor:pointer;
+    transition:background .14s,color .14s;position:relative;
+  }
+  .nav:hover{background:var(--card3);color:var(--ink)}
+  .nav.on{background:var(--accent);color:#fff;font-weight:620}
+  .nav.on .ic{color:#fff}
+  .ic{width:17px;height:17px;display:flex;color:var(--ink3);flex-shrink:0}
+  .nav-tx{white-space:nowrap}
+  .stage.collapsed .nav{justify-content:center;padding:0;gap:0}
+  .stage.collapsed .nav-tx{display:none}
+  .cnt{
+    margin-left:auto;font-size:9.5px;font-weight:700;padding:1.5px 6px;border-radius:999px;
+    background:var(--accent-soft);color:var(--accent-deep);
+  }
+  .dot{
+    width:8px;height:8px;border-radius:4px;margin-left:auto;flex-shrink:0;
+    background:var(--idle);border:1px solid var(--card);
+  }
+  .stage.collapsed .cnt{
+    position:absolute;top:1px;right:6px;margin:0;font-size:7px;
+    height:9px;line-height:9px;padding:0 2px;border-radius:4.5px;
+  }
+  .stage.collapsed .dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:3.5px}
+  .spacer{flex:1}
+
+  /* footer：与导航共用 10px 左内边距；图标再缩进 10px（用户指定） */
+  .foot{padding:10px 0 2px;border-top:1px solid var(--line-soft)}
+  .frow{display:flex;align-items:center;gap:8px;height:18px;font-size:10px;color:var(--ink3)}
+  .frow + .frow{margin-top:4px}
+  .lead{width:16px;flex-shrink:0;display:flex;justify-content:center}
+  .fdot{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+  .keys{display:inline-flex;gap:3px}
+  .key{
+    min-width:18px;height:18px;padding:0 5px;border-radius:5px;background:var(--card3);
+    border:1px solid var(--line);display:inline-flex;align-items:center;justify-content:center;
+    font-size:10px;font-weight:650;color:var(--ink2);line-height:1;
+  }
+  .key.wide{min-width:30px}
+  .fsep{height:1px;background:var(--line-soft);margin:9px 0 7px}
+  .quit{
+    height:31px;border-radius:7px;display:flex;align-items:center;gap:8px;
+    padding-left:10px;color:var(--ink3);font-size:11px;font-weight:600;
+    cursor:pointer;transition:background .14s;
+  }
+  .quit svg{flex-shrink:0}
+  .quit:hover,.quit.is-hover{background:#FEF2F2}   /* 只淡红底，字/图标不变色 */
+  .stage.collapsed .foot .frow,.stage.collapsed .foot .fsep{display:none}
+  .stage.collapsed .quit{padding:0;justify-content:center}
+  .stage.collapsed .quit .quit-tx{display:none}
+
+  .content{
+    flex:1;min-width:0;background:
+      radial-gradient(120% 80% at 20% 0%,#FFFFFF 0%,#F7F9FC 58%,#F2F5FA 100%);
+    padding:16px 14px;position:relative;
+  }
+  .ghost-title{height:10px;width:64%;border-radius:5px;background:#E7ECF4}
+  .ghost-line{height:8px;border-radius:4px;background:#EDF1F7;margin-top:10px}
+  .ghost-line.short{width:52%}
+  .ghost-card{
+    margin-top:22px;height:92px;border-radius:12px;border:1px solid var(--line-soft);
+    background:rgba(255,255,255,.72);
+  }
+  .ghost-badge{
+    position:absolute;top:14px;right:12px;font-size:9px;font-weight:700;color:var(--accent-deep);
+    background:var(--accent-soft);padding:3px 7px;border-radius:999px;
+  }
+
+  /* A：边缘悬浮把手 */
+  .edge-toggle{
+    position:absolute;right:-8px;top:44%;width:15px;height:46px;border-radius:8px;
+    background:var(--card);border:1px solid var(--line);color:var(--ink3);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    box-shadow:0 2px 8px rgba(16,24,40,.12);opacity:0;transform:translateX(-3px);
+    transition:opacity .16s ease,transform .16s ease,color .14s,border-color .14s;
+    z-index:5;
+  }
+  .stage.demo .edge-toggle,.stageA:hover .edge-toggle{opacity:1;transform:translateX(0)}
+  .edge-toggle:hover{color:var(--accent-deep);border-color:var(--accent)}
+  .stage.collapsed .edge-toggle{right:-8px}
+
+  /* B：footer 集成 */
+  .foot-actions{display:flex;align-items:center;height:31px;gap:4px}
+  .foot-actions .quit{flex:1;padding-left:10px}
+  .foot-toggle{
+    width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;
+    color:var(--ink3);cursor:pointer;transition:background .14s,color .14s;flex-shrink:0;
+  }
+  .foot-toggle:hover{background:var(--card3);color:var(--ink)}
+  .stage.collapsed .foot-actions{flex-direction:column;height:auto;gap:2px}
+  .stage.collapsed .foot-actions .quit{width:100%;flex:none}
+
+  /* C：顶部悬浮 */
+  .top-toggle{
+    position:absolute;top:11px;right:6px;width:24px;height:24px;border-radius:6px;
+    display:flex;align-items:center;justify-content:center;color:var(--ink3);cursor:pointer;
+    opacity:0;transition:opacity .16s,background .14s,color .14s;z-index:4;
+  }
+  .stage.demo .top-toggle,.stageC:hover .top-toggle{opacity:1}
+  .top-toggle:hover{background:var(--card3);color:var(--ink)}
+  .stage.collapsed .top-toggle{top:8px;right:4px;opacity:1}
+
+  .stage-hint{
+    position:absolute;left:50%;bottom:8px;transform:translateX(-50%);
+    font-size:9px;color:var(--ink3);background:rgba(255,255,255,.86);
+    padding:2px 7px;border-radius:999px;border:1px solid var(--line-soft);
+    white-space:nowrap;pointer-events:none;
+  }
+
+  .tools{
+    margin-top:8px;display:flex;align-items:center;gap:8px;
+    font-size:10.5px;color:var(--ink3);
+  }
+  .toggle-demo{
+    height:24px;padding:0 9px;border-radius:6px;border:1px solid var(--line);
+    background:var(--card);color:var(--ink2);font:inherit;font-size:10.5px;font-weight:600;
+    cursor:pointer;
+  }
+  .toggle-demo:hover{border-color:var(--accent);color:var(--accent-deep)}
+  .note{
+    margin-top:30px;padding:18px 20px;border-radius:14px;background:var(--card);
+    border:1px solid var(--line);
+  }
+  .note h2{margin:0 0 8px;font-size:13px;font-weight:700}
+  .note ul{margin:0;padding-left:18px;color:var(--ink2);font-size:12px;line-height:1.8}
+  .note b{color:var(--ink)}
+  .hovers{
+    display:flex;gap:10px;margin-top:14px;
+  }
+  .hover-demo{
+    width:156px;border:1px solid var(--line);border-radius:10px;background:var(--sidebar);
+    padding:8px 10px;
+  }
+  .hover-demo .quit{padding-left:10px}
+</style>
+</head>
+<body>
+  <h1>侧栏收起按钮 · 3 个方案</h1>
+  <p class="sub">
+    共同点：收起后只留 56px 图标栏，剪贴板数量徽章和配对状态灯缩到图标右上角。
+    区别只在「收起 / 展开」按钮放在哪；三张卡片都可以点下面的按钮切换展开 / 收起。
+  </p>
+  <div class="hint">带淡蓝底的是推荐方案 A；真实产品里按钮 hover 才出现，这里为了预览让它常显。</div>
+
+  <div class="grid">
+    <!-- A -->
+    <section class="option">
+      <div class="option-hd">
+        <span class="badge">A</span>
+        <div>
+          <div class="option-t">边缘悬浮把手（推荐）</div>
+          <div class="option-s">贴在侧栏右边缘，垂直居中偏上；默认隐藏，hover 侧栏边缘出现。不占布局，顶部没有额头。</div>
+        </div>
+      </div>
+      <div class="stage stageA demo" data-option="A">
+        <div class="sb">
+          <div class="nav-sec">核心</div>
+          <div class="nav on"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h11l-2.6-2.6M15.5 12h-11l2.6 2.6"/></svg></span><span class="nav-tx">切换</span></div>
+          <div class="nav"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3" width="11" height="12" rx="2"/><path d="M6.5 3V2.2A1.2 1.2 0 017.7 1h2.6a1.2 1.2 0 011.2 1.2V3"/></svg></span><span class="nav-tx">剪贴板</span><span class="cnt">12</span></div>
+          <div class="nav-sec">系统</div>
+          <div class="nav"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11a3 3 0 004.2 0l2-2a3 3 0 00-4.2-4.2l-1 1"/><path d="M11 7a3 3 0 00-4.2 0l-2 2a3 3 0 004.2 4.2l1-1"/></svg></span><span class="nav-tx">配对电脑</span><span class="dot"></span></div>
+          <div class="nav"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M9 1.8v1.8M9 14.4v1.8M1.8 9h1.8M14.4 9h1.8M4 4l1.3 1.3M12.7 12.7l1.3 1.3M14 4l-1.3 1.3M5.3 12.7L4 14"/></svg></span><span class="nav-tx">设置</span></div>
+          <div class="spacer"></div>
+          <div class="foot">
+            <div class="frow"><span class="lead"><span class="fdot"></span></span><span>已连接 Windows</span></div>
+            <div class="frow"><span class="lead"></span><span>热键</span><span class="keys"><span class="key">⌥</span><span class="key wide">Space</span></span></div>
+            <div class="fsep"></div>
+            <div class="quit"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v6.2"/><path d="M12.3 4.2a6 6 0 11-8.6 0"/></svg><span class="quit-tx">退出应用</span></div>
+          </div>
+          <div class="edge-toggle" data-toggle><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></div>
+        </div>
+        <div class="content"><div class="ghost-badge">当前画面</div><div class="ghost-title"></div><div class="ghost-line"></div><div class="ghost-line short"></div><div class="ghost-card"></div></div>
+      </div>
+      <div class="tools"><button class="toggle-demo">看收起态</button><span>不占高度 · 把手仍在边缘</span></div>
+    </section>
+
+    <!-- B -->
+    <section class="option">
+      <div class="option-hd">
+        <span class="badge">B</span>
+        <div>
+          <div class="option-t">底部 footer 集成</div>
+          <div class="option-s">收起按钮放进 footer，和「退出应用」同一行；顶部完全没有额外元素，但 footer 会更满。</div>
+        </div>
+      </div>
+      <div class="stage stageB" data-option="B">
+        <div class="sb">
+          <div class="nav-sec">核心</div>
+          <div class="nav on"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h11l-2.6-2.6M15.5 12h-11l2.6 2.6"/></svg></span><span class="nav-tx">切换</span></div>
+          <div class="nav"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3" width="11" height="12" rx="2"/><path d="M6.5 3V2.2A1.2 1.2 0 017.7 1h2.6a1.2 1.2 0 011.2 1.2V3"/></svg></span><span class="nav-tx">剪贴板</span><span class="cnt">12</span></div>
+          <div class="nav-sec">系统</div>
+          <div class="nav"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11a3 3 0 004.2 0l2-2a3 3 0 00-4.2-4.2l-1 1"/><path d="M11 7a3 3 0 00-4.2 0l-2 2a3 3 0 004.2 4.2l1-1"/></svg></span><span class="nav-tx">配对电脑</span><span class="dot"></span></div>
+          <div class="nav"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M9 1.8v1.8M9 14.4v1.8M1.8 9h1.8M14.4 9h1.8M4 4l1.3 1.3M12.7 12.7l1.3 1.3M14 4l-1.3 1.3M5.3 12.7L4 14"/></svg></span><span class="nav-tx">设置</span></div>
+          <div class="spacer"></div>
+          <div class="foot">
+            <div class="frow"><span class="lead"><span class="fdot"></span></span><span>已连接 Windows</span></div>
+            <div class="frow"><span class="lead"></span><span>热键</span><span class="keys"><span class="key">⌥</span><span class="key wide">Space</span></span></div>
+            <div class="fsep"></div>
+            <div class="foot-actions">
+              <div class="quit"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v6.2"/><path d="M12.3 4.2a6 6 0 11-8.6 0"/></svg><span class="quit-tx">退出应用</span></div>
+              <div class="foot-toggle" data-toggle title="收起侧栏"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></div>
+            </div>
+          </div>
+        </div>
+        <div class="content"><div class="ghost-badge">当前画面</div><div class="ghost-title"></div><div class="ghost-line"></div><div class="ghost-line short"></div><div class="ghost-card"></div></div>
+      </div>
+      <div class="tools"><button class="toggle-demo">看收起态</button><span>footer 多一个图标</span></div>
+    </section>
+
+    <!-- C -->
+    <section class="option">
+      <div class="option-hd">
+        <span class="badge">C</span>
+        <div>
+          <div class="option-t">顶部悬浮</div>
+          <div class="option-s">按钮浮在「核心」标题右侧，hover 才出现，不预留高度；仍在顶部，但不会顶出一个空行。</div>
+        </div>
+      </div>
+      <div class="stage stageC demo" data-option="C">
+        <div class="sb">
+          <div class="nav-sec">核心</div>
+          <div class="nav on"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h11l-2.6-2.6M15.5 12h-11l2.6 2.6"/></svg></span><span class="nav-tx">切换</span></div>
+          <div class="nav"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3" width="11" height="12" rx="2"/><path d="M6.5 3V2.2A1.2 1.2 0 017.7 1h2.6a1.2 1.2 0 011.2 1.2V3"/></svg></span><span class="nav-tx">剪贴板</span><span class="cnt">12</span></div>
+          <div class="nav-sec">系统</div>
+          <div class="nav"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11a3 3 0 004.2 0l2-2a3 3 0 00-4.2-4.2l-1 1"/><path d="M11 7a3 3 0 00-4.2 0l-2 2a3 3 0 004.2 4.2l1-1"/></svg></span><span class="nav-tx">配对电脑</span><span class="dot"></span></div>
+          <div class="nav"><span class="ic"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M9 1.8v1.8M9 14.4v1.8M1.8 9h1.8M14.4 9h1.8M4 4l1.3 1.3M12.7 12.7l1.3 1.3M14 4l-1.3 1.3M5.3 12.7L4 14"/></svg></span><span class="nav-tx">设置</span></div>
+          <div class="spacer"></div>
+          <div class="foot">
+            <div class="frow"><span class="lead"><span class="fdot"></span></span><span>已连接 Windows</span></div>
+            <div class="frow"><span class="lead"></span><span>热键</span><span class="keys"><span class="key">⌥</span><span class="key wide">Space</span></span></div>
+            <div class="fsep"></div>
+            <div class="quit"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v6.2"/><path d="M12.3 4.2a6 6 0 11-8.6 0"/></svg><span class="quit-tx">退出应用</span></div>
+          </div>
+          <div class="top-toggle" data-toggle title="收起侧栏"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></div>
+        </div>
+        <div class="content"><div class="ghost-badge">当前画面</div><div class="ghost-title"></div><div class="ghost-line"></div><div class="ghost-line short"></div><div class="ghost-card"></div></div>
+      </div>
+      <div class="tools"><button class="toggle-demo">看收起态</button><span>hover 才出现</span></div>
+    </section>
+  </div>
+
+  <div class="note">
+    <h2>退出应用按钮（三张图统一调整）</h2>
+    <ul>
+      <li>图标左边距 <b>10px</b>，和导航图标同一条竖线，不再贴边线。</li>
+      <li>hover 只加 <b>淡红底</b>，图标和文字保持灰色，不做红字。</li>
+      <li>下面是正常态 / hover 态对比：</li>
+    </ul>
+    <div class="hovers">
+      <div class="hover-demo">
+        <div class="quit"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v6.2"/><path d="M12.3 4.2a6 6 0 11-8.6 0"/></svg><span class="quit-tx">退出应用 · 正常</span></div>
+      </div>
+      <div class="hover-demo">
+        <div class="quit is-hover"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v6.2"/><path d="M12.3 4.2a6 6 0 11-8.6 0"/></svg><span class="quit-tx">退出应用 · hover</span></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  document.querySelectorAll('.option').forEach(opt => {
+    const stage = opt.querySelector('.stage');
+    const btn = opt.querySelector('.toggle-demo');
+    btn.addEventListener('click', () => {
+      const collapsed = stage.classList.toggle('collapsed');
+      btn.textContent = collapsed ? '看展开态' : '看收起态';
+      const toggle = stage.querySelector('[data-toggle]');
+      if (toggle) {
+        toggle.innerHTML = collapsed
+          ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
+          : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>';
+      }
+    });
+    const toggle = stage.querySelector('[data-toggle]');
+    if (toggle) toggle.addEventListener('click', () => btn.click());
+  });
+</script>
+</body>
+</html>

@@ -94,6 +94,26 @@ def _selfcheck() -> int:
         # 只存在于 Windows 的兜底托盘：`build_fallback_status_item` 里函数内导入
         modules.append("dualswitch.ui.chrome.win32tray")
         modules.append("dualswitch.clipboard.windows")
+    elif sys.platform == "darwin":
+        # v2 界面树（macOS 默认界面）。runner 是入口，其余靠它静态 import；
+        # 这里逐个点名，任何一个漏收都会让「双击闪退」在自检阶段就暴露。
+        modules += [
+            "dualswitch.ui.mac2",
+            "dualswitch.ui.mac2.runner",
+            "dualswitch.ui.mac2.window",
+            "dualswitch.ui.mac2.widgets",
+            "dualswitch.ui.mac2.theme",
+            "dualswitch.ui.mac2.icons",
+            "dualswitch.ui.mac2.iconlib",
+            "dualswitch.ui.mac2.switch_page",
+            "dualswitch.ui.mac2.clipboard_page",
+            "dualswitch.ui.mac2.settings_page",
+            "dualswitch.ui.mac2.pairing_page",
+            "dualswitch.ui.mac2.preview",
+            "dualswitch.ui.mac2.statusmenu",
+            "dualswitch.ui.mac2.openers",
+            "dualswitch.ui.mac2.apps",
+        ]
     failures: list[str] = []
     for name in modules:
         try:
@@ -129,7 +149,10 @@ def main() -> int:
 
     from dualswitch.cli import main as cli_main
 
-    argv = sys.argv[1:] or ["ui"]
+    # 双击启动时用哪套界面：macOS 已切到 v2（ui2，宽窗口 + 侧栏）；Windows 仍走 v1，
+    # 等 win2 那边验收完由 Windows 端把这里的 "ui" 换掉（本行改动属共享层，见 COORDINATION）。
+    default_ui = "ui2" if sys.platform == "darwin" else "ui"
+    argv = sys.argv[1:] or [default_ui]
     try:
         return int(cli_main(argv) or 0)
     except SystemExit:
