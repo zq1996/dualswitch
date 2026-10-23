@@ -411,31 +411,18 @@ class UiRunner2(QObject):
             self.clip_poll.setInterval(0 if paused else 500)
 
     def _apply_dock_icon(self) -> None:
-        """把图标真正塞进 Dock。
+        """启动时先把图标设上。
 
-        macOS 的 Dock 图标只看 `NSApp.applicationIconImage`（或 .app 的 Info.plist）；
-        Qt 的 `setWindowIcon()` 只作用于窗口，传不进 Dock。命令行启动（没有 bundle
-        图标）时，热键把窗口唤到前台就能看到一张白纸（2026-10-23 用户实测）。
+        之后每次窗口从 Accessory 切回 Regular，`setActivationPolicy_` 都会把图标
+        重置成可执行文件的图标（命令行跑 python 就是白纸），所以 chrome 层的
+        `set_dock_visible()` 里还会再设一次 —— 这里只是让首帧就有图标。
         """
         try:
-            from AppKit import NSApplication, NSImage
-        except ImportError:  # pragma: no cover - 非 mac
+            from ..chrome.mac import apply_app_icon
+        except Exception:  # pragma: no cover - 非 mac
+            log.debug("取不到 chrome 层图标实现", exc_info=True)
             return
-        for name in theme.APP_ICON_NAMES:
-            try:
-                path = theme.asset(name)
-            except FileNotFoundError:
-                continue
-            try:
-                img = NSImage.alloc().initWithContentsOfFile_(str(path))
-            except Exception:  # noqa: BLE001
-                log.debug("读取图标失败：%s", path, exc_info=True)
-                continue
-            if img is not None:
-                NSApplication.sharedApplication().setApplicationIconImage_(img)
-                log.info("Dock 图标已设置：%s", path)
-                return
-        log.warning("没找到可用的 Dock 图标（%s）", ", ".join(theme.APP_ICON_NAMES))
+        apply_app_icon()
 
     def _on_clipboard_hotkey(self) -> None:
         """真正在主线程执行的那一半（信号已把调用从 tap 线程投递过来）。"""

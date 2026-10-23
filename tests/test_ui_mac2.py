@@ -1809,10 +1809,9 @@ def test_dock_icon_is_set_on_nsapplication(app, cfg):
     """
     NSAppKit = pytest.importorskip("AppKit")
 
-    from dualswitch.ui.mac2 import runner as runner_mod
+    from dualswitch.ui.chrome import mac as mac_chrome
 
-    bubble = runner_mod.UiRunner2.__new__(runner_mod.UiRunner2)   # 只借方法，不建窗口
-    bubble._apply_dock_icon()
+    mac_chrome.apply_app_icon()
 
     img = NSAppKit.NSApplication.sharedApplication().applicationIconImage()
     assert img is not None, "Dock 图标没设上"
@@ -1820,13 +1819,25 @@ def test_dock_icon_is_set_on_nsapplication(app, cfg):
     assert size.width >= 256, f"Dock 图标分辨率太低：{size.width}×{size.height}"
 
 
+def test_dock_icon_survives_policy_switch(app, cfg):
+    """切回 Regular 之后必须重设图标（setActivationPolicy_ 会把它重置成白纸）。"""
+    import inspect
+
+    from dualswitch.ui.chrome import mac as mac_chrome
+
+    src = inspect.getsource(mac_chrome.set_dock_visible)
+    assert "apply_app_icon()" in src, \
+        "set_dock_visible 切到 Regular 后没重设图标 —— 热键唤起会看到白纸"
+
+    icon_src = inspect.getsource(mac_chrome.apply_app_icon)
+    assert "setApplicationIconImage_" in icon_src, "没有调用 NSApplication.setApplicationIconImage_"
+
+
 def test_dock_icon_call_exists_in_init(app, cfg):
-    """无 pyobjc 的环境也能跑的守卫：构造函数里必须调用 _apply_dock_icon。"""
+    """构造函数里必须先设一次图标（首帧就有）。"""
     import inspect
 
     from dualswitch.ui.mac2 import runner as runner_mod
 
     init_src = inspect.getsource(runner_mod.UiRunner2.__init__)
     assert "_apply_dock_icon()" in init_src, "构造函数没有设置 Dock 图标"
-    method_src = inspect.getsource(runner_mod.UiRunner2._apply_dock_icon)
-    assert "setApplicationIconImage_" in method_src, "没有真正调用 NSApplication.setApplicationIconImage_"

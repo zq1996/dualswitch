@@ -371,6 +371,40 @@ def activate(window) -> None:  # noqa: ANN001
         pass
 
 
+def apply_app_icon() -> None:
+    """把母版图标塞给 NSApplication —— Dock 只认这个。
+
+    两个坑叠在一起（2026-10-23 用户实测「热键唤起是白纸」）：
+      1. `QApplication.setWindowIcon()` 只管窗口，**传不进 Dock**；
+      2. **每次 `setActivationPolicy_` 之后，系统都会退回可执行文件的图标**
+         （命令行跑 python 时就是那张白纸），所以切回 Regular 时必须重设。
+    """
+    try:
+        from AppKit import NSApplication, NSImage
+    except ImportError:  # pragma: no cover - 非 mac
+        return
+    try:
+        from ..mac2 import theme
+    except Exception:  # pragma: no cover
+        log.debug("取不到主题包，跳过程序坞图标", exc_info=True)
+        return
+    for name in theme.APP_ICON_NAMES:
+        try:
+            path = theme.asset(name)
+        except FileNotFoundError:
+            continue
+        try:
+            img = NSImage.alloc().initWithContentsOfFile_(str(path))
+        except Exception:  # noqa: BLE001
+            log.debug("读取图标失败：%s", path, exc_info=True)
+            continue
+        if img is not None:
+            NSApplication.sharedApplication().setApplicationIconImage_(img)
+            log.info("程序坞图标已设置：%s", path)
+            return
+    log.warning("没找到可用的程序坞图标")
+
+
 def set_dock_visible(visible: bool) -> None:
     """在「程序坞里有这个 App」和「只剩菜单栏图标」之间切换。
 
@@ -402,6 +436,9 @@ def set_dock_visible(visible: bool) -> None:
                 "Regular" if visible else "Accessory",
                 "显示" if visible else "隐藏",
             )
+            if visible:
+                # 切回 Regular 会把图标重置成可执行文件的图标，必须重设一次
+                apply_app_icon()
     except Exception:  # pragma: no cover - 拿不到 AppKit 时不该影响主流程
         log.warning("切换程序坞显示状态失败", exc_info=True)
 
