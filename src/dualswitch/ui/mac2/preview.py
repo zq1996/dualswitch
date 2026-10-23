@@ -562,8 +562,9 @@ class PreviewBubble(QFrame):
         "link": (theme.PV_CARD_MAX_W, 320),
     }
 
-    #: 窗口上限里不能给图片的部分：头部 40 + 底栏 49 + 正文上下内边距 28 + 注脚 32
-    IMG_CHROME_H = 40 + 49 + 28 + 32
+    #: 窗口上限里不能给图片的部分：头部 40 + 底栏 49 + 正文上下内边距 28
+    #: （注脚行已删，见 _build_image；它跟标题/底栏重复，白吃 32px 高度）
+    IMG_CHROME_H = 40 + 49 + 28
 
     @classmethod
     def _image_area(cls) -> tuple[int, int]:
@@ -601,10 +602,8 @@ class PreviewBubble(QFrame):
             pix_label.setPixmap(scaled)
             self._image_w = scaled.width()
         self._body_lay.addWidget(pix_label, 0, Qt.AlignHCenter)
-        if record.width and record.height:
-            note = QLabel(f"{record.width}×{record.height} · {human_size(record.size)}")
-            note.setObjectName("pvNote")
-            self._body_lay.addWidget(note, 0, Qt.AlignHCenter)
+        # 尺寸/大小不在正文重复：标题栏已有「图片 1560×1216」，底栏也有「… · 2.3MB · 1560×1216」。
+        # 正文里再摆一行注脚会白白吃掉 32px 高度 —— 图片区跟着矮一截（Frset 是 524，我们原来只有 477）。
 
     def _build_text(self, record) -> None:  # noqa: ANN001
         self._build_scroll_body(record.text or "", "pvText")
