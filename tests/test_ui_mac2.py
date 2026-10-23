@@ -1159,7 +1159,49 @@ def test_preview_image_never_upscaled(app, cfg):
         w for w in ctrl.bubble._body_wrap.findChildren(QLabel)
         if w.pixmap() is not None and not w.pixmap().isNull()
     ]
-    assert labels and labels[0].pixmap().width() <= 120, "小图被放大了，会糊"
+    assert labels, "没有图片标签"
+    pm = labels[0].pixmap()
+    # 用逻辑尺寸判断（物理宽 ÷ dpr），否则 2x 屏上会误判成放大
+    assert pm.width() / max(1.0, pm.devicePixelRatio()) <= 120, "小图被放大了，会糊"
+    ctrl.hide_now()
+
+
+def test_preview_image_retina_sharp(app, cfg):
+    """缩放位图必须按 devicePixelRatio 渲染真实像素（2026-10-23）。
+
+    只渲逻辑像素的话，521 宽的位图在 2x 屏上会被插值放大 2 倍，
+    截图里的文字直接糊掉 —— 这是用户实测报的 bug。
+    """
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QLabel
+
+    img = QImage(1200, 900, QImage.Format_ARGB32)
+    img.fill(QColor("#83A8FF"))
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    img.save(buf, "PNG")
+    rec = ClipRecord(id="sharp", kind="image", png=bytes(buf.data()),
+                     width=1200, height=900, size=9000, state="ok")
+    page = ClipboardPage(FakeEngine([rec]))
+    page.refresh()
+    row = page._rows["sharp"]
+    ctrl = page.preview_controller
+    ctrl.open_now(row.record, row.ui_kind, row.thumb)
+    bubble = ctrl.bubble
+    labels = [
+        w for w in bubble._body_wrap.findChildren(QLabel)
+        if w.pixmap() is not None and not w.pixmap().isNull()
+    ]
+    assert labels, "没有图片标签"
+    pm = labels[0].pixmap()
+    dpr = bubble.devicePixelRatioF()
+    # 位图的 dpr 必须和窗口一致，否则就是没按真实像素渲染
+    assert abs(pm.devicePixelRatio() - dpr) < 0.01, f"pixmap dpr={pm.devicePixelRatio()} ≠ 窗口 {dpr}"
+    # 物理像素 ≈ 逻辑显示尺寸 × dpr
+    logical_w = pm.width() / max(1.0, pm.devicePixelRatio())
+    assert abs(logical_w - bubble._image_w) <= 1, "逻辑宽度与气泡宽度不一致"
+    assert pm.width() >= logical_w * dpr * 0.99, "位图物理像素不足，2x 屏上会发虚"
     ctrl.hide_now()
 
 

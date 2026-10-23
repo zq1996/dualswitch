@@ -593,14 +593,21 @@ class PreviewBubble(QFrame):
             # 100px 的截图被拉到 300px 只会糊（显示宽度同时决定气泡宽度）。
             avail_w, avail_h = self._image_area()
             factor = min(1.0, avail_w / max(1, pix.width()), avail_h / max(1, pix.height()))
+            disp_w = max(1, int(pix.width() * factor))
+            disp_h = max(1, int(pix.height() * factor))
+            # Retina：位图要按 devicePixelRatio 渲染**真实像素**，再用
+            # setDevicePixelRatio 折算回逻辑尺寸。否则 521 逻辑像素的位图在 2x 屏上
+            # 会被插值放大 2 倍，截图里的文字直接糊掉（2026-10-23 用户实测反馈）。
+            dpr = float(self.devicePixelRatioF() or 1.0)
             scaled = pix.scaled(
-                max(1, int(pix.width() * factor)),
-                max(1, int(pix.height() * factor)),
+                max(1, int(disp_w * dpr)),
+                max(1, int(disp_h * dpr)),
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation,
             )
+            scaled.setDevicePixelRatio(dpr)
             pix_label.setPixmap(scaled)
-            self._image_w = scaled.width()
+            self._image_w = disp_w       # 逻辑宽度 —— 决定气泡宽，不能用 scaled.width()（那是物理像素）
         self._body_lay.addWidget(pix_label, 0, Qt.AlignHCenter)
         # 尺寸/大小不在正文重复：标题栏已有「图片 1560×1216」，底栏也有「… · 2.3MB · 1560×1216」。
         # 正文里再摆一行注脚会白白吃掉 32px 高度 —— 图片区跟着矮一截（Frset 是 524，我们原来只有 477）。
