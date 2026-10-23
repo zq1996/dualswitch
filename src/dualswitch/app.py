@@ -78,6 +78,11 @@ class SwitchController:
         self._last_detected: str | None = None
         self._confirm = 0
         self._current_source = cfg.effective_host()
+        # 界面用的三态（允许 unknown）。与 `_current_source` 分开：
+        # 后者永远只放 windows / mac，给切换逻辑算目标用，不能被 unknown 污染。
+        # 拆开之后「对端在线但本机看不到屏」也能如实显示成 mac，
+        # 而不是被 `_ever_seen_monitor` 一刀切成 unknown。
+        self._display_source = SOURCE_UNKNOWN
         # 是否「看过一眼」/「这次运行里到底见过外接屏」——决定能不能把看不见解释成在另一台
         self._source_checked = False
         self._ever_seen_monitor = False
@@ -95,7 +100,15 @@ class SwitchController:
         # 外部切换（例如在 Mac 上执行 CLI）不会经过本进程，
         # 只能靠「显示器还在不在本机」反推画面归属，见 detect_source()
         self.detect_interval_s = 2.0   # 轮询间隔
-        self.detect_settle_s = 8.0     # 自己刚切完的静默期，等显示器真正切走/切回
+        # 自己刚切完的静默期，等显示器真正切走/切回。
+        # 原来 8 秒：Set 发出去后界面立刻按目标态显示（乐观更新），而这段时间
+        # 完全不检测，于是「切了但屏没动」要等 8 秒才被纠正 —— 用户看到的就是
+        # 「明明屏还在本机，界面却说在 Mac」。Q2790PC 实测切换 1~2 秒完成，
+        # 留 3 秒足够，配合下面的两轮确认，总延迟从 10 秒降到 5 秒左右。
+        self.detect_settle_s = 3.0
+        # 两台都打不到这块屏时（拔线 / 关电 / 对端关机）作废「见过」证据，
+        # 否则会一直把「枚举不到」解释成「画面在对面」——见 _note_no_monitor()
+        self._monitor_absent = False
 
     def set_notifier(self, notifier: Notifier) -> None:
         """托盘就绪后再挂上通知通道。"""
@@ -182,23 +195,71 @@ class SwitchController:
         return self.classify(monitors)
 
     def classify(self, monitors: list) -> str:
-        """给定一次枚举结果，得出画面归属（纯判定，测试直接打这里）。"""
+        """给定一次枚举结果，得出画面归属（纯判定，测试直接打这里）。
+
+        「枚举不到」只说明这块屏**不在本机**，它要么在对端、要么根本没接线。
+        区分这两者需要第二证据，原来只有一条（`_ever_seen_monitor`），
+        而它在冷启动时天然拿不到：应用启动的瞬间屏若在对端，本机从来没见过它，
+        于是整个会话都停在 unknown —— 界面永远显示「未检测到外接显示器」，
+        哪怕画面明明就在对面。这就是「归属判断一半对一半错」的来源。
+
+        现在补第二条证据：**对端在线且已配对**。两台机器只共用一块屏，
+        对端在线就意味着屏在它那边的概率远高于「没接线」，冷启动也能判。
+        对端离线时仍回落到 `_ever_seen_monitor`，保持 ISSUE-001 的保守口径。
+        """
         needle = (self.cfg.monitor_match or "").strip()
         present = any(m.matches(needle) for m in monitors) if needle else bool(monitors)
         with self._lock:
             self._source_checked = True
             if present:
                 self._ever_seen_monitor = True
+                self._monitor_absent = False     # 又看到屏了，之前的「不在任何一台」作废
             ever_seen = self._ever_seen_monitor
+            absent = self._monitor_absent
         if present:
             return self.cfg.effective_host()
-        return SOURCE_UNKNOWN if not ever_seen else self.cfg.other_host()
+        if absent:
+            # 本机打不到、对端也打不到过：这块屏此刻不在任何一台机器上（拔线/关电）。
+            # 不能因为「见过」就继续说是「在对面」——那是个看起来确定的假答案。
+            return SOURCE_UNKNOWN
+        if ever_seen or self._remote_alive():
+            return self.cfg.other_host()
+        return SOURCE_UNKNOWN
+
+    def _remote_alive(self) -> bool:
+        """对端是否在线且已配对（能替本机发 Set 的状态）。
+
+        没注入 `remote_ready` 时（CLI 单机、大部分单测）一律 False，
+        判定行为与加这条证据之前完全一致 —— 这是改动向后兼容的前提。
+        """
+        probe = self.remote_ready
+        if probe is None:
+            return False
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001 - 状态查询不该影响判定
+            return False
+
+    def _note_no_monitor(self, detail: str = "") -> None:
+        """记下「这台屏此刻不在任何一台机器上」的结论（拔线 / 关电 / 对端关机）。
+
+        只在「本地 DDC 打不到 **且** 对端在线却没接住」时调用：两个方向都试过了，
+        才有资格推翻 `_ever_seen_monitor`。下次枚举到屏时 `classify()` 自动清除。
+        """
+        with self._lock:
+            self._monitor_absent = True
+        log.warning("本地与对端都打不到这块屏，归属退回 unknown（%s）", detail or "-")
 
     def note_scan(self, monitors: list) -> None:
-        """把启动时那次只读探测的结果喂进来，省掉「先猜一个再纠正」的闪烁。"""
+        """把一次只读探测的结果喂进来，省掉「先猜一个再纠正」的闪烁。
+
+        可重复调用：启动时先喂一次（此时同步引擎还没挂上，`remote_ready` 为空），
+        引擎连上后再喂一次，冷启动「屏在对端」的情形才能立刻判对，而不是等轮询。
+        """
         detected = self.classify(monitors)
-        if detected not in (None, SOURCE_UNKNOWN):
-            with self._lock:
+        with self._lock:
+            self._display_source = detected if detected is not None else SOURCE_UNKNOWN
+            if detected not in (None, SOURCE_UNKNOWN):
                 self._current_source = detected
 
     @property
@@ -206,12 +267,12 @@ class SwitchController:
         """界面该显示的状态：`windows` / `mac` / `SOURCE_UNKNOWN`。
 
         与 `current_source` 的区别：后者永远是某一台机器（切换时用它算目标），
-        前者在「根本没接屏，也没见过屏」时如实回答「不知道」。
+        前者允许「不知道」。判定由 `classify()` 得出后写进 `_display_source`，
+        这里只负责读 —— 不再拿 `_ever_seen_monitor` 当门槛，否则冷启动屏在
+        对端时会永远显示「未检测到外接显示器」。
         """
         with self._lock:
-            if not self._source_checked or not self._ever_seen_monitor:
-                return SOURCE_UNKNOWN
-            return self._current_source
+            return self._display_source
 
     def _detect_loop(self) -> None:
         """后台轮询：外部（另一台机器上的 CLI / 显示器 OSD）切换后同步状态。"""
@@ -235,6 +296,8 @@ class SwitchController:
             # 界面通过 source_state 自己显示「未检测到外接显示器」
             self._last_detected = SOURCE_UNKNOWN
             self._confirm = 1
+            with self._lock:
+                self._display_source = SOURCE_UNKNOWN
             return
         # 连续两轮结果一致才认：显示器消失/出现都有滞后，单轮容易误判
         if detected == self._last_detected:
@@ -245,6 +308,8 @@ class SwitchController:
         if self._confirm < 2:
             return
         with self._lock:
+            # 界面态先落，即使 _current_source 没变（例如初值就是 windows）也要显示出来
+            self._display_source = detected
             if detected == self._current_source:
                 return
             self._current_source = detected
@@ -327,10 +392,15 @@ class SwitchController:
             result.set_call_ms = (self._clock() - t_send) * 1000.0
         except DDCError as exc:
             # 本地打不到（屏在另一台）→ 请对端代发一次；成功就不再报错
+            remote_tried = self._remote_alive()
             if not policy_force and self._try_remote(
                 result, target, value, local_error=str(exc)
             ):
                 return result
+            # 本地打不到 + 对端在线却没接住 ⇒ 这块屏此刻不在任何一台机器上。
+            # 作废「见过」证据，让界面退回 unknown，而不是继续显示「在对面」。
+            if remote_tried:
+                self._note_no_monitor(str(exc))
             result.set_call_ms = (self._clock() - t_send) * 1000.0
             result.error = str(exc)
             log.error("切换失败（目标 %s / 值 %d）：%s", target, value, exc)
@@ -352,6 +422,8 @@ class SwitchController:
             # 而不是「压根没接线」
             self._source_checked = True
             self._ever_seen_monitor = True
+            self._monitor_absent = False     # 指令确实发出去了，屏还在
+            self._display_source = target    # 界面立刻按目标态显示（乐观），轮询负责纠偏
 
         log.info("%s", result.summary())
         if result.send_latency_ms > 200:
@@ -407,6 +479,8 @@ class SwitchController:
             self._current_source = target
             self._source_checked = True
             self._ever_seen_monitor = True
+            self._monitor_absent = False
+            self._display_source = target    # 对端替我们切了，界面同样按目标态显示
         log.info("%s", result.summary())
         self._record(result)
         return True

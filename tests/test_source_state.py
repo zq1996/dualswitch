@@ -173,6 +173,95 @@ def test_failed_switch_is_not_evidence():
 
 
 # --------------------------------------------------------------------------- #
+# 冷启动屏在对端（2026-10-23）：光靠「本次运行见过」判不出来
+#
+# 原来的口径只有一条证据 `_ever_seen_monitor`，而它在冷启动时天然拿不到：
+# 应用启动的瞬间屏若在对端，本机从没枚举到过它，于是整个会话停在 unknown。
+# 现在补第二条证据「对端在线且已配对」—— 两台机器只共用一块屏。
+# --------------------------------------------------------------------------- #
+def test_cold_start_screen_on_peer_with_remote_online():
+    ctl, _ = new_controller(monitors=[])
+    ctl.remote_ready = lambda: True
+    ctl.note_scan([])
+    assert ctl.source_state == "mac"
+    assert ctl.detect_source() == "mac"
+
+
+def test_cold_start_without_peer_stays_unknown():
+    """对端离线时没有第二证据，仍按 ISSUE-001 的保守口径报 unknown（不能回归）。"""
+    ctl, _ = new_controller(monitors=[])
+    ctl.remote_ready = lambda: False
+    ctl.note_scan([])
+    assert ctl.source_state == SOURCE_UNKNOWN
+
+
+def test_remote_probe_failure_is_treated_as_offline():
+    """状态查询抛异常不能把判定搞崩，按「离线」处理。"""
+    ctl, _ = new_controller(monitors=[])
+
+    def boom():
+        raise RuntimeError("transport 炸了")
+
+    ctl.remote_ready = boom
+    assert ctl.detect_source() == SOURCE_UNKNOWN
+
+
+def test_remote_evidence_does_not_override_present_monitor():
+    """能枚举到屏时永远判本机 —— 对端在线只是「看不到时」的补充证据。"""
+    ctl, _ = new_controller()
+    ctl.remote_ready = lambda: True
+    assert ctl.detect_source() == "windows"
+
+
+def test_both_sides_no_monitor_returns_unknown():
+    """本地打不到 + 对端在线却没接住 ⇒ 屏不在任何一台，退回 unknown。"""
+    ctl, backend = new_controller(monitors=[])
+    ctl.remote_ready = lambda: True
+    asked: list[int] = []
+
+    def remote_fail(value):
+        asked.append(value)
+        return False, "对端也没找到显示器"
+
+    def local_fail(value):
+        # 真实后端（WindowsBackend._acquire_one）在枚举不到屏时抛这句；
+        # MockBackend 不检查 monitors，这里显式补上，否则会走「本地成功」分支
+        raise DDCError("未发现物理显示器（可能显示器已切到另一台主机）")
+
+    ctl.remote_switch = remote_fail
+    backend.set_input = local_fail
+    result = ctl.switch_now()              # 本地 DDCError → 远端也失败
+    assert result.ok is False
+    assert asked == [18]                   # 确实问过对端，不是直接放弃
+    assert ctl.source_state == SOURCE_UNKNOWN
+
+
+def test_absent_flag_clears_when_monitor_returns():
+    """屏插回来要立刻恢复，不能一直卡在 unknown。"""
+    ctl, backend = new_controller(monitors=[])
+
+    def local_fail(value):
+        raise DDCError("未发现物理显示器")
+
+    backend.set_input = local_fail
+    ctl.remote_ready = lambda: True
+    ctl.remote_switch = lambda value: (False, "对端也没找到")
+    ctl.switch_now()
+    assert ctl.source_state == SOURCE_UNKNOWN
+
+    backend._monitors = MockBackend().list_monitors()   # 模拟屏又出现了
+    assert ctl.detect_source() == "windows"             # 判定已经恢复
+    ctl.note_scan(backend._monitors)                    # 真实路径是轮询，这里直接喂
+    assert ctl.source_state == "windows"
+
+
+def test_settle_window_is_short_enough():
+    """切完后的静默期不能太长：8 秒会让「切了但屏没动」看着像判错。"""
+    ctl, _ = new_controller()
+    assert ctl.detect_settle_s <= 3.0
+
+
+# --------------------------------------------------------------------------- #
 # 界面
 # --------------------------------------------------------------------------- #
 @pytest.fixture(scope="module")

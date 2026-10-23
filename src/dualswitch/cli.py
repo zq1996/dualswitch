@@ -142,6 +142,11 @@ def cmd_run(args) -> int:
 
     controller.start()
     clip_engine = _start_clip_engine(cfg, cfg_file, controller, backend)
+    if clip_engine is not None:
+        # 再喂一次启动探测：上面那次 note_scan 时同步引擎还没挂上，判不了「屏在对端」
+        # （冷启动屏在对面时会被判成 unknown）。引擎连上后 `remote_ready` 可用，
+        # 这里重判一次，界面首帧就是对的，不用等 2 秒轮询纠正。
+        controller.note_scan(startup_monitors)
 
     from . import tray as tray_mod
 
@@ -660,7 +665,21 @@ def cmd_ui(args) -> int:
         print(f"[FAIL] 初始化 DDC 后端失败：{exc}")
         return 2
 
+    # 启动时一次性只读探测（与 cmd_run 一致）。ui / ui2 原来都没有这一步，
+    # 界面首帧必然显示「未检测到外接显示器」，要等 2 秒轮询才纠正 —— 看着就像判错了。
+    startup_monitors: list = []
+    try:
+        startup_monitors = backend.list_monitors()
+        log.info(
+            "发现 %d 个物理显示器：%s",
+            len(startup_monitors),
+            "; ".join(m.label() for m in startup_monitors),
+        )
+    except DDCError as exc:
+        log.warning("枚举显示器失败：%s", exc)
+
     controller = SwitchController(cfg, backend)
+    controller.note_scan(startup_monitors)
 
     warning: str | None = None
     hotkey = None
@@ -717,7 +736,21 @@ def cmd_ui2(args) -> int:
         print(f"[FAIL] 初始化 DDC 后端失败：{exc}")
         return 2
 
+    # 启动时一次性只读探测（与 cmd_run 一致）。ui / ui2 原来都没有这一步，
+    # 界面首帧必然显示「未检测到外接显示器」，要等 2 秒轮询才纠正 —— 看着就像判错了。
+    startup_monitors: list = []
+    try:
+        startup_monitors = backend.list_monitors()
+        log.info(
+            "发现 %d 个物理显示器：%s",
+            len(startup_monitors),
+            "; ".join(m.label() for m in startup_monitors),
+        )
+    except DDCError as exc:
+        log.warning("枚举显示器失败：%s", exc)
+
     controller = SwitchController(cfg, backend)
+    controller.note_scan(startup_monitors)
 
     warning: str | None = None
     hotkey = None
@@ -732,6 +765,11 @@ def cmd_ui2(args) -> int:
 
     controller.start()
     clip_engine = _start_clip_engine(cfg, cfg_file, controller, backend)
+    if clip_engine is not None:
+        # 再喂一次启动探测：上面那次 note_scan 时同步引擎还没挂上，判不了「屏在对端」
+        # （冷启动屏在对面时会被判成 unknown）。引擎连上后 `remote_ready` 可用，
+        # 这里重判一次，界面首帧就是对的，不用等 2 秒轮询纠正。
+        controller.note_scan(startup_monitors)
 
     # v2 界面按平台分发：Windows → ui/win2（自绘标题栏 + 托盘），其它 → ui/mac2。
     # 旧 `ui` 子命令一行不动（两条路并行，验收后旧树才删）。
