@@ -467,6 +467,44 @@ def test_pairing_page_unpair_needs_inline_confirm(app):
     assert page._state == "discover"
 
 
+def test_pairing_unpair_confirm_survives_tick(app):
+    # 真机 bug（2026-10-23）：「解除配对」的二次确认刚显示就被 500ms 的轮询藏回去，
+    # 用户根本点不到。_tick 只许刷字段，不许碰 confirm_box。
+    engine = FakePairEngine(paired=True, peer_device="windows-3f2a91c4",
+                            peer_name="DESKTOP-8Q2K", addr="192.168.1.31:47823")
+    page = PairingPage(engine)
+    page.resize(592, 560)
+    page.show()
+    page.activate()
+    page._ask_unpair()
+    assert not page.confirm_box.isHidden()
+    for _ in range(5):
+        page._tick()
+    assert page._state == "paired"
+    assert not page.confirm_box.isHidden(), "轮询把二次确认藏走了（按钮点不到）"
+    assert page.confirm_title.text() == "解除和 DESKTOP-8Q2K 的配对？"
+
+
+def test_pairing_replace_confirm_survives_peer_rebuild(app):
+    # 「替换配对」确认框不能放在设备列表里：列表按 device id 整块重建会连它一起 destroy，
+    # self._replace_box 变成悬空指针，之后再 show/hide 就是 RuntimeError。
+    engine = FakePairEngine(paired=True, peer_device="windows-3f2a91c4",
+                            peer_name="DESKTOP-8Q2K", addr="192.168.1.31:47823")
+    page = PairingPage(engine)
+    page.resize(592, 560)
+    page.show()
+    page.activate()
+    page._begin_repair()
+    page._ask_replace(engine.peers[0])
+    assert not page._replace_box.isHidden()
+    engine.peers = [dict(engine.peers[0], device="windows-99999999", host="DESKTOP-NEW")]
+    page._refresh_peers(force=True)
+    assert page._peer_row_order == ["windows-99999999"]
+    assert not page._replace_box.isHidden(), "设备列表重建把替换确认框一起删了"
+    page._hide_replace_confirm()          # 悬空指针会在这里抛 RuntimeError
+    assert page._replace_box.isHidden()
+
+
 def test_pairing_page_status_text(app):
     engine = FakePairEngine()
     page = PairingPage(engine)

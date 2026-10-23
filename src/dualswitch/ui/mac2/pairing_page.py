@@ -378,6 +378,13 @@ class PairingPage(QWidget):
         card_lay.addWidget(_small("两台电脑需要连在同一个 Wi-Fi / 局域网，并都打开「启用跨端剪贴板」。", "pairHelp"))
         lay.addWidget(card)
 
+        # 「替换配对」确认框挂在页面里，不放进 peer_list_lay：
+        # 设备列表每次 id 变化会整块重建（_rebuild_peer_rows 会 destroy 掉里面所有控件），
+        # 挂在里面的话确认框会被顺手删掉，self._replace_box 变成悬空指针，
+        # 之后再 show()/hide() 直接 RuntimeError 崩掉。
+        self._replace_box = self._build_replace_confirm()
+        lay.addWidget(self._replace_box)
+
         links = QVBoxLayout()
         links.setContentsMargins(2, 0, 2, 0)
         links.setSpacing(2)
@@ -896,6 +903,20 @@ class PairingPage(QWidget):
         self.pairedChanged.emit(True)
 
     def _show_paired(self) -> None:
+        """进入「已配对」页：刷字段 + 收掉二次确认 + 切页。"""
+        self._render_paired()
+        self.confirm_box.hide()
+        self._hide_replace_confirm()
+        self._set_state("paired")
+        self._update_pill()
+
+    def _render_paired(self) -> None:
+        """只刷「已配对」卡片里的动态字段，不动确认面板、不动当前页。
+
+        `_tick()` 每 500ms 会走一次这里。以前它调的是 `_show_paired()`，而那个
+        函数结尾有 `confirm_box.hide()` —— 于是「解除配对」弹出的二次确认面板
+        刚显示 0–500ms 就被藏回去，用户完全点不到（2026-10-23 真机报的 bug）。
+        """
         st = self._status()
         name = st.get("peer_name") or st.get("peer_device") or "另一台电脑"
         self.paired_name.setText(name)
@@ -909,9 +930,6 @@ class PairingPage(QWidget):
         self.paired_facts[1]["地址"].setText(st.get("addr") or "—")
         self.paired_facts[1]["配对时间"].setText(_fmt_time(float(st.get("paired_at") or 0)))
         self.legacy_note.setVisible(bool(st.get("legacy")))
-        self.confirm_box.hide()
-        self._set_state("paired")
-        self._update_pill()
 
     def _show_failed(self, title: str, sub: str) -> None:
         self.failed_title.setText(title)
@@ -1108,34 +1126,38 @@ class PairingPage(QWidget):
     _replace_box: QFrame | None = None
     _replace_target: dict[str, Any] | None = None
 
+    def _build_replace_confirm(self) -> QFrame:
+        """「继续配对会替换现有配对」的内联确认（页面级，只建一次）。"""
+        box = QFrame()
+        box.setObjectName("pairConfirm")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(4)
+        self._replace_title = label("", "pairConfirmTitle")
+        lay.addWidget(self._replace_title)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 6, 0, 0)
+        row.setSpacing(9)
+        b_no = QPushButton("取消")
+        b_no.setObjectName("ghostBtn")
+        b_no.setFixedHeight(30)
+        b_no.setCursor(Qt.PointingHandCursor)
+        b_no.clicked.connect(self._hide_replace_confirm)
+        b_yes = QPushButton("继续配对")
+        b_yes.setObjectName("primary")
+        b_yes.setFixedHeight(30)
+        b_yes.setCursor(Qt.PointingHandCursor)
+        b_yes.clicked.connect(self._confirm_replace)
+        row.addWidget(b_no)
+        row.addWidget(b_yes, 1)
+        lay.addLayout(row)
+        box.hide()
+        return box
+
     def _ask_replace(self, peer: dict[str, Any]) -> None:
         st = self._status()
         self._replace_target = dict(peer)
         self._pending_peer = dict(peer)
-        if self._replace_box is None:
-            self._replace_box = QFrame()
-            self._replace_box.setObjectName("pairConfirm")
-            lay = QVBoxLayout(self._replace_box)
-            lay.setContentsMargins(14, 12, 14, 12)
-            lay.setSpacing(4)
-            self._replace_title = label("", "pairConfirmTitle")
-            lay.addWidget(self._replace_title)
-            row = QHBoxLayout()
-            row.setContentsMargins(0, 6, 0, 0)
-            row.setSpacing(9)
-            b_no = QPushButton("取消")
-            b_no.setObjectName("ghostBtn")
-            b_no.setFixedHeight(30)
-            b_no.setCursor(Qt.PointingHandCursor)
-            b_no.clicked.connect(self._hide_replace_confirm)
-            b_yes = QPushButton("继续配对")
-            b_yes.setObjectName("primary")
-            b_yes.setFixedHeight(30)
-            b_yes.setCursor(Qt.PointingHandCursor)
-            b_yes.clicked.connect(self._confirm_replace)
-            row.addWidget(b_no)
-            row.addWidget(b_yes, 1)
-            lay.addLayout(row)
         old = st.get("peer_name") or st.get("peer_device") or "现有设备"
         name = str(peer.get("host") or peer.get("ip") or "这台电脑")
         if st.get("paired") and str(peer.get("device") or "") != st.get("peer_device"):
@@ -1143,8 +1165,6 @@ class PairingPage(QWidget):
         else:
             self._replace_title.setText(f"{name} 已和别的电脑配对，继续会替换它现有的配对？")
         self._replace_box.show()
-        if self.peer_list_lay.indexOf(self._replace_box) < 0:
-            self.peer_list_lay.insertWidget(0, self._replace_box)
 
     def _hide_replace_confirm(self) -> None:
         if self._replace_box is not None:
@@ -1342,7 +1362,7 @@ class PairingPage(QWidget):
         elif state == "connecting":
             self._tick_connecting()
         elif state == "paired":
-            self._show_paired()
+            self._render_paired()
 
     def _tick_show_code(self) -> None:
         st = self._status()
