@@ -23,6 +23,10 @@ log = logging_setup.get("app")
 
 Notifier = Callable[[str, str], None]  # (标题, 正文)
 
+# 回读读到目标值后，隔多久复读一次以排除「切了又被抢回」。
+# Q2790PC 实测：Set 18 后 1 秒内回读是 18，3 秒后画面仍在 HDMI。
+REBOUND_CHECK_DELAY_S = 1.2
+
 
 @dataclass
 class SwitchResult:
@@ -539,9 +543,18 @@ class SwitchController:
             try:
                 current = self.backend.get_input()
                 if current == result.value:
-                    result.readback = "confirmed"
-                    result.readback_detail = f"VCP 0x{self.cfg.vcp_code:02X} = {current}（{attempts} 次尝试）"
-                    log.info("回读确认：%s", result.readback_detail)
+                    # 读到目标值先别急着确认：Q2790PC 实测会「先接受、再被自动
+                    # 信号源抢回」。只读一次会把假成功报成 confirmed —— 日志里
+                    # 21:29:38「回读确认 18」+ 21:29:41「画面仍在 windows」就是这情况。
+                    result.readback_detail = (
+                        f"VCP 0x{self.cfg.vcp_code:02X} = {current}（{attempts} 次尝试）"
+                    )
+                    if self._confirm_not_bounced(result):
+                        result.readback = "confirmed"
+                        log.info("回读确认：%s", result.readback_detail)
+                    else:
+                        result.readback = "unconfirmed"
+                        log.warning("回读回弹（切了又被抢回）：%s", result.readback_detail)
                     return
                 last_detail = f"读回 {current}，期望 {result.value}"
             except DDCError as exc:
@@ -556,6 +569,28 @@ class SwitchController:
         log.info("回读未确认（%s）；Q2790PC 的 HDMI 通道读数已知不可靠，仅记录", last_detail)
         if rb.notify_on_unconfirmed and self.cfg.notify:
             self._notify("切换指令已发送", "显示器未确认，详见日志。")
+
+    def _confirm_not_bounced(self, result: SwitchResult) -> bool:
+        """读到目标值后隔一拍复读，确认不是「切了又被显示器抢回」。
+
+        返回 False = 检测到回弹（`readback_detail` 已写明回弹后的读数）。
+        复读时读不到屏是**成功**信号（屏真的切走了，本机枚举不到它），
+        不能当成失败 —— 否则正常切换会被全部误报成 unconfirmed。
+        """
+        time.sleep(REBOUND_CHECK_DELAY_S)
+        try:
+            again = self.backend.get_input()
+        except DDCError:
+            result.readback_detail += "；复读时屏已离开本机"
+            return True
+        except Exception:  # pragma: no cover - 驱动层怪异常按成功处理
+            return True
+        if again == result.value:
+            return True
+        result.readback_detail += (
+            f"；{REBOUND_CHECK_DELAY_S:.1f}s 后回弹到 {again}（显示器自动信号源？）"
+        )
+        return False
 
     def _record(self, result: SwitchResult) -> None:
         with self._lock:
