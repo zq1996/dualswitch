@@ -432,7 +432,11 @@ class PreviewBubble(QFrame):
         if isinstance(child, QLabel):
             pix = child.pixmap()
             if pix is not None and not pix.isNull():
-                return pix.height() + 2
+                # pixmap 尺寸是**物理像素**。Retina 下必须除以 devicePixelRatio 才是
+                # 逻辑高度（QLabel.sizeHint() 在这点上同样给物理高度），
+                # 否则 301 的图会被当成 602 算，窗口高度直接翻倍、图被挤成一条缝。
+                dpr = float(pix.devicePixelRatio() or 1.0)
+                return int(round(pix.height() / dpr)) + 2
             fm = QFontMetrics(child.font())
             if child.wordWrap():
                 flags = Qt.TextWordWrap | Qt.TextExpandTabs

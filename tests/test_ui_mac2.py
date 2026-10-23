@@ -1205,6 +1205,28 @@ def test_preview_image_retina_sharp(app, cfg):
     ctrl.hide_now()
 
 
+def test_preview_measure_uses_logical_pixmap_height(app, cfg):
+    """_measure_body_child 必须按**逻辑**高度算（2026-10-23）。
+
+    pixmap 存的是物理像素：Retina 下 `pix.height()` 是逻辑高度的 2 倍。
+    直接拿它算会把窗口高度翻倍，预览窗出现大片空白、图片被挤成一条缝。
+    用 setDevicePixelRatio(2) 的合成 pixmap 稳定复现，不依赖测试机是不是 retina。
+    """
+    from PySide6.QtGui import QColor, QPixmap
+    from PySide6.QtWidgets import QLabel
+
+    from dualswitch.ui.mac2.preview import PreviewBubble
+
+    pm = QPixmap(200, 100)
+    pm.fill(QColor("#83A8FF"))
+    pm.setDevicePixelRatio(2.0)          # 模拟 Retina：物理 200×100 = 逻辑 100×50
+    label = QLabel()
+    label.setPixmap(pm)
+
+    got = PreviewBubble._measure_body_child(label, 500)
+    assert got == 52, f"应按逻辑高度 50 计算（+2 padding），实际 {got} —— 说明用了物理像素 100"
+
+
 def test_preview_image_clamps_to_bounds(app, cfg):
     """图片预览走 Frset 的 clamp 模型：下限 346×226、上限 562×626（2026-10-23 实测）。
 
