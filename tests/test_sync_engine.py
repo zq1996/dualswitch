@@ -277,3 +277,52 @@ def test_no_discover_env_disables_broadcast(monkeypatch):
         assert disc._threads == [], "不该起广播线程"
     finally:
         engine.stop()
+
+
+def test_unpaired_engine_does_not_dial_out():
+    """没有 psk（key=None）就不该主动外连（BUG-006）。
+
+    未配对的机器没有任何东西能同步，连上去只会制造一次认证失败，
+    然后 200ms 再连一次 —— 对端出配对码时会被打到「配对码已失效」。
+    """
+    from dualswitch.sync.transport import Transport
+
+    port = _free_port()
+    transport = Transport(
+        device_id="mac-nokey", listen_port=_free_port(), host_label="mac",
+        key=None, peer=("127.0.0.1", port),
+    )
+    transport.start()
+    try:
+        time.sleep(1.2)
+        assert transport._state == "idle", f"未配对却在拨号：state={transport._state}"
+    finally:
+        transport.stop()
+
+
+def test_auth_fail_waits_grow_and_reset():
+    """认证失败后的重连等待要指数退避，握手成功要复位（BUG-006）。"""
+    from dualswitch.sync.transport import (
+        AUTH_FAIL_MAX_WAIT_S, AUTH_FAIL_MIN_WAIT_S, Transport,
+    )
+
+    transport = Transport(
+        device_id="mac-backoff", listen_port=_free_port(), host_label="mac",
+        key=b"\x00" * 32, peer=None,
+    )
+    assert transport._auth_fail_wait == AUTH_FAIL_MIN_WAIT_S
+
+    class _Link:
+        peer_addr = ("127.0.0.1", 12345)
+
+    waits = []
+    for _ in range(8):
+        transport._handle_auth_failed(_Link(), "对端未配对")
+        waits.append(transport._auth_fail_wait)
+    assert waits[0] > AUTH_FAIL_MIN_WAIT_S, f"第一次失败就该开始退避：{waits}"
+    assert waits == sorted(waits), f"等待时间必须单调不降：{waits}"
+    assert max(waits) <= AUTH_FAIL_MAX_WAIT_S
+
+    transport._handle_ready(type("L", (), {"authenticated": True, "peer_device": "", "peer_host": "",
+                                           "describe": lambda self: "x"})())
+    assert transport._auth_fail_wait == AUTH_FAIL_MIN_WAIT_S, "握手成功要复位"

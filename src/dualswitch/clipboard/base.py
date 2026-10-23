@@ -182,14 +182,38 @@ def make_file(
     return replace(item, path=path, file_size=size, app=app, app_id=app_id)
 
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def png_size(png: bytes) -> tuple[int, int]:
+    """从 PNG 的 IHDR 里读 `(宽, 高)`；不是 PNG / 太短就返回 `(0, 0)`。
+
+    以前只有各平台后端在解码时填宽高，`make_image(png)` 的默认值是 0×0，
+    于是 `clip send --image` / `tools/*_serve.py --send-image` 发出去的帧宽高是 0，
+    对端预览窗按比例布局会直接退化（BUG-005）。尺寸本来就在 PNG 头里，不该靠调用方记得传。
+    """
+    if len(png) < 24 or not png.startswith(PNG_SIGNATURE) or png[12:16] != b"IHDR":
+        return (0, 0)
+    width = int.from_bytes(png[16:20], "big")
+    height = int.from_bytes(png[20:24], "big")
+    if width <= 0 or height <= 0:
+        return (0, 0)
+    return (width, height)
+
+
 def make_image(png: bytes, width: int = 0, height: int = 0, *, text: str | None = None,
                source: str = "") -> ClipItem | None:
-    """把 PNG 包成 ClipItem。超限返回 None（调用方跳过即可，不要抛）。"""
+    """把 PNG 包成 ClipItem。超限返回 None（调用方跳过即可，不要抛）。
+
+    `width/height` 传 0（或不传）时自动从 PNG 头解析 —— 见 `png_size()`。
+    """
     if not png:
         return None
     if len(png) > MAX_IMAGE_BYTES:
         log.warning("图片过大（%.1fMB > %dMB），跳过", len(png) / 1048576, MAX_IMAGE_BYTES // 1048576)
         return None
+    if width <= 0 or height <= 0:
+        width, height = png_size(png)
     img = ImageData(png=png, width=width, height=height)
     if text:
         return ClipItem(kind="mixed", text=text, image=img, source=source)

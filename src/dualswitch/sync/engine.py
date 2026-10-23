@@ -268,9 +268,20 @@ class SyncEngine:
         self._transport.peer = (ip, port)
 
     def _on_auth_failed(self, ip: str, reason: str) -> None:
-        """显示端限流：同一来源 IP 认证失败 5 次 → 当前配对码立即作废。"""
+        """显示端限流：同一来源 IP 认证失败 5 次 → 当前配对码立即作废。
+
+        2026-10-23（BUG-007，用户报「出码直接提示失效」）：**只能对"猜码"计数**。
+        真正输错 PIN 的人一定带着某个 key，失败形态是帧层 HMAC 校验不过
+        （`FrameReader` 抛 `ProtocolError`，链路直接 close），**根本走不到这个回调**。
+        能走到这里的几乎全是「对端还没配对，正在自动重连」——它的 reason 是
+        「本端未配对 / 对端未配对」。把它计进限流 = 出码端 1~2 秒内自杀：
+        对端每 200ms 重连一次，5 次就到上限。所以这类 reason 一律不计。
+        """
         with self._lock:
             if not self._pair_pin or self._pair_role != "show":
+                return
+            if "未配对" in str(reason or ""):
+                log.debug("忽略「%s」类认证失败（对端未配对的重连，不是猜码）：%s", reason, ip)
                 return
             count = int(self._pair_attempts.get(ip, 0)) + 1
             self._pair_attempts[ip] = count

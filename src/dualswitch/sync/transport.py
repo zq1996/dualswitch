@@ -35,6 +35,11 @@ HELLO_TIMEOUT_S = 6.0
 HEARTBEAT_INTERVAL_S = 12.0
 HEARTBEAT_TIMEOUT_S = 40.0
 RECONNECT_INTERVAL_S = 3.0
+#: 认证失败后的重连间隔：从 0.2s 指数涨到 5s（BUG-006）。
+#: 以前是固定 0.2s —— 认证失败时链路 200ms 就重来一次，2 秒 20 次，
+#: 日志刷屏、CPU 空转，还会把对端的「配对码失败次数」打满（详见 engine._on_auth_failed）。
+AUTH_FAIL_MIN_WAIT_S = 0.2
+AUTH_FAIL_MAX_WAIT_S = 5.0
 MAX_FRAME_READ = 1 << 20  # 单次 recv 上限；大图靠多轮 recv 拼
 
 
@@ -321,6 +326,8 @@ class Transport:
         self.peer_device = ""
         self.peer_host = ""
         self.authenticated = False
+        #: 认证失败后的等待（指数退避，BUG-006）。握手成功即复位。
+        self._auth_fail_wait = AUTH_FAIL_MIN_WAIT_S
 
     # ------------------------------------------------------------------ 生命周期
     def start(self) -> None:
@@ -450,7 +457,9 @@ class Transport:
         while self._running and not self._stop.is_set():
             with self._lock:
                 busy = bool(self._links)
-            if self.connected or busy or not self.peer:
+            # 没配对就**不主动外连**：没有 key 的机器没有任何东西能同步，
+            # 连上去只会制造一次认证失败，然后 200ms 再来一遍（BUG-006）。
+            if self.connected or busy or not self.peer or self.key is None:
                 self._stop.wait(RECONNECT_INTERVAL_S)
                 continue
             host, port = self.peer
@@ -466,7 +475,9 @@ class Transport:
             backoff = 1.0
             conn.settimeout(RECV_TIMEOUT_S)
             self._install(self._make_link(conn, "out"), "out")
-            self._stop.wait(0.2)
+            # 认证失败的链路会被立刻 close，这里等的是**下一次重连的间隔**：
+            # 固定 0.2s 会让未配对的对端 2 秒被重连 20 次。
+            self._stop.wait(self._auth_fail_wait)
 
     def _wait_backoff(self, seconds: float) -> None:
         self._stop.wait(min(seconds, RECONNECT_INTERVAL_S))
@@ -522,6 +533,10 @@ class Transport:
 
     # ------------------------------------------------------------------ 回调
     def _handle_ready(self, link: Link) -> None:
+        # 只要有一条链路握手成功就复位退避（不看它最后是不是选举赢家）：
+        # 能握手说明对端可达且密钥一致，再按失败指数等待就是白等。
+        if getattr(link, "authenticated", False):
+            self._auth_fail_wait = AUTH_FAIL_MIN_WAIT_S
         self._elect()
         if self._link is not link:
             return                      # 自己就是被取代的那条，状态交给赢家去报
@@ -535,6 +550,8 @@ class Transport:
 
     def _handle_auth_failed(self, link: Link, reason: str) -> None:
         ip = str(link.peer_addr[0])
+        # 指数退避：0.2 → 0.4 → 0.8 → … → 5s，握手成功后复位（在 _handle_ready 里）
+        self._auth_fail_wait = min(max(self._auth_fail_wait * 2, AUTH_FAIL_MIN_WAIT_S), AUTH_FAIL_MAX_WAIT_S)
         try:
             self._on_auth_failed(ip, reason)
         except Exception:  # noqa: BLE001

@@ -367,3 +367,71 @@ def test_discovery_peer_ttl():
     alive = d.alive_peers(max_age=20)
     assert [p["device"] for p in alive] == ["new"]
     assert "old" not in d.peers
+
+
+def test_show_code_survives_unpaired_peer_auto_reconnect():
+    """出码期间，对面「还没配对」的自动重连不能把码打死（BUG-007）。
+
+    用户报的「点显示配对码，立马提示已失效」就是这一条：
+    B 没有 psk → 自动重连 A（每 200ms 一次）→ A 判 verify 失败，reason 是
+    「本端未配对 / 对端未配对」→ 以前被当猜码计数，5 次（≈1.5s）就 cancel。
+    真正输错 PIN 走不到这个回调（帧层 HMAC 就断了），所以这种 reason 一律不该计数。
+    """
+    import socket as _socket
+
+    from dualswitch.clipboard.mock import MockBackend
+
+    def free_port() -> int:
+        with _socket.socket() as s:
+            s.bind(("", 0))
+            return int(s.getsockname()[1])
+
+    port_a, port_b = free_port(), free_port()
+    engine_a = SyncEngine(ClipboardConfig(port=port_a, device_id="mac-show"),
+                          host_label="mac", backend=MockBackend())
+    engine_b = SyncEngine(ClipboardConfig(port=port_b, peer=f"127.0.0.1:{port_a}", device_id="win-unpaired"),
+                          host_label="windows", backend=MockBackend())
+    engine_a.start()
+    engine_b.start()
+    try:
+        pin = engine_a.begin_pairing()
+        assert engine_a.pairing_status()["state"] == "showing"
+        time.sleep(2.0)          # 旧实现 1.5 秒内就会被自己的限流打死
+        status = engine_a.pairing_status()
+        assert status["state"] == "showing", f"配对码被打死了：{status}"
+        assert status["pin"] == pin
+        assert not status["error"]
+    finally:
+        engine_a.stop()
+        engine_b.stop()
+
+
+def test_auth_failed_counts_only_guessing_not_unpaired():
+    """`_on_auth_failed` 只对「猜码」计数（BUG-007 的单元级断言）。
+
+    上面那条集成测试在「未配对不外连」修好之后不一定还会红，所以这里直接打回调：
+    同一个 IP 连续 6 次「未配对」→ 码必须还在；换成真猜码的 reason → 第 5 次就该作废。
+    """
+    from dualswitch.clipboard.mock import MockBackend
+
+    with socket.socket() as probe:
+        probe.bind(("", 0))
+        port = int(probe.getsockname()[1])
+    show = SyncEngine(ClipboardConfig(port=port, device_id="mac-show2"),
+                      host_label="mac", backend=MockBackend())
+    show.start()
+    show.begin_pairing()
+    try:
+        for _ in range(6):
+            show._on_auth_failed("192.168.1.9", "对端未配对")
+        assert show.pairing_status()["state"] == "showing", "「未配对」的重连不该计入限流"
+
+        for i in range(5):
+            show._on_auth_failed("192.168.1.9", "PIN 不正确")
+            if i < 4:
+                assert show.pairing_status()["state"] == "showing"
+        status = show.pairing_status()
+        assert status["state"] != "showing", "真猜码 5 次仍应作废"
+        assert status["error_kind"] == "max_attempts"
+    finally:
+        show.stop()

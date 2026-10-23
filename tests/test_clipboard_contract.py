@@ -259,3 +259,34 @@ def _tiny_png() -> bytes:
         + chunk(b"IDAT", zlib.compress(raw, 9))
         + chunk(b"IEND", b"")
     )
+
+
+def test_make_image_fills_dimensions_from_png_header():
+    """不传宽高时从 PNG 头解析（BUG-005）。
+
+    `clip send --image` / `tools/*_serve.py --send-image` 都不传宽高，帧里就是 0×0，
+    对端预览按比例布局会退化。尺寸本来就在 IHDR 里。
+    """
+    from dualswitch.clipboard.base import png_size
+
+    png = _png(320, 200) if "_png" in globals() else None
+    if png is None:                                   # 这个文件里没有现成的构造器
+        import struct
+        import zlib
+
+        def chunk(tag, data):
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+        raw = b"".join(b"\x00" + bytes((9, 9, 9)) * 320 for _ in range(200))
+        png = (b"\x89PNG\r\n\x1a\n"
+               + chunk(b"IHDR", struct.pack(">IIBBBBB", 320, 200, 8, 2, 0, 0, 0))
+               + chunk(b"IDAT", zlib.compress(raw, 1))
+               + chunk(b"IEND", b""))
+
+    item = make_image(png)
+    assert (item.image.width, item.image.height) == (320, 200)
+    assert png_size(png) == (320, 200)
+    assert png_size(b"not a png") == (0, 0)
+
+    explicit = make_image(png, 10, 20)                # 显式传值仍以调用方为准
+    assert (explicit.image.width, explicit.image.height) == (10, 20)
