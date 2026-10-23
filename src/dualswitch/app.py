@@ -444,7 +444,8 @@ class SwitchController:
         # **不能等 DDCError**：m1ddc 打在一个没在监听的输入口上会返回 0（假成功），
         # 于是永远不进 except、永远不触发代发 —— 这就是「对端代发从来没好用过」
         # 的最后一环。这里用「活动信号」提前判定，直接请对端。
-        if picture_here is False and target == self.cfg.effective_host():
+        wants_here = target == self.cfg.effective_host()
+        if picture_here is False and wants_here:
             if self._try_remote(result, target, value):
                 return result
             # 屏确实不在本机：本地这条 DDC 事务打不到它，如实报错，
@@ -457,6 +458,16 @@ class SwitchController:
             if self.cfg.notify:
                 self._notify("切换失败", f"未能把显示器切到 {target}。\n{result.error}")
             return result
+
+        # 判不出屏在不在本机（后端没有活动信号，例如 Windows / 缺 pyobjc），
+        # 而目标又是「把画面叫回来」⇒ **先请对端试一次**。
+        # 对端此刻握着画面时这一步一定有效，而且比「先在本机发一条注定打不到的
+        # Set、失败了再回头」更快；对端没握着画面时它会干净地失败，再走本地。
+        # 这样即使本机的枚举/DCC 通道在说谎（幻影显示器、假成功），也能切。
+        if picture_here is None and wants_here and not policy_force:
+            if self._try_remote(result, target, value):
+                return result
+            log.info("请对端代发未成功（%s），改回本机发送", self._last_remote_error or "-")
 
         # 从没枚举到过外接屏：本地肯定打不到这块屏，先看对端能不能代发。
         # 对端也没有（没连上 / 版本太旧）才说清楚失败原因 ——

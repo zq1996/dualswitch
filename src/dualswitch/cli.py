@@ -659,6 +659,42 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
         return None
 
 
+def _log_source_evidence(backend, controller) -> None:  # noqa: ANN001
+    """把「画面归属」的三路证据一次写进启动日志。
+
+    报「初始显示在 Mac、实际在 Windows」这类问题时，只看结论没法定位是
+    哪一路证据错了。这一行把三路并排列出来：
+
+      · 活动屏   —— AppKit 的活动信号（`CGDisplayIsActive`，最硬的本地判据）
+      · DDC 枚举 —— m1ddc / EnumDisplayMonitors（历史上「列得出不在用的屏」）
+      · 对端上报 —— T_STATE 心跳（`None` = 问不出来 / 链路还没通）
+
+    「活动屏=<空>」而「DDC 枚举=AOC…」正是本次要修的那种错位。
+    """
+
+    def _labels(probe) -> str:  # noqa: ANN001
+        try:
+            items = probe()
+        except Exception as exc:  # noqa: BLE001 - 诊断行不能把启动搞崩
+            return f"<失败 {type(exc).__name__}>"
+        if items is None:
+            return "<分不出>"
+        return "、".join(m.label() for m in items) or "<空>"
+
+    peer = getattr(controller, "peer_sees_monitor", None)
+    try:
+        peer_text = "<未挂载>" if peer is None else str(peer())
+    except Exception:  # noqa: BLE001
+        peer_text = "<查询失败>"
+    log.info(
+        "归属判据：活动屏=%s；DDC 枚举=%s；对端上报=%s；界面判定=%s",
+        _labels(getattr(backend, "active_monitors", lambda: None)),
+        _labels(backend.list_monitors),
+        peer_text,
+        controller.source_state,
+    )
+
+
 def cmd_ui(args) -> int:
     """带图形界面的常驻模式（主窗口 + 托盘 + 热键）。"""
     from .ui import available as ui_available
@@ -803,6 +839,8 @@ def cmd_ui2(args) -> int:
         # （冷启动屏在对面时会被判成 unknown）。引擎连上后 `remote_ready` 可用，
         # 这里重判一次，界面首帧就是对的，不用等 2 秒轮询纠正。
         controller.note_scan(startup_monitors)
+    # 三路证据落日志：界面首帧判错时，这一行能直接指出是哪一路证据错了
+    _log_source_evidence(backend, controller)
 
     # v2 界面按平台分发：Windows → ui/win2（自绘标题栏 + 托盘），其它 → ui/mac2。
     # 旧 `ui` 子命令一行不动（两条路并行，验收后旧树才删）。

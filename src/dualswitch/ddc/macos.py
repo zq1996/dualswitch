@@ -198,21 +198,29 @@ class M1ddcBackend(BaseBackend):
         return monitors
 
     def active_monitors(self) -> list[MonitorInfo] | None:
-        """用 AppKit 的「当前显示配置」列出真正在输出画面的外接屏。
+        """列出「此刻真正在本机输出画面」的外接屏。
 
         **为什么不能复用 `list_monitors()`**：它走 `m1ddc display list`，底层是
         IOKit 的 DCP 代理。屏切到 HDMI 之后 USB-C 链路的代理对象还挂在总线上，
         `m1ddc` 照样把它列出来 —— 于是本机永远判「画面在我这儿」，
         「请对端代发」那条路一次都走不到（ISSUE-003 的根因之一）。
-        `NSScreen.screens()` 只反映**当前生效的显示配置**：链路断了这块屏就
-        不在列表里，语义与 Windows 的 `EnumDisplayMonitors` 对齐。
 
-        返回 None 表示「问不出来」（没装 pyobjc / 拿不到显示名），调用方要退回
-        `list_monitors()`。宁可退回旧行为，也不能给出一个假的「在/不在」。
+        这里叠**两道**过滤，缺一不可：
+
+        1. `NSScreen.screens()` —— 当前显示配置里的屏（拿名字，给 monitor_match 用）；
+        2. `CGDisplayIsActive(id)` —— 真的在扫描输出。
+
+        ⚠️ 只做第 1 道不够：**「在线」不等于「在用」**。屏切到 HDMI 之后，
+        macOS 常常仍把这块屏留在在线列表里（NSScreen 照列），只是不再往它扫画面；
+        这时 `CGDisplayIsActive` 会翻成 False。用户 2026-10-23 报的
+        「初始显示屏幕在 Mac、实际在 Windows」就是漏了这一道。
+
+        返回 None 表示「问不出来」（没装 pyobjc / 拿不到显示名 / 拿不到 id），
+        调用方要退回 `list_monitors()`。宁可退回旧行为，也不能给出假的「在/不在」。
         """
         try:
             from AppKit import NSScreen
-            from Quartz import CGDisplayIsBuiltin
+            from Quartz import CGDisplayIsActive, CGDisplayIsBuiltin
         except Exception as exc:  # noqa: BLE001 - 缺 pyobjc 时降级
             log.debug("无法判断活动显示器（pyobjc 缺失）：%s", exc)
             return None
@@ -236,6 +244,10 @@ class M1ddcBackend(BaseBackend):
                 return None
             try:
                 if CGDisplayIsBuiltin(number):
+                    continue
+                if not CGDisplayIsActive(number):
+                    # 在线但不在扫描输出：屏切到 HDMI 之后就是这个样子。
+                    log.debug("屏 %s 在线但未激活（画面不在本机）", number)
                     continue
             except Exception:  # noqa: BLE001
                 return None

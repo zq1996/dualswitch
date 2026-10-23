@@ -102,7 +102,7 @@ def _fake_screen(number: int, name: str):
     return _Screen()
 
 
-def _install_fake_pyobjc(monkeypatch, screens, builtin=()):
+def _install_fake_pyobjc(monkeypatch, screens, builtin=(), inactive=()):
     import types
 
     appkit = types.ModuleType("AppKit")
@@ -115,6 +115,9 @@ def _install_fake_pyobjc(monkeypatch, screens, builtin=()):
     appkit.NSScreen = NSScreen
     quartz = types.ModuleType("Quartz")
     quartz.CGDisplayIsBuiltin = lambda number: number in builtin
+    # 「在线」不等于「在用」：屏切到 HDMI 之后 macOS 仍把它留在在线列表里，
+    # 但 CGDisplayIsActive 会翻 False。默认全部激活，个别用例点名 inactive。
+    quartz.CGDisplayIsActive = lambda number: number not in inactive
     monkeypatch.setitem(sys.modules, "AppKit", appkit)
     monkeypatch.setitem(sys.modules, "Quartz", quartz)
 
@@ -136,6 +139,23 @@ def test_mac_active_monitors_empty_when_only_builtin(monkeypatch):
     from dualswitch.ddc.macos import M1ddcBackend
 
     _install_fake_pyobjc(monkeypatch, [_fake_screen(1, "Built-in Retina Display")], builtin={1})
+    assert M1ddcBackend().active_monitors() == []
+
+
+def test_mac_active_monitors_skips_online_but_inactive_screen(monkeypatch):
+    """**用户 2026-10-23 报的「初始显示在 Mac、实际在 Windows」就是这一条。**
+
+    屏切到 HDMI 之后 macOS 常把它留在在线列表里（NSScreen 照列），
+    只是不再往它扫画面 —— 这时 `CGDisplayIsActive` 才是判据。
+    """
+    from dualswitch.ddc.macos import M1ddcBackend
+
+    _install_fake_pyobjc(
+        monkeypatch,
+        [_fake_screen(1, "Built-in Retina Display"), _fake_screen(2, "AOC Q2790PC")],
+        builtin={1},
+        inactive={2},
+    )
     assert M1ddcBackend().active_monitors() == []
 
 

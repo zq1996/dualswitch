@@ -421,3 +421,31 @@ def test_target_follows_the_picture_not_the_config():
     ctl.note_scan([])                      # 之后枚举不到了 → 画面在 Windows
     assert ctl.source_state == "windows"
     assert ctl._resolve_target() == "mac"  # 「切换到 Mac」= 把画面叫回来
+
+
+def test_unknown_picture_state_asks_peer_first_when_bringing_here():
+    """判不出屏在哪、目标又是「叫回本机」时先请对端。
+
+    对端此刻握着画面时这一步一定有效，比「先在本机发一条注定打不到的 Set」
+    更快；也不怕本机的枚举 / DDC 通道在说谎（幻影显示器、假成功）。
+    """
+    backend = MockBackend(current=17, monitors=[_aoc()], active=None)
+    ctl = SwitchController(make_cfg(this_host="mac"), backend)
+    ctl.remote_switch = lambda value: (True, "")
+    ctl.remote_ready = lambda: True
+
+    result = ctl.switch_now("mac")
+    assert result.via == "remote"
+    assert backend.set_calls == []
+
+
+def test_unknown_picture_state_falls_back_to_local_when_peer_refuses():
+    """对端没握着画面时会干净地失败 —— 这时候必须改回本地发，别把用户卡死。"""
+    backend = MockBackend(current=17, monitors=[_aoc()], active=None)
+    ctl = SwitchController(make_cfg(this_host="mac"), backend)
+    ctl.remote_switch = lambda value: (False, "对端拒绝")
+    ctl.remote_ready = lambda: True
+
+    result = ctl.switch_now("mac")
+    assert result.via == "local"
+    assert backend.set_calls == [18]
