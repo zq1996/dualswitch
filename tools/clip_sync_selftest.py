@@ -62,10 +62,12 @@ class Pair:
         self.port_a, self.port_b = _free_port(), _free_port()
         key = P.derive_key(PIN).hex()
         self.cfg_a = ClipboardConfig(
-            port=self.port_a, peer=f"127.0.0.1:{self.port_b}", psk=key, device_id="mac-selftest"
+            port=self.port_a, peer=f"127.0.0.1:{self.port_b}", psk=key, device_id="mac-selftest",
+            discover_port=0,      # 必须关广播：否则会污染真实对端的发现列表（BUG-003）
         )
         self.cfg_b = ClipboardConfig(
-            port=self.port_b, peer=f"127.0.0.1:{self.port_a}", psk=key, device_id="win-selftest"
+            port=self.port_b, peer=f"127.0.0.1:{self.port_a}", psk=key, device_id="win-selftest",
+            discover_port=0,
         )
         self.backend_a, self.backend_b = MockBackend(), MockBackend()
         self.engine_a = SyncEngine(self.cfg_a, host_label="mac", backend=self.backend_a)

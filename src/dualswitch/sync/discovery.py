@@ -87,6 +87,12 @@ class Discovery:
     def start(self) -> None:
         if self._sock is not None:
             return
+        # discover_port<=0 表示「不要发现」：自测 / e2e 脚本起的临时引擎必须走这条，
+        # 否则它会向真实的 47824 广播一个随机服务端口，把正在运行的对端拨号目标改成
+        # 一个马上就会关掉的死端口 —— 对端会每 3 秒重连一次、连到天亮（BUG-003）。
+        if self.discover_port <= 0:
+            log.debug("发现服务已关闭（discover_port=%s），只能靠手填 peer", self.discover_port)
+            return
         self._stop.clear()
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

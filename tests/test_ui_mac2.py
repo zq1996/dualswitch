@@ -1868,3 +1868,29 @@ def test_dock_icon_call_exists_in_init(app, cfg):
 
     init_src = inspect.getsource(runner_mod.UiRunner2.__init__)
     assert "_apply_dock_icon()" in init_src, "构造函数没有设置 Dock 图标"
+
+
+def test_pairing_peer_rows_have_final_text_on_first_frame(app):
+    """设备行建出来那一帧就该是正确的按钮文案（ISSUE-008 / windows BUG-002）。
+
+    `_rebuild_peer_rows()` 建行时按钮文案是构造默认值「配对」，正确文案只在
+    `_update_peer_row()` 里算。以前只在「设备列表没变」的刷新路径里调用它，
+    于是列表一变（新设备上线 / 首次进入）就会先显示错文案约 1.5 秒。
+    这里**不经过任何刷新**，直接断言建行后的那一帧。
+    """
+    engine = FakePairEngine()
+    page = PairingPage(engine)
+    page.activate()
+
+    peers = [
+        # 对面那台已经跟别的电脑配过 → 首帧就该是「替换配对」
+        {"device": "windows-3f2a91c4", "host": "DESKTOP-8Q2K", "ip": "192.168.1.31",
+         "port": 47823, "plat": "windows", "pairing": False, "paired": True},
+        # 从没配过的第三台
+        {"device": "windows-77aa0011", "host": "DESKTOP-OTHER", "ip": "192.168.1.44",
+         "port": 47823, "plat": "windows", "pairing": False, "paired": False},
+    ]
+    page._rebuild_peer_rows(peers)          # ← 只建行，绝不再刷新
+
+    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "替换配对"
+    assert page._peer_rows["windows-77aa0011"]["btn"].text() == "配对"

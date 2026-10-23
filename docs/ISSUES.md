@@ -206,9 +206,13 @@
      （建议补一条：两台设备一台 `paired=true`、一台未配对，`activate()` 后**立即**断言
      按钮文案分别是「替换配对」与「配对」）
   2. `pytest -q` 全绿
-- **状态**: 待做
-  · Windows 参考实现：`src/dualswitch/ui/win2/pairing_page.py::_rebuild_peer_rows` 末尾
-    `self._update_peer_row(p)`；用例 `tests/test_ui_win2.py::test_pairing_page_discover_lists_peers`
+- **状态**: 已修（mac，2026-10-23，随联调一起提交）
+  · `_rebuild_peer_rows()` 建行后立刻 `self._update_peer_row(p)`（与 Windows 端同一行改法）
+  · 新增 `tests/test_ui_mac2.py::test_pairing_peer_rows_have_final_text_on_first_frame`，
+    **红-绿验证**：去掉该行 → `FAILED AssertionError`；加回 → `1 passed`
+  · 注意：断言必须写在「直接调 `_rebuild_peer_rows()` 之后」；写成 `page.activate()` 之后
+    **抓不到**（activate 后面还有一轮刷新会把文案补上，去掉修复也是绿的）
+  · `test_ui_mac2.py` 84 passed / 5 skipped；全量 275 passed / 20 skipped
 
 ---
 

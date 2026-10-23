@@ -1002,6 +1002,10 @@ class PairingPage(QWidget):
             self.peer_list_lay.addWidget(row)
             self._peer_rows[device] = widgets
             self._peer_row_order.append(device)
+            # 建行时按钮文案是构造默认值「配对」，正确文案只在 _update_peer_row 里算。
+            # 不在这里补一次，已配对 / 对方正在显示配对码的设备会先显示错文案约 1.5 秒
+            # （ISSUE-008，Windows 端 BUG-002 提的同一处）。
+            self._update_peer_row(p)
 
     def _peer_row_widget(self, peer: dict[str, Any]) -> tuple[QFrame, dict[str, Any]]:
         row = QFrame()

@@ -235,3 +235,45 @@ def test_status_contains_needed_fields(pair):
                 "records", "sent", "received", "last_sync"):
         assert key in status
     assert status["authenticated"] == "yes"
+
+
+def test_discovery_disabled_when_port_not_positive():
+    """`discover_port<=0` 必须彻底不广播（BUG-003）。
+
+    自测 / e2e 脚本在**真机上**跑临时引擎时，如果它们照样向 47824 广播一个随机服务端口，
+    正在运行的对端就会把拨号目标改成那个马上关闭的端口，日志每 3 秒刷一次 timed out。
+    这里直接断言"没有 socket、没有线程"，比抓包更稳。
+    """
+    from dualswitch.sync.discovery import Discovery
+
+    for port in (0, -1):
+        disc = Discovery(device_id="mac-test", host_label="mac", service_port=47823, discover_port=port)
+        disc.start()
+        assert disc._sock is None, f"discover_port={port} 时不该建 socket"
+        assert disc._threads == [], f"discover_port={port} 时不该起线程"
+
+        # 广播入口也要是空操作，而不是往一个非法端口 sendto
+        disc.announce_now()  # 不抛异常即通过
+        disc.stop()
+
+
+def test_no_discover_env_disables_broadcast(monkeypatch):
+    """`DUALSWITCH_NO_DISCOVER=1` 时引擎不得起发现（BUG-003 的进程级开关）。"""
+    import socket as _socket
+
+    from dualswitch.clipboard.mock import MockBackend
+
+    monkeypatch.setenv("DUALSWITCH_NO_DISCOVER", "1")
+    port = _free_port()
+    cfg = ClipboardConfig(port=port, psk="00" * 32, device_id="mac-nodiscover")
+    cfg.discover_port = 47824                     # 故意保留默认值
+    engine = SyncEngine(cfg, host_label="mac", backend=MockBackend())
+    try:
+        engine.start()
+        disc = engine._discovery
+        assert disc is not None
+        assert disc.discover_port == 0, "环境变量没生效"
+        assert disc._sock is None, "不该建发现 socket"
+        assert disc._threads == [], "不该起广播线程"
+    finally:
+        engine.stop()

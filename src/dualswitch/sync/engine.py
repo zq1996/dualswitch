@@ -28,6 +28,7 @@ UI 和 `app.py` 不需要知道 TCP、加密、帧格式的存在。
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import secrets
 import threading
@@ -227,11 +228,16 @@ class SyncEngine:
             expected_peer_device=self.cfg.peer_device,
         )
         # 发现必须常开：手填 peer 只用于「立即先拨一次」，不能变成永久地址依赖。
+        # 例外：跑测试 / 自测脚本时必须能关掉。测试里的引擎用默认 discover_port=47824，
+        # 一起就会向真实网段广播自己的临时端口，把同一个网段里正在运行的那台机器的
+        # 拨号目标改成一个马上关闭的死端口（BUG-003，实测把对端刷了 200+ 轮 timed out）。
+        # tests/conftest.py 里有 autouse fixture 打开这个开关。
+        no_discover = os.environ.get("DUALSWITCH_NO_DISCOVER", "").strip().lower() in ("1", "true", "yes", "on")
         self._discovery = Discovery(
             device_id=self.device_id,
             host_label=display_name,
             service_port=int(self.cfg.port),
-            discover_port=int(self.cfg.discover_port),
+            discover_port=0 if no_discover else int(self.cfg.discover_port),
             platform="macos" if self.host_label == "mac" else "windows",
             version=self.version,
             on_peer=self._on_peer_found,
