@@ -18,6 +18,13 @@ macOS 与 Windows 的两个关键差异（都是实测踩出来的）：
    `-118`（IOKit kIOReturn 类错误），但**写通道正常**。所以读值失败必须报成
    「不可读」而不是「解析失败」，并且绝不能让回读影响切换主流程。
 
+3. **`display list` 列得出「不在用」的屏**
+   屏切到 HDMI 后，USB-C 这条链路的 DCP 代理对象还在，`display list` 照样列出
+   这块屏；`set input` 还会**返回 0（假成功）**，因为它打在一个没在监听的输入口上。
+   两条叠加的结果：本机永远判「画面在本机」、永远等不到 DDCError、
+   于是「请对端代发」一次都不会触发。判断归属只能用 `active_monitors()`
+   （AppKit 的当前显示配置），见该方法上的注释。
+
 常用命令：
     m1ddc display list
     m1ddc set input 17
@@ -27,6 +34,7 @@ macOS 与 Windows 的两个关键差异（都是实测踩出来的）：
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -34,6 +42,8 @@ import subprocess
 from pathlib import Path
 
 from .base import BaseBackend, DDCError, MonitorInfo
+
+log = logging.getLogger("dualswitch.ddc")
 
 # [2] Q2790R3 (4D972D7B-4973-4865-B69A-5DD248A1EFC1)
 _DISPLAY_LINE = re.compile(r"^\[(?P<index>\d+)\]\s*(?P<name>.*?)\s*(?:\((?P<uuid>[0-9A-Fa-f-]{36})\))?$")
@@ -183,6 +193,67 @@ class M1ddcBackend(BaseBackend):
                     device_name=f"display {index}",
                     device_id=uuid or text,
                     extra={"m1ddc_index": index},
+                )
+            )
+        return monitors
+
+    def active_monitors(self) -> list[MonitorInfo] | None:
+        """用 AppKit 的「当前显示配置」列出真正在输出画面的外接屏。
+
+        **为什么不能复用 `list_monitors()`**：它走 `m1ddc display list`，底层是
+        IOKit 的 DCP 代理。屏切到 HDMI 之后 USB-C 链路的代理对象还挂在总线上，
+        `m1ddc` 照样把它列出来 —— 于是本机永远判「画面在我这儿」，
+        「请对端代发」那条路一次都走不到（ISSUE-003 的根因之一）。
+        `NSScreen.screens()` 只反映**当前生效的显示配置**：链路断了这块屏就
+        不在列表里，语义与 Windows 的 `EnumDisplayMonitors` 对齐。
+
+        返回 None 表示「问不出来」（没装 pyobjc / 拿不到显示名），调用方要退回
+        `list_monitors()`。宁可退回旧行为，也不能给出一个假的「在/不在」。
+        """
+        try:
+            from AppKit import NSScreen
+            from Quartz import CGDisplayIsBuiltin
+        except Exception as exc:  # noqa: BLE001 - 缺 pyobjc 时降级
+            log.debug("无法判断活动显示器（pyobjc 缺失）：%s", exc)
+            return None
+        try:
+            screens = list(NSScreen.screens())
+        except Exception as exc:  # noqa: BLE001 - 无窗口服务器（ssh / launchd）时也会失败
+            log.debug("NSScreen.screens() 不可用：%s", exc)
+            return None
+
+        monitors: list[MonitorInfo] = []
+        for position, screen in enumerate(screens):
+            number = None
+            try:
+                number = int(screen.deviceDescription().objectForKey_("NSScreenNumber"))
+            except Exception:  # noqa: BLE001
+                number = None
+            if number is None:
+                # 拿不到 CGDirectDisplayID 就分不出内置屏 —— 那会把 MacBook 自己的屏
+                # 当成「外接屏还在」，比不判断更糟。整轮作废，交给调用方退回旧判据。
+                log.debug("NSScreen 缺少 NSScreenNumber，本轮活动探测作废")
+                return None
+            try:
+                if CGDisplayIsBuiltin(number):
+                    continue
+            except Exception:  # noqa: BLE001
+                return None
+            try:
+                name = str(screen.localizedName() or "")
+            except Exception:  # noqa: BLE001 - 10.15 以下没有 localizedName
+                name = ""
+            if not name:
+                # 名字是 monitor_match 唯一的匹配依据（mac 默认 match 为空 = 取第一台），
+                # 空名字会让「有没有这块屏」永远判错，直接作废这一轮。
+                log.debug("NSScreen 取不到显示名，本轮活动探测作废")
+                return None
+            monitors.append(
+                MonitorInfo(
+                    index=len(monitors),
+                    description=name,
+                    device_name=f"screen {position}",
+                    device_id=name,
                 )
             )
         return monitors

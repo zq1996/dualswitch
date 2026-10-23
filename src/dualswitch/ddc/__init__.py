@@ -4,10 +4,24 @@ from __future__ import annotations
 
 import sys
 
-from .base import BaseBackend, DDCError, DisplayBackend, MonitorInfo
+from .base import (
+    BaseBackend,
+    DDCError,
+    DisplayBackend,
+    MonitorInfo,
+    probe_active_monitors,
+)
 from .mock import MockBackend
 
-__all__ = ["BaseBackend", "DDCError", "DisplayBackend", "MonitorInfo", "MockBackend", "create_backend"]
+__all__ = [
+    "BaseBackend",
+    "DDCError",
+    "DisplayBackend",
+    "MonitorInfo",
+    "MockBackend",
+    "create_backend",
+    "probe_active_monitors",
+]
 
 
 def create_backend(cfg) -> DisplayBackend:  # noqa: ANN001 - 避免循环导入

@@ -50,6 +50,28 @@ class DisplayBackend(Protocol):
         ...
 
 
+def probe_active_monitors(backend) -> list[MonitorInfo]:  # noqa: ANN001 - 避免循环导入
+    """枚举「此刻真正在输出画面」的显示器。
+
+    `list_monitors()` 只能回答「这块屏还挂在总线上吗」。macOS 的 m1ddc 走 IOKit
+    的 DCP 代理，屏切到 HDMI 之后代理还在，**照样列得出这块屏** —— 于是
+    「画面在本机」永远为真，`_try_remote` 永远不触发（ISSUE-003 的根因之一）。
+
+    后端能给出更硬的证据时用它的（macOS 用 AppKit 的当前显示配置）；
+    给不出来（返回 None）就退回 `list_monitors()`，行为与改动前完全一致 ——
+    老后端 / 缺 pyobjc 的机器不会因此变差。
+    """
+    probe = getattr(backend, "active_monitors", None)
+    if callable(probe):
+        try:
+            monitors = probe()
+        except Exception:  # noqa: BLE001 - 探测失败退回保守枚举
+            monitors = None
+        if monitors is not None:
+            return monitors
+    return backend.list_monitors()
+
+
 class BaseBackend:
     """提供默认实现与统一的 VCP 记录，便于子类复用。"""
 
@@ -70,6 +92,15 @@ class BaseBackend:
 
     def get_input(self) -> int:  # pragma: no cover - 抽象
         raise NotImplementedError
+
+    def active_monitors(self) -> list[MonitorInfo] | None:
+        """此刻真正在输出画面的显示器。返回 None = 本后端分不出「挂着」和「在用」。
+
+        默认不实现：绝大多数后端（Windows 的 EnumDisplayMonitors）本来就只枚举
+        有活动信号的屏，`list_monitors()` 已经是答案。macOS 必须覆盖它 ——
+        见 `dualswitch.ddc.macos.M1ddcBackend.active_monitors`。
+        """
+        return None
 
     def close(self) -> None:
         return None

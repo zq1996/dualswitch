@@ -25,7 +25,7 @@ from . import __version__, config as config_mod, logging_setup, winenv
 from .app import SwitchController
 from .config import Config, ConfigError
 from .ddc import create_backend
-from .ddc.base import DDCError
+from .ddc.base import DDCError, probe_active_monitors
 from .hotkey import HotkeyError, create_hotkey, parse_hotkey, resolve_backend_name
 
 log = logging_setup.get("cli")
@@ -110,7 +110,7 @@ def cmd_run(args) -> int:
     # 启动时一次性安全探测：只读，不发送 Set（需求文档 3.5）
     startup_monitors: list = []
     try:
-        monitors = backend.list_monitors()
+        monitors = probe_active_monitors(backend)
         startup_monitors = monitors
         log.info("发现 %d 个物理显示器：%s", len(monitors), "; ".join(m.label() for m in monitors))
     except DDCError as exc:
@@ -236,6 +236,7 @@ def cmd_probe(args) -> int:
         "config": str(cfg_file),
         "backend": None,
         "monitors": [],
+        "active": None,          # None = 本后端分不出「挂着」和「在用」
         "input": None,
         "error": None,
     }
@@ -247,6 +248,13 @@ def cmd_probe(args) -> int:
             {"index": m.index, "description": m.description, "device": m.device_name, "id": m.device_id}
             for m in monitors
         ]
+        # 「这块屏此刻在不在本机输出画面」—— macOS 上它和 list_monitors() 经常不一致，
+        # 画面归属、要不要请对端代发全靠这一项，所以单独报出来（ISSUE-003）。
+        try:
+            active = backend.active_monitors()
+        except Exception:  # noqa: BLE001 - 探测失败不影响其余输出
+            active = None
+        payload["active"] = None if active is None else [m.description for m in active]
         try:
             payload["input"] = backend.get_input()
         except DDCError as exc:
@@ -268,6 +276,12 @@ def cmd_probe(args) -> int:
             print(f"  [{m['index']}] {m['description']} | {m['device']} | {m['id']}")
     else:
         print("  （未发现）")
+    if payload["active"] is None:
+        print("活动画面  : （本后端分不出，按「物理显示器」判断）")
+    elif payload["active"]:
+        print(f"活动画面  : {'、'.join(payload['active'])}（画面在本机）")
+    else:
+        print("活动画面  : 无（屏不在本机输出画面 ⇒ 需要请对端代发）")
     if payload["input"] is not None:
         print(f"当前输入源: VCP 0x{cfg.vcp_code:02X} = {payload['input']}（读数仅供参考）")
     if payload["error"]:
@@ -630,7 +644,7 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
             if backend is None:
                 return False
             try:
-                monitors = backend.list_monitors()
+                monitors = probe_active_monitors(backend)
             except Exception:  # noqa: BLE001 - 枚举失败按「看不到」答
                 return False
             needle = (cfg.monitor_match or "").strip()
@@ -759,7 +773,7 @@ def cmd_ui2(args) -> int:
     # 界面首帧必然显示「未检测到外接显示器」，要等 2 秒轮询才纠正 —— 看着就像判错了。
     startup_monitors: list = []
     try:
-        startup_monitors = backend.list_monitors()
+        startup_monitors = probe_active_monitors(backend)
         log.info(
             "发现 %d 个物理显示器：%s",
             len(startup_monitors),

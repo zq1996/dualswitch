@@ -17,7 +17,7 @@ from typing import Callable
 
 from . import logging_setup
 from .config import SOURCE_UNKNOWN, Config
-from .ddc.base import DDCError, DisplayBackend
+from .ddc.base import DDCError, DisplayBackend, probe_active_monitors
 
 log = logging_setup.get("app")
 
@@ -186,6 +186,29 @@ class SwitchController:
         return self._execute(self._clock(), source, forced_target=target)
 
     # ------------------------------------------------------------------ 外部状态检测
+    def _monitors(self) -> list:
+        """枚举「画面在本机」的判据来源：优先活动信号，后端不支持时退回普通枚举。
+
+        macOS 的 `m1ddc display list` 在屏切走之后照样列得出这块屏（DCP 代理还在），
+        用它判断归属会让本机永远「看到」屏，见 `ddc.macos.active_monitors`。
+        """
+        return probe_active_monitors(self.backend)
+
+    def _picture_here(self) -> bool | None:
+        """这块屏此刻是不是在本机输出画面。None = 后端分不出「挂着」和「在用」。"""
+        probe = getattr(self.backend, "active_monitors", None)
+        if not callable(probe):
+            return None
+        try:
+            active = probe()
+        except Exception as exc:  # noqa: BLE001 - 探测失败只影响优化路径
+            log.debug("活动显示器探测失败：%s", exc)
+            return None
+        if active is None:
+            return None
+        needle = (self.cfg.monitor_match or "").strip()
+        return any(m.matches(needle) for m in active) if needle else bool(active)
+
     def detect_source(self) -> str | None:
         """按「显示器还在不在本机」推断画面现在属于哪台机器。
 
@@ -198,7 +221,7 @@ class SwitchController:
         「画面在 Windows」。返回值 None 仍然表示这一轮判断不了（枚举异常）。
         """
         try:
-            monitors = self.backend.list_monitors()
+            monitors = self._monitors()
         except Exception as exc:  # 枚举失败不代表画面变了，直接放弃这一轮
             log.debug("检测画面归属失败：%s", exc)
             return None
@@ -351,12 +374,27 @@ class SwitchController:
 
     # ------------------------------------------------------------------ 内部
     def _resolve_target(self, forced: str | None = None) -> str:
+        """算出这次该把画面切到哪台。
+
+        **画面在哪台，就切到另一台** —— 界面按钮写的「切换到 Mac / Windows」、
+        托盘菜单、热键说的都是这个意思。以前这里在 `switch_mode=other` 时
+        无条件返回 `other_host()`，于是 Mac 端永远只会把画面「送出去」、
+        永远叫不回来：按钮写着「切换到 Mac」，实际发的是 Windows 的 17，
+        屏一点动静都没有（ISSUE-003 的根因之一）。
+
+        `switch_mode` 只在**判不出画面归属**时起作用：
+        `other` = 送到另一台；`toggle` = 按上一次的认知翻。
+        """
         if forced in ("windows", "mac"):
             return forced
-        if forced == "toggle":
-            return self.cfg.other_host() if self._current_source == self.cfg.effective_host() else self.cfg.effective_host()
-        if self.cfg.switch_mode == "toggle":
-            return self.cfg.other_host() if self._current_source == self.cfg.effective_host() else self.cfg.effective_host()
+        host = self.cfg.effective_host()
+        if forced == "other":
+            return self.cfg.other_host()
+        state = self._display_source
+        if state in ("windows", "mac"):
+            return self.cfg.other_host() if state == host else host
+        if forced == "toggle" or self.cfg.switch_mode == "toggle":
+            return self.cfg.other_host() if self._current_source == host else host
         return self.cfg.other_host()
 
     def _loop(self) -> None:
@@ -398,9 +436,32 @@ class SwitchController:
         # force = 跳过远端代发，直接本机发 Set（用户明确要「不绕路」）。
         policy_force = getattr(self.cfg, "switch_policy", "standard") == "force"
 
+        # 屏此刻在不在本机输出画面（None = 后端分不出「挂着」和「在用」）。
+        # 这一个判据决定下面两条路，见 _picture_here() 上的注释。
+        picture_here = None if policy_force else self._picture_here()
+
+        # 屏不在本机、而目标正是「把画面叫回来」⇒ 只有握着它的那台能发这个 Set。
+        # **不能等 DDCError**：m1ddc 打在一个没在监听的输入口上会返回 0（假成功），
+        # 于是永远不进 except、永远不触发代发 —— 这就是「对端代发从来没好用过」
+        # 的最后一环。这里用「活动信号」提前判定，直接请对端。
+        if picture_here is False and target == self.cfg.effective_host():
+            if self._try_remote(result, target, value):
+                return result
+            # 屏确实不在本机：本地这条 DDC 事务打不到它，如实报错，
+            # 不要让「假成功」把界面骗成已切换。
+            result.ok = False
+            result.set_call_ms = (self._clock() - t_send) * 1000.0
+            result.error = f"画面不在本机，请对端代发失败：{self._last_remote_error or '未知原因'}"
+            log.error("切换失败（目标 %s / 值 %d）：%s", target, value, result.error)
+            self._record(result)
+            if self.cfg.notify:
+                self._notify("切换失败", f"未能把显示器切到 {target}。\n{result.error}")
+            return result
+
         # 从没枚举到过外接屏：本地肯定打不到这块屏，先看对端能不能代发。
         # 对端也没有（没连上 / 版本太旧）才说清楚失败原因 ——
         # m1ddc 的原文 "Could not find a suitable external display" 用户看不懂。
+        # 显式指定目标（托盘「强制切到本机」/ CLI --to）是用户的明确指令，不拦。
         if (
             forced_target is None
             and self._source_checked

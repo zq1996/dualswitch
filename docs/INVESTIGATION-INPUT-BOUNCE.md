@@ -5,7 +5,33 @@
 
 ---
 
-## 0. 一句话
+## ✅ 0. 结论（2026-10-23 深夜补：对端代发已修，本节优先于下面所有内容）
+
+第 3 节问的「Mac 端为什么不发 `T_SWITCH`」，答案是**两个 bug 叠加**，都不是链路问题：
+
+| # | 真因 | 证据 / 修法 |
+|---|---|---|
+| **B1 目标算错** | `_resolve_target()` 在 `switch_mode="other"`（默认值）下**无条件**返回 `other_host()`。Mac 端于是永远只会把画面「送出去」：按钮写着「切换到 Mac」，实际发的是 `VCP=17`（Windows）→ 屏当然一动不动 | 改成「**画面在哪台就切到另一台**」；`switch_mode` 只在判不出归属时兜底。界面层再加一层：`do_switch()` 先按 `source_state` 算目标，保证动作和按钮上的字一致 |
+| **B2 等不到异常** | 屏在 HDMI 时，USB-C 上的 `m1ddc set input` **返回 0（假成功）**。不抛 `DDCError` ⇒ `_try_remote` 的两个触发条件一个都不成立 ⇒ 代发永远不触发 | 新增后端能力 `active_monitors()`（macOS 用 AppKit `NSScreen` 的当前显示配置）。`_execute` 在本地发 Set **之前**判「屏此刻在不在本机」：不在 ⇒ 直接请对端，不等异常 |
+
+顺带修掉的第三处：`window.deviceClicked` 接到 `lambda host: self.do_switch()`，
+**把点的是哪台丢了** —— 点设备卡和点主按钮行为一样。改成直连 `do_switch`。
+
+`M2`（`m1ddc display list` 在屏切走后照样列得出它）**确认成立**，但它不是独立问题：
+它正是 B2 里「判据不可信」的那一半，`active_monitors()` 就是替换它的。
+
+**自测**：438 用例 / 0 失败（428 passed + 10 skipped）；
+`tools/e2e_remote_switch.py` 8/8；另用一个「两个真实引擎 + 假后端」的脚本
+复现了完整场景（Mac 判「画面在 windows」→ 目标算成 mac → Windows 执行器收到 18
+→ Mac 本地 Set 次数为 0），通过。
+
+**还没验证的**：真机。这台 Windows 上看不到 Mac 的那条 USB-C 链路，
+`NSScreen` 在「屏切到 HDMI 之后到底列不列得出这块屏」必须上 Mac 跑一次
+`dualswitch probe`（输出里那行 `活动画面`）才算闭环。
+
+---
+
+## 0.1 一句话（旧结论，已被上面取代）
 
 **核心问题：Mac 端点「切换到 Mac」/「切换到 Windows」都不工作，而对端代发从来没被触发过。**
 

@@ -336,3 +336,88 @@ def test_switch_policy_force_sends_set_when_monitor_never_seen():
     # 不再走「从未见过 → 请对端」的分支，而是直接本机发一次 Set
     assert backend.set_calls, "强制模式必须真的发 Set"
     assert result.via == "local"
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-003：屏还挂在总线上、但不在本机输出画面 —— 不能等 DDCError
+# --------------------------------------------------------------------------- #
+def _aoc():
+    from dualswitch.ddc.base import MonitorInfo
+
+    return MonitorInfo(
+        index=0, description="AOC Q2790PC", device_id="MONITOR\\AOC2790\\{mock}"
+    )
+
+
+def test_picture_elsewhere_asks_peer_instead_of_blind_local_set():
+    """macOS 的真实样子：`display list` 列得出屏，但画面在对面。
+
+    m1ddc 在这种情形下 `set input` 返回 0（假成功）⇒ 永远等不到 DDCError
+    ⇒ 永远不触发代发。所以必须靠「活动信号」提前判定。
+    """
+    backend = MockBackend(current=17, monitors=[_aoc()], active=[])
+    ctl = SwitchController(make_cfg(this_host="mac"), backend)
+    ctl.remote_switch = lambda value: (True, "")
+    ctl.remote_ready = lambda: True
+
+    result = ctl.switch_now("mac")
+    assert result.ok is True
+    assert result.via == "remote"
+    assert result.value == 18
+    assert backend.set_calls == [], "屏不在本机时不该再往本机 DDC 总线上插事务"
+
+
+def test_picture_here_keeps_the_local_path():
+    """画面在本机时仍走本地：没必要绕一圈 TCP。"""
+    backend = MockBackend(current=18, monitors=[_aoc()], active=[_aoc()])
+    ctl = SwitchController(make_cfg(this_host="mac"), backend)
+    ctl.remote_switch = lambda value: (True, "")
+    ctl.remote_ready = lambda: True
+
+    result = ctl.switch_now("windows")
+    assert result.via == "local"
+    assert backend.set_calls == [17]
+
+
+def test_picture_elsewhere_without_peer_fails_loudly():
+    """屏不在本机、对端也不可用：如实报错，别用「假成功」骗界面。"""
+    backend = MockBackend(current=17, monitors=[_aoc()], active=[])
+    ctl = SwitchController(make_cfg(this_host="mac"), backend)
+    ctl.remote_switch = lambda value: (False, "对端未连接或未配对")
+    ctl.remote_ready = lambda: False
+
+    result = ctl.switch_now("mac")
+    assert result.ok is False
+    assert "画面不在本机" in (result.error or "")
+    assert backend.set_calls == []
+
+
+def test_picture_probe_unavailable_keeps_old_behaviour():
+    """后端分不出「挂着 / 在用」时不能改变原有行为（老版本、缺 pyobjc）。"""
+    backend = MockBackend(current=17, monitors=[_aoc()], active=None)
+    ctl = SwitchController(make_cfg(this_host="mac"), backend)
+    ctl.remote_switch = lambda value: (True, "")
+    ctl.remote_ready = lambda: True
+
+    result = ctl.switch_now("windows")
+    assert result.via == "local"
+    assert backend.set_calls == [17]
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-003：目标要跟着「画面在哪」走，不能跟着 switch_mode 走
+# --------------------------------------------------------------------------- #
+def test_target_follows_the_picture_not_the_config():
+    """`switch_mode=other` 时旧代码无条件返回 other_host()：
+    Mac 端于是永远只会把画面送出去、永远叫不回来（按钮写「切换到 Mac」却发 17）。
+    """
+    backend = MockBackend(current=17, monitors=[_aoc()], active=[])
+    ctl = SwitchController(make_cfg(this_host="mac"), backend)   # 默认 switch_mode=other
+
+    ctl.note_scan([_aoc()])                # 先在本机看到它 → 画面在本机
+    assert ctl.source_state == "mac"
+    assert ctl._resolve_target() == "windows"
+
+    ctl.note_scan([])                      # 之后枚举不到了 → 画面在 Windows
+    assert ctl.source_state == "windows"
+    assert ctl._resolve_target() == "mac"  # 「切换到 Mac」= 把画面叫回来

@@ -139,7 +139,8 @@ class UiRunner2(QObject):
         self._seen_source = controller.source_state
         self.window.switchRequested.connect(lambda: self.do_switch())
         self.window.forceRequested.connect(self.do_force)
-        self.window.deviceClicked.connect(lambda host: self.do_switch())
+        # 点设备卡 = 「切到这台」，信号里带的就是目标主机，别再丢掉
+        self.window.deviceClicked.connect(self.do_switch)
         self.window.hiddenToBackground.connect(self._enter_background)
         self.window.pageChanged.connect(self._on_page_changed)
         self.window.quitRequested.connect(self.quit_application)
@@ -329,13 +330,30 @@ class UiRunner2(QObject):
             self._pair_text = text
             self._refresh_menu()
 
+    def _next_target(self) -> str:
+        """按钮文案「切换到 X」对应的目标：画面在哪台，就切到另一台。
+
+        unknown 态下按钮写的是「从 X 切过来」，那就把画面叫回本机 ——
+        让动作和按钮上的字永远一致，否则点下去会「看着没反应」。
+        """
+        host = self.controller.source_state
+        if host == SOURCE_UNKNOWN:
+            return self.cfg.effective_host()
+        return (
+            self.cfg.other_host()
+            if host == self.cfg.effective_host()
+            else self.cfg.effective_host()
+        )
+
     def do_switch(self, target: str | None = None) -> None:
         if self._busy:
             return
+        if target not in ("windows", "mac"):
+            target = self._next_target()
         self._busy = True
-        other = "Mac" if self.cfg.other_host() == "mac" else "Windows"
-        self.switch_page.set_busy(True, other)
-        self.switch_page.set_note(f"正在发送 DDC Set · 目标 {other}", ok=False)
+        label = "Mac" if target == "mac" else "Windows"
+        self.switch_page.set_busy(True, label)
+        self.switch_page.set_note(f"正在发送 DDC Set · 目标 {label}", ok=False)
 
         def work() -> None:
             try:

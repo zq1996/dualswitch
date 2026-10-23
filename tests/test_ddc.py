@@ -80,3 +80,94 @@ def test_pick_without_monitors():
     backend = MockBackend(monitors=[])
     with pytest.raises(DDCError, match="未发现"):
         backend.pick([])
+
+
+# --------------------------------------------------------------------------- #
+# 活动信号枚举（ISSUE-003）：macOS 的 m1ddc 在屏切走之后照样列得出这块屏
+# --------------------------------------------------------------------------- #
+def _fake_screen(number: int, name: str):
+    """够用的 NSScreen 替身：只实现 deviceDescription / localizedName。"""
+
+    class _Screen:
+        def deviceDescription(self):
+            class _Desc:
+                def objectForKey_(self, key):  # noqa: N802 - ObjC 风格
+                    return number
+
+            return _Desc()
+
+        def localizedName(self):
+            return name
+
+    return _Screen()
+
+
+def _install_fake_pyobjc(monkeypatch, screens, builtin=()):
+    import types
+
+    appkit = types.ModuleType("AppKit")
+
+    class NSScreen:
+        @staticmethod
+        def screens():
+            return list(screens)
+
+    appkit.NSScreen = NSScreen
+    quartz = types.ModuleType("Quartz")
+    quartz.CGDisplayIsBuiltin = lambda number: number in builtin
+    monkeypatch.setitem(sys.modules, "AppKit", appkit)
+    monkeypatch.setitem(sys.modules, "Quartz", quartz)
+
+
+def test_mac_active_monitors_ignores_builtin_screen(monkeypatch):
+    """内置屏必须被排除：mac 默认 monitor_match 为空，留着它「画面永远在本机」。"""
+    from dualswitch.ddc.macos import M1ddcBackend
+
+    _install_fake_pyobjc(
+        monkeypatch,
+        [_fake_screen(1, "Built-in Retina Display"), _fake_screen(2, "AOC Q2790PC")],
+        builtin={1},
+    )
+    monitors = M1ddcBackend().active_monitors()
+    assert [m.description for m in monitors] == ["AOC Q2790PC"]
+
+
+def test_mac_active_monitors_empty_when_only_builtin(monkeypatch):
+    from dualswitch.ddc.macos import M1ddcBackend
+
+    _install_fake_pyobjc(monkeypatch, [_fake_screen(1, "Built-in Retina Display")], builtin={1})
+    assert M1ddcBackend().active_monitors() == []
+
+
+def test_mac_active_monitors_returns_none_without_pyobjc(monkeypatch):
+    """缺 pyobjc 时必须说「我不知道」，不能假装「看不到屏」。"""
+    from dualswitch.ddc.macos import M1ddcBackend
+
+    monkeypatch.setitem(sys.modules, "AppKit", None)
+    assert M1ddcBackend().active_monitors() is None
+
+
+def test_mac_active_monitors_returns_none_without_display_name(monkeypatch):
+    """取不到显示名就没法按 monitor_match 匹配，整轮作废好过给假答案。"""
+    from dualswitch.ddc.macos import M1ddcBackend
+
+    _install_fake_pyobjc(monkeypatch, [_fake_screen(2, "")])
+    assert M1ddcBackend().active_monitors() is None
+
+
+def test_probe_active_monitors_falls_back_when_backend_cannot_tell():
+    from dualswitch.ddc.base import probe_active_monitors
+
+    backend = MockBackend(monitors=[MonitorInfo(index=0, description="AOC")], active=None)
+    assert probe_active_monitors(backend) == backend.list_monitors()
+
+
+def test_probe_active_monitors_falls_back_on_probe_error():
+    from dualswitch.ddc.base import probe_active_monitors
+
+    class Boom(MockBackend):
+        def active_monitors(self):
+            raise RuntimeError("IOKit 炸了")
+
+    backend = Boom(monitors=[MonitorInfo(index=0, description="AOC")])
+    assert probe_active_monitors(backend) == backend.list_monitors()

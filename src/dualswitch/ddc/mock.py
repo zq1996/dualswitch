@@ -18,6 +18,7 @@ class MockBackend(BaseBackend):
         fail_get: bool = False,
         readback_value: int | None = None,
         monitors: list[MonitorInfo] | None = None,
+        active: list[MonitorInfo] | None = None,
     ):
         super().__init__(vcp_code=vcp_code, monitor_match=monitor_match, monitor_index=monitor_index)
         self.current = current
@@ -34,9 +35,15 @@ class MockBackend(BaseBackend):
                 device_id="MONITOR\\AOC2790\\{mock}",
             )
         ]
+        # None = 模拟「后端分不出挂着和在用」（退回 list_monitors）；
+        # [] = 屏还挂在总线上但不在本机输出画面（macOS 上就是这个样子）
+        self._active = active
 
     def list_monitors(self) -> list[MonitorInfo]:
         return list(self._monitors)
+
+    def active_monitors(self) -> list[MonitorInfo] | None:
+        return None if self._active is None else list(self._active)
 
     def set_input(self, value: int) -> None:
         self.set_calls.append(int(value))

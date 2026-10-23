@@ -46,13 +46,37 @@ python tools/diag_macos_hotkey.py --simulate # 不用真按，自己发一个合
 3. **HDR / VRR 干扰**。关掉 HDR、把刷新率降到 60Hz 再试。
 4. **线材问题**。HDMI 线太长/转接器可能丢 DDC 包；换短一点的线。
 
-## 3. 能切走，切不回来
+## 3. 能切走，切不回来（2026-10-23 已修，见 §3.1）
 
-Windows 切到 Mac 后，Windows 就看不到显示器了，所以：
-- Windows 侧的「回读」必然失败 → 日志出现「回读未确认」，**这是预期的**，不是错误；
-- 切回来必须靠 Mac 端的热键，或者在 Mac 上执行 `m1ddc set input 17`。
+正常情况下不需要任何手工操作：画面在 Mac 上时，Windows 端看得到屏，本地发 Set；
+画面在 Windows 上时，Mac 端**看得到这块屏但打不到它**，于是请 Windows 代发。
 
-如果 Mac 端热键也没配好，暂时用 Mac 的「系统设置 → 显示器」或显示器 OSD 手动切回。
+### 3.1 「对端代发从来没好用过」的两个真因（已修）
+
+| 真因 | 表现 | 修法 |
+|---|---|---|
+| **目标算错**：`switch_mode=other` 时 `_resolve_target()` 无条件返回 `other_host()` | Mac 端按钮写「切换到 Mac」，实际发的是 Windows 的 17 —— 屏一点反应都没有 | 改成**画面在哪台就切到另一台**；`switch_mode` 只在判不出归属时兜底 |
+| **等不到异常**：屏在 HDMI 时，USB-C 上的 `m1ddc set input` 返回 0（假成功） | 不进 `except DDCError` ⇒ 永远不触发代发 | 用 AppKit 的**活动显示配置**提前判定「屏不在本机」，直接请对端；判不出来就如实报错，不谎报成功 |
+
+自检方法（Mac 上，屏保持在 Windows）：
+
+```bash
+dualswitch probe
+# 物理显示器: [0] AOC Q2790PC …      ← m1ddc 列得出它（挂着）
+# 活动画面  : 无（屏不在本机输出画面 ⇒ 需要请对端代发）
+```
+
+`活动画面: 无` 就是「该请对端代发」的判据。点了切换之后，Windows 端日志应出现
+`替对端切屏 VCP 0x60=18 → ok`，Mac 端日志出现 `远端代发切屏 → ok`。
+
+> 如果 `活动画面` 显示「本后端分不出」（缺 pyobjc 的 Mac、或 Windows），
+> 程序会退回旧行为：本机先发 Set，失败（抛 DDCError）再请对端 ——
+> 这种情况下「假成功」仍然存在，装上 `pip install pyobjc-framework-Quartz` 才有硬证据。
+
+### 3.2 兜底手段
+
+- 「强制切」按钮 / `dualswitch switch --to windows|mac`：跳过代发策略，直接本机发 Set；
+- Mac 端还可以 `m1ddc set input 17`，或显示器 OSD 手动切。
 
 ## 4. 关窗口后托盘里没有图标，但任务管理器里进程还在
 

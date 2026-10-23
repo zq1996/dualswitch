@@ -514,6 +514,34 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-23 **修「对端代发从来没好用过」**（用户报告：Mac 端点两个方向都没反应）。
+  调查过程与已证伪的假设见 `docs/INVESTIGATION-INPUT-BOUNCE.md`（该文档第 0 节已补结论）。
+  · **真因一（目标算错）**：`_resolve_target()` 在 `switch_mode="other"`（默认值）下
+    **无条件**返回 `other_host()`。Mac 端于是永远只会把画面「送出去」：按钮写
+    「切换到 Mac」，实际发 `VCP=17`，屏一动不动。改成**画面在哪台就切到另一台**
+    （`_display_source` 已知时按它算），`switch_mode` 只在判不出归属时兜底；
+    `--to other` 保留旧语义。界面层 `do_switch()` 新增 `_next_target()`：按
+    `source_state` 算目标，unknown 态 = 「叫回本机」，与按钮文案一致。
+  · **真因二（等不到异常）**：屏在 HDMI 时 USB-C 上的 `m1ddc set input` 返回 0
+    （**假成功**），不抛 `DDCError` ⇒ `_try_remote` 的两个触发条件一个都不成立 ⇒
+    代发永远不触发。新增后端能力 **`active_monitors()`**：macOS 用 AppKit
+    `NSScreen.screens()` 的当前显示配置（排除内置屏），Windows 等后端默认返回
+    `None`（`EnumDisplayMonitors` 本来就是活动信号）。`_execute` 在本地发 Set
+    **之前**判「屏此刻在不在本机」，不在 ⇒ 直接请对端；代发也失败就**如实报错**，
+    不再让假成功骗过界面。判不出来（缺 pyobjc / 老后端）⇒ 完全退回旧行为。
+  · 归属判定、启动探测、`T_STATE` 心跳、`dualswitch probe` 全部改用
+    `probe_active_monitors()`；`probe` 新增 `活动画面` 一行（`活动画面: 无` 就是
+    「该请对端代发」的判据，Mac 上一条命令就能验）。
+  · 顺手修：`window.deviceClicked` 接到 `lambda host: self.do_switch()`，**把点的是
+    哪台丢了** —— 点设备卡与点主按钮行为一样。改成直连 `do_switch`。
+  · 自测：**438 用例 / 0 失败（428 passed + 10 skipped）**。新增 11 例：
+    `test_ddc.py` 6 例（内置屏过滤 / 只有内置屏 / 缺 pyobjc 返回 None /
+    无名屏作废 / 探测异常回落）、`test_remote_switch.py` 5 例（屏在对面直接代发且
+    不发本地 Set / 屏在本机仍走本地 / 对端不可用时如实报错 / 探测不可用时保持旧行为 /
+    目标跟着画面走）。`tools/e2e_remote_switch.py` 8/8 仍通过。
+  · **待真机确认**：Mac 上 `dualswitch probe` 的 `活动画面` 一行（屏切到 HDMI 后
+    `NSScreen` 到底列不列得出这块屏）。
+
 - 2026-10-23 **修「对端代发不好用」+ 归属判定改联合判定（T_STATE 0x32）**。
   · **问题一（对端代发被绑在剪贴板开关上）**：`cli._start_clip_engine()` 第一行
     `if not cfg.clipboard.enabled: return None`，`SyncEngine.start()` 也 `if not cfg.enabled: return`。
