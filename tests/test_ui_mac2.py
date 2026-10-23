@@ -1163,6 +1163,57 @@ def test_preview_image_never_upscaled(app, cfg):
     ctrl.hide_now()
 
 
+def test_preview_image_clamps_to_bounds(app, cfg):
+    """图片预览走 Frset 的 clamp 模型：下限 346×226、上限 562×626（2026-10-23 实测）。
+
+    逻辑是「内容自报 + 硬钳制」：
+      · 小图不放大，但窗口撑到下限，别塌成一条；
+      · 大图按内容框等比缩，窗口封顶。
+    """
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QColor, QImage
+
+    def make(src_w: int, src_h: int) -> bytes:
+        # 必须按真实像素生成：_build_image 是用 PNG 的实际像素算缩放因子的，
+        # 这里若预先缩图，测到的就是缩略图尺寸而不是原图行为。
+        img = QImage(src_w, src_h, QImage.Format_ARGB32)
+        img.fill(QColor("#83A8FF"))
+        buf = QBuffer()
+        buf.open(QIODevice.WriteOnly)
+        img.save(buf, "PNG")
+        return bytes(buf.data())
+
+    def bubble_size(src_w: int, src_h: int) -> tuple[int, int]:
+        rec = ClipRecord(id=f"c{src_w}x{src_h}", kind="image", png=make(src_w, src_h),
+                         width=src_w, height=src_h, size=9000, state="ok")
+        page = ClipboardPage(FakeEngine([rec]))
+        page.refresh()
+        row = page._rows[rec.id]
+        ctrl = page.preview_controller
+        ctrl.open_now(row.record, row.ui_kind, row.thumb)
+        size = (ctrl.bubble.width(), ctrl.bubble.height())
+        ctrl.hide_now()
+        return size
+
+    # 小图：窗口顶到下限，图本身不放大
+    assert bubble_size(60, 40) == (theme.PV_IMG_MIN_W, theme.PV_IMG_MIN_H)
+
+    # 各种极端比例：宽度/高度都必须落在上下限之间
+    for src in ((1200, 180), (260, 1800), (900, 900)):
+        w, h = bubble_size(*src)
+        assert theme.PV_IMG_MIN_W <= w <= theme.PV_IMG_MAX_W, f"{src} 宽度越界：{w}"
+        assert theme.PV_IMG_MIN_H <= h <= theme.PV_IMG_MAX_H, f"{src} 高度越界：{h}"
+
+    # 竖图被高度封顶 → 宽度落在下限，而不是按比例缩成一条
+    w, h = bubble_size(260, 1800)
+    assert w == theme.PV_IMG_MIN_W
+    assert h >= theme.PV_IMG_MAX_H - 12
+
+    # 方图吃满内容框 → 宽度接近上限
+    w, _ = bubble_size(900, 900)
+    assert w >= theme.PV_IMG_MAX_W - 60
+
+
 # --------------------------------------------------------------------------- #
 # 17. 图片文件 → 预览图 + 来源应用（mac 后端，第三轮）
 # --------------------------------------------------------------------------- #

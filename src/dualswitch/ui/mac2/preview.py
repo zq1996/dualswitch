@@ -352,8 +352,23 @@ class PreviewBubble(QFrame):
         self._body_wrap.setFixedHeight(max(56, body_h))
 
         h = head_h + max(56, body_h) + foot_h
-        self.resize(w, min(h, max_h))
+        w, h = self._clamp_popover(kind, w, h, max_w, max_h)
+        self.resize(w, h)
         self._apply_inner_geometry()
+
+    @staticmethod
+    def _clamp_popover(kind: str, w: int, h: int, max_w: int, max_h: int) -> tuple[int, int]:
+        """窗口尺寸 = clamp(内容 + chrome, 下限, 上限)（Frset 模型，2026-10-23 实测）。
+
+        上限已经在 `SIZE_CAPS` 里按内容类型定好，这里只补**下限** ——
+        而且只给图片补：小截图不放大（糊），但气泡也不能塌成一条，
+        给它一个最小窗口、图居中留白，看起来仍然是个正经的预览窗。
+        文本/代码/文件没有下限，它们本来就该贴着内容走。
+        """
+        if kind == "image":
+            w = max(w, min(theme.PV_IMG_MIN_W, max_w))
+            h = max(h, min(theme.PV_IMG_MIN_H, max_h))
+        return min(w, max_w), min(h, max_h)
 
     @staticmethod
     def _screen_cap() -> int:
@@ -537,7 +552,7 @@ class PreviewBubble(QFrame):
         self._btn_find.setVisible(ui_kind == "file")
         self.sync_size()
 
-    #: 分类上限（INTERACTIONS §3.4）
+    #: 分类上限（INTERACTIONS §3.4），值是**窗口**尺寸，不是内容尺寸
     SIZE_CAPS = {
         "image": (theme.PV_IMG_MAX_W, theme.PV_IMG_MAX_H),
         # 文本/代码的高度上限交给屏幕：内容多长就长多高，长到屏幕放不下时内部滚动
@@ -546,6 +561,17 @@ class PreviewBubble(QFrame):
         "file": (theme.PV_CARD_MAX_W, 320),
         "link": (theme.PV_CARD_MAX_W, 320),
     }
+
+    #: 窗口上限里不能给图片的部分：头部 40 + 底栏 49 + 正文上下内边距 28 + 注脚 32
+    IMG_CHROME_H = 40 + 49 + 28 + 32
+
+    @classmethod
+    def _image_area(cls) -> tuple[int, int]:
+        """图片最大可渲染区域 = 窗口上限 − chrome（与 sync_size 用的是同一组数）。"""
+        return (
+            theme.PV_IMG_MAX_W - 28 - ARROW_MARGIN,
+            theme.PV_IMG_MAX_H - cls.IMG_CHROME_H,
+        )
 
     def _replace_pill(self, record) -> None:  # noqa: ANN001
         while self._pill_box.count():
@@ -564,8 +590,7 @@ class PreviewBubble(QFrame):
             pix = QPixmap.fromImage(image)
             # 只缩不放：QPixmap.scaled 的 KeepAspectRatio 会**放大**小图，
             # 100px 的截图被拉到 300px 只会糊（显示宽度同时决定气泡宽度）。
-            avail_w = theme.PV_IMG_MAX_W - 28 - ARROW_MARGIN
-            avail_h = theme.PV_IMG_MAX_H - 40 - 49 - 28 - 32   # 头 + 底栏 + 内边距 + 注脚
+            avail_w, avail_h = self._image_area()
             factor = min(1.0, avail_w / max(1, pix.width()), avail_h / max(1, pix.height()))
             scaled = pix.scaled(
                 max(1, int(pix.width() * factor)),
@@ -808,6 +833,10 @@ class PreviewController(QObject):
             top = screen.bottom() - h - 12
         if top < screen.top() + 12:
             top = screen.top() + 12
+        # 翻到右侧时可能顶出屏幕右缘（窗口上限放宽到 562 后更容易），夹回来
+        left_min = screen.left() + 12
+        left_max = screen.right() - w - 12
+        left = left_min if left_max < left_min else min(max(left, left_min), left_max)
         self.bubble.setGeometry(left, top, w, h)
         # 箭头对准缩略图中线
         self.bubble.set_arrow(arrow_right, thumb_r.center().y() - top)
