@@ -1759,3 +1759,39 @@ def test_hero_pill_is_rounded(app, cfg):
         page.close()
     finally:
         app.setStyleSheet(old)
+
+
+# --------------------------------------------------------------------------- #
+# 剪贴板热键：回调跨线程，绝不能碰 Qt（2026-10-23 按热键即崩）
+# --------------------------------------------------------------------------- #
+def test_clip_hotkey_callback_defers_to_main_thread(app, cfg):
+    """CGEventTap 的回调在后台线程执行，直接动界面会让进程当场崩掉。
+
+    守卫三件事：
+      1. `_build_clipboard_hotkey` 交给热键的回调里**不能**出现 show_page；
+      2. 回调只 emit 信号；
+      3. 信号确实连到了在主线程干活的槽。
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from dualswitch.ui.mac2 import runner as runner_mod
+
+    build_src = textwrap.dedent(inspect.getsource(runner_mod.UiRunner2._build_clipboard_hotkey))
+    # 用 AST 看真实调用，别被注释里的字样骗了
+    calls = [
+        n for n in ast.walk(ast.parse(build_src))
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "show_page"
+    ]
+    assert not calls, "热键回调直接调了 show_page —— tap 线程操作 QWidget 会立刻崩溃"
+    assert "clipboardHotkeyPressed.emit" in build_src, "热键回调必须只 emit 信号"
+
+    slot_src = inspect.getsource(runner_mod.UiRunner2._on_clipboard_hotkey)
+    assert "show_page" in slot_src, "主线程槽里才应该真正切页"
+
+    init_src = inspect.getsource(runner_mod.UiRunner2.__init__)
+    assert "clipboardHotkeyPressed.connect(self._on_clipboard_hotkey)" in init_src, \
+        "信号没有连到主线程槽，热键会静默失效"
