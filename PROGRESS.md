@@ -514,6 +514,17 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-23 **合并 mac 端 7 个提交（Retina 预览 + Dock 图标 + 热键崩溃）**。
+  远端 `d0c5fe4..999c5fd` 共 7 个提交（`mac2/preview.py` 按 Frset clamp 模型改预览窗、
+  按 `devicePixelRatio` 渲染、预览高度按逻辑像素量、剪贴板热键回调改走信号、Dock 图标显式设给
+  NSApplication、每次切回 Regular 重设程序坞图标），与本地「ghost 按钮只卡高」的改动
+  **无文本冲突**，`ort` 自动合并通过。
+  · 语义冲突一处：`tests/test_ui_mac2.py` 里 `_tiny_png` 被定义了两次（第 161 行 8×8、第 1447 行 64×48），
+    后定义遮蔽前者 —— 两侧都存在、内容一致所以 git 看不出来。已把文件节那个改名 `_file_png()`
+    并更新 7 处调用点，`make_records()` 才真正拿到 8×8 的图。
+  · 自测：`QT_QPA_PLATFORM=offscreen pytest` → **402 用例 / 0 失败（392 passed + 10 skipped）**；
+    `test_ui_mac2` 在 Windows 上按模块门禁整体跳过，改名部分靠 `ast` + 重复名扫描复核。
+
 - 2026-10-22 **重新打包（Windows onedir）**：旧 `dist\dualswitch` 先移出再打包，产物
   `dist\dualswitch\dualswitch.exe`（6.2MB，整包 135MB / 184 文件），`--selfcheck` 退出码 0
   （33 个界面模块可导入），完整性标签 High，翻译只留 3 个 zh_CN。

@@ -1444,7 +1444,12 @@ def _file_rec(rid="fd", name="ChatGPTInstaller.dmg", path=None, png=None):
     )
 
 
-def _tiny_png():
+def _file_png():
+    """文件 / 图片预览用的大图（64×48），和顶部 `_tiny_png()`（8×8）区分开。
+
+    两者曾经同名，后定义的会遮蔽前者 —— `make_records()` 里 width=8/height=8 的
+    记录实际拿到的是 64×48 的图。合并时统一改名，避免再踩。
+    """
     from PySide6.QtCore import QBuffer, QIODevice
     from PySide6.QtGui import QColor, QImage
 
@@ -1485,8 +1490,8 @@ def test_file_row_title_and_meta_show_name_and_folder(app):
 def test_file_row_buttons_by_type(app, cfg):
     """截图 = 只有预览；图片文件 = 预览 + 打开文件；普通文件 = 只有打开文件。"""
     shots = _file_rec("fd", "ChatGPTInstaller.dmg")
-    image_file = _file_rec("fi", "照片.png", png=_tiny_png())
-    screenshot = ClipRecord(id="sc", kind="image", png=_tiny_png(), width=64, height=48,
+    image_file = _file_rec("fi", "照片.png", png=_file_png())
+    screenshot = ClipRecord(id="sc", kind="image", png=_file_png(), width=64, height=48,
                             size=9000, state="ok", app="截图")
     page = ClipboardPage(FakeEngine([shots, image_file, screenshot]))
     page.refresh()
@@ -1501,8 +1506,8 @@ def test_file_row_buttons_by_type(app, cfg):
 
 def test_file_bubble_buttons_by_type(app, cfg):
     shots = _file_rec("fd", "ChatGPTInstaller.dmg")
-    image_file = _file_rec("fi", "照片.png", png=_tiny_png())
-    screenshot = ClipRecord(id="sc", kind="image", png=_tiny_png(), width=64, height=48,
+    image_file = _file_rec("fi", "照片.png", png=_file_png())
+    screenshot = ClipRecord(id="sc", kind="image", png=_file_png(), width=64, height=48,
                             size=9000, state="ok", app="截图")
     page = ClipboardPage(FakeEngine([shots, image_file, screenshot]))
     page.refresh()
@@ -1519,7 +1524,7 @@ def test_file_bubble_buttons_by_type(app, cfg):
 
 def test_file_bubble_is_file_card_not_image(app, cfg, tmp_path):
     """图片文件的气泡是「文件」卡：标题写「文件」，正文是文件名 + 目录。"""
-    rec = _file_rec("fi", "照片.png", png=_tiny_png())
+    rec = _file_rec("fi", "照片.png", png=_file_png())
     page = ClipboardPage(FakeEngine([rec]))
     page.refresh()
     page.preview_controller.open_now(rec, "file", page._rows["fi"].thumb)
@@ -1594,7 +1599,7 @@ def test_image_file_still_syncs(app, cfg):
             sent.append(item)
 
     engine = SyncEngine(cfg.clipboard, backend=None, transport=FakeTransport())
-    item = make_file("/tmp/a.png", png=_tiny_png(), width=64, height=48, size=9000)
+    item = make_file("/tmp/a.png", png=_file_png(), width=64, height=48, size=9000)
     engine._send(item)
     assert len(sent) == 1
     assert sent[0].image is not None
