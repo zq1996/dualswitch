@@ -1159,8 +1159,123 @@ def test_preview_image_never_upscaled(app, cfg):
         w for w in ctrl.bubble._body_wrap.findChildren(QLabel)
         if w.pixmap() is not None and not w.pixmap().isNull()
     ]
-    assert labels and labels[0].pixmap().width() <= 120, "小图被放大了，会糊"
+    assert labels, "没有图片标签"
+    pm = labels[0].pixmap()
+    # 用逻辑尺寸判断（物理宽 ÷ dpr），否则 2x 屏上会误判成放大
+    assert pm.width() / max(1.0, pm.devicePixelRatio()) <= 120, "小图被放大了，会糊"
     ctrl.hide_now()
+
+
+def test_preview_image_retina_sharp(app, cfg):
+    """缩放位图必须按 devicePixelRatio 渲染真实像素（2026-10-23）。
+
+    只渲逻辑像素的话，521 宽的位图在 2x 屏上会被插值放大 2 倍，
+    截图里的文字直接糊掉 —— 这是用户实测报的 bug。
+    """
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QLabel
+
+    img = QImage(1200, 900, QImage.Format_ARGB32)
+    img.fill(QColor("#83A8FF"))
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    img.save(buf, "PNG")
+    rec = ClipRecord(id="sharp", kind="image", png=bytes(buf.data()),
+                     width=1200, height=900, size=9000, state="ok")
+    page = ClipboardPage(FakeEngine([rec]))
+    page.refresh()
+    row = page._rows["sharp"]
+    ctrl = page.preview_controller
+    ctrl.open_now(row.record, row.ui_kind, row.thumb)
+    bubble = ctrl.bubble
+    labels = [
+        w for w in bubble._body_wrap.findChildren(QLabel)
+        if w.pixmap() is not None and not w.pixmap().isNull()
+    ]
+    assert labels, "没有图片标签"
+    pm = labels[0].pixmap()
+    dpr = bubble.devicePixelRatioF()
+    # 位图的 dpr 必须和窗口一致，否则就是没按真实像素渲染
+    assert abs(pm.devicePixelRatio() - dpr) < 0.01, f"pixmap dpr={pm.devicePixelRatio()} ≠ 窗口 {dpr}"
+    # 物理像素 ≈ 逻辑显示尺寸 × dpr
+    logical_w = pm.width() / max(1.0, pm.devicePixelRatio())
+    assert abs(logical_w - bubble._image_w) <= 1, "逻辑宽度与气泡宽度不一致"
+    assert pm.width() >= logical_w * dpr * 0.99, "位图物理像素不足，2x 屏上会发虚"
+    ctrl.hide_now()
+
+
+def test_preview_measure_uses_logical_pixmap_height(app, cfg):
+    """_measure_body_child 必须按**逻辑**高度算（2026-10-23）。
+
+    pixmap 存的是物理像素：Retina 下 `pix.height()` 是逻辑高度的 2 倍。
+    直接拿它算会把窗口高度翻倍，预览窗出现大片空白、图片被挤成一条缝。
+    用 setDevicePixelRatio(2) 的合成 pixmap 稳定复现，不依赖测试机是不是 retina。
+    """
+    from PySide6.QtGui import QColor, QPixmap
+    from PySide6.QtWidgets import QLabel
+
+    from dualswitch.ui.mac2.preview import PreviewBubble
+
+    pm = QPixmap(200, 100)
+    pm.fill(QColor("#83A8FF"))
+    pm.setDevicePixelRatio(2.0)          # 模拟 Retina：物理 200×100 = 逻辑 100×50
+    label = QLabel()
+    label.setPixmap(pm)
+
+    got = PreviewBubble._measure_body_child(label, 500)
+    assert got == 52, f"应按逻辑高度 50 计算（+2 padding），实际 {got} —— 说明用了物理像素 100"
+
+
+def test_preview_image_clamps_to_bounds(app, cfg):
+    """图片预览走 Frset 的 clamp 模型：下限 346×226、上限 562×626（2026-10-23 实测）。
+
+    逻辑是「内容自报 + 硬钳制」：
+      · 小图不放大，但窗口撑到下限，别塌成一条；
+      · 大图按内容框等比缩，窗口封顶。
+    """
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QColor, QImage
+
+    def make(src_w: int, src_h: int) -> bytes:
+        # 必须按真实像素生成：_build_image 是用 PNG 的实际像素算缩放因子的，
+        # 这里若预先缩图，测到的就是缩略图尺寸而不是原图行为。
+        img = QImage(src_w, src_h, QImage.Format_ARGB32)
+        img.fill(QColor("#83A8FF"))
+        buf = QBuffer()
+        buf.open(QIODevice.WriteOnly)
+        img.save(buf, "PNG")
+        return bytes(buf.data())
+
+    def bubble_size(src_w: int, src_h: int) -> tuple[int, int]:
+        rec = ClipRecord(id=f"c{src_w}x{src_h}", kind="image", png=make(src_w, src_h),
+                         width=src_w, height=src_h, size=9000, state="ok")
+        page = ClipboardPage(FakeEngine([rec]))
+        page.refresh()
+        row = page._rows[rec.id]
+        ctrl = page.preview_controller
+        ctrl.open_now(row.record, row.ui_kind, row.thumb)
+        size = (ctrl.bubble.width(), ctrl.bubble.height())
+        ctrl.hide_now()
+        return size
+
+    # 小图：窗口顶到下限，图本身不放大
+    assert bubble_size(60, 40) == (theme.PV_IMG_MIN_W, theme.PV_IMG_MIN_H)
+
+    # 各种极端比例：宽度/高度都必须落在上下限之间
+    for src in ((1200, 180), (260, 1800), (900, 900)):
+        w, h = bubble_size(*src)
+        assert theme.PV_IMG_MIN_W <= w <= theme.PV_IMG_MAX_W, f"{src} 宽度越界：{w}"
+        assert theme.PV_IMG_MIN_H <= h <= theme.PV_IMG_MAX_H, f"{src} 高度越界：{h}"
+
+    # 竖图被高度封顶 → 宽度落在下限，而不是按比例缩成一条
+    w, h = bubble_size(260, 1800)
+    assert w == theme.PV_IMG_MIN_W
+    assert h >= theme.PV_IMG_MAX_H - 12
+
+    # 方图吃满内容框 → 宽度接近上限
+    w, _ = bubble_size(900, 900)
+    assert w >= theme.PV_IMG_MAX_W - 60
 
 
 # --------------------------------------------------------------------------- #
@@ -1666,3 +1781,85 @@ def test_hero_pill_is_rounded(app, cfg):
         page.close()
     finally:
         app.setStyleSheet(old)
+
+
+# --------------------------------------------------------------------------- #
+# 剪贴板热键：回调跨线程，绝不能碰 Qt（2026-10-23 按热键即崩）
+# --------------------------------------------------------------------------- #
+def test_clip_hotkey_callback_defers_to_main_thread(app, cfg):
+    """CGEventTap 的回调在后台线程执行，直接动界面会让进程当场崩掉。
+
+    守卫三件事：
+      1. `_build_clipboard_hotkey` 交给热键的回调里**不能**出现 show_page；
+      2. 回调只 emit 信号；
+      3. 信号确实连到了在主线程干活的槽。
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from dualswitch.ui.mac2 import runner as runner_mod
+
+    build_src = textwrap.dedent(inspect.getsource(runner_mod.UiRunner2._build_clipboard_hotkey))
+    # 用 AST 看真实调用，别被注释里的字样骗了
+    calls = [
+        n for n in ast.walk(ast.parse(build_src))
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "show_page"
+    ]
+    assert not calls, "热键回调直接调了 show_page —— tap 线程操作 QWidget 会立刻崩溃"
+    assert "clipboardHotkeyPressed.emit" in build_src, "热键回调必须只 emit 信号"
+
+    slot_src = inspect.getsource(runner_mod.UiRunner2._on_clipboard_hotkey)
+    assert "show_page" in slot_src, "主线程槽里才应该真正切页"
+
+    init_src = inspect.getsource(runner_mod.UiRunner2.__init__)
+    assert "clipboardHotkeyPressed.connect(self._on_clipboard_hotkey)" in init_src, \
+        "信号没有连到主线程槽，热键会静默失效"
+
+
+# --------------------------------------------------------------------------- #
+# Dock 图标：Qt 的 setWindowIcon 传不进 Dock（2026-10-23 热键唤起显示白纸）
+# --------------------------------------------------------------------------- #
+def test_dock_icon_is_set_on_nsapplication(app, cfg):
+    """Dock 图标必须显式塞给 NSApplication。
+
+    macOS 的 Dock 只看 `NSApp.applicationIconImage` 或 .app 的 Info.plist，
+    `QApplication.setWindowIcon()` 管不到。命令行启动时没有 bundle 图标，
+    热键把窗口唤到前台就是一张白纸。
+    """
+    NSAppKit = pytest.importorskip("AppKit")
+
+    from dualswitch.ui.chrome import mac as mac_chrome
+
+    mac_chrome.apply_app_icon()
+
+    img = NSAppKit.NSApplication.sharedApplication().applicationIconImage()
+    assert img is not None, "Dock 图标没设上"
+    size = img.size()
+    assert size.width >= 256, f"Dock 图标分辨率太低：{size.width}×{size.height}"
+
+
+def test_dock_icon_survives_policy_switch(app, cfg):
+    """切回 Regular 之后必须重设图标（setActivationPolicy_ 会把它重置成白纸）。"""
+    import inspect
+
+    from dualswitch.ui.chrome import mac as mac_chrome
+
+    src = inspect.getsource(mac_chrome.set_dock_visible)
+    assert "apply_app_icon()" in src, \
+        "set_dock_visible 切到 Regular 后没重设图标 —— 热键唤起会看到白纸"
+
+    icon_src = inspect.getsource(mac_chrome.apply_app_icon)
+    assert "setApplicationIconImage_" in icon_src, "没有调用 NSApplication.setApplicationIconImage_"
+
+
+def test_dock_icon_call_exists_in_init(app, cfg):
+    """构造函数里必须先设一次图标（首帧就有）。"""
+    import inspect
+
+    from dualswitch.ui.mac2 import runner as runner_mod
+
+    init_src = inspect.getsource(runner_mod.UiRunner2.__init__)
+    assert "_apply_dock_icon()" in init_src, "构造函数没有设置 Dock 图标"

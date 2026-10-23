@@ -12,7 +12,7 @@ import logging
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
@@ -66,6 +66,11 @@ class Toast(QWidget):
 # 运行器
 # --------------------------------------------------------------------------- #
 class UiRunner2(QObject):
+    #: 剪贴板热键的回调跑在 **CGEventTap 的后台线程**里，那里绝对不能碰 Qt：
+    #: 跨线程操作 QWidget 会立刻把进程干掉（2026-10-23 用户实测：一按热键就崩）。
+    #: 回调只 emit 这个信号，靠 Qt 的 queued connection 送回主线程再动界面。
+    clipboardHotkeyPressed = Signal()
+
     def __init__(self, cfg, cfg_file: Path, log_file: Path, backend, controller, hotkey,
                  warning=None, clip_engine=None):
         super().__init__()
@@ -93,6 +98,7 @@ class UiRunner2(QObject):
 
         self.icon = theme.app_icon()
         self.app.setWindowIcon(self.icon)
+        self._apply_dock_icon()
 
         hotkey_label = hotkey.describe() if hotkey else "未启用"
         self.window = MainWindow(cfg, hotkey_label, f"v{__version__}", self._monitor_name())
@@ -156,6 +162,8 @@ class UiRunner2(QObject):
         self._build_status()
         self._build_app_menu()
         self._clip_hotkey = None
+        # 热键回调在 tap 线程：只允许发信号，界面操作一律回主线程
+        self.clipboardHotkeyPressed.connect(self._on_clipboard_hotkey)
         self._build_clipboard_hotkey()
         self._refresh_menu()
         self._refresh_hotkey_ui()
@@ -402,6 +410,24 @@ class UiRunner2(QObject):
         if self.clip_poll is not None:
             self.clip_poll.setInterval(0 if paused else 500)
 
+    def _apply_dock_icon(self) -> None:
+        """启动时先把图标设上。
+
+        之后每次窗口从 Accessory 切回 Regular，`setActivationPolicy_` 都会把图标
+        重置成可执行文件的图标（命令行跑 python 就是白纸），所以 chrome 层的
+        `set_dock_visible()` 里还会再设一次 —— 这里只是让首帧就有图标。
+        """
+        try:
+            from ..chrome.mac import apply_app_icon
+        except Exception:  # pragma: no cover - 非 mac
+            log.debug("取不到 chrome 层图标实现", exc_info=True)
+            return
+        apply_app_icon()
+
+    def _on_clipboard_hotkey(self) -> None:
+        """真正在主线程执行的那一半（信号已把调用从 tap 线程投递过来）。"""
+        self.show_page(PAGE_CLIP)
+
     def _build_clipboard_hotkey(self) -> None:
         """⌘⇧V 全局热键 → 切到剪贴板页（INTERACTIONS §4.1 剪贴板热键）。"""
         spec = getattr(self.cfg, "clipboard_hotkey", "") or ""
@@ -409,7 +435,8 @@ class UiRunner2(QObject):
         if not spec:
             return
         try:
-            hk = self._spawn_hotkey(spec, lambda: self.show_page(PAGE_CLIP))
+            # 回调只 emit，不直接调 show_page —— tap 线程碰 Qt 会崩
+            hk = self._spawn_hotkey(spec, self.clipboardHotkeyPressed.emit)
             hk.start()
             self._clip_hotkey = hk
             log.info("剪贴板热键已注册：%s", hk.describe())

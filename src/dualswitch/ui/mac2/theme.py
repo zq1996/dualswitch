@@ -58,7 +58,13 @@ ACT_BTN = 25
 # 悬浮预览窗（Frset 参数，INTERACTIONS §3.4）
 PV_OPEN_DELAY_MS = 450           # 只悬停缩略图才计时
 PV_CLOSE_DELAY_MS = 220
-PV_IMG_MAX_W, PV_IMG_MAX_H = 412, 330
+#: 预览窗尺寸走 Frset 的「内容自报 + 硬钳制」模型（2026-10-23 逆向实测）：
+#:   窗口宽 = clamp(内容宽 + 水平 chrome, MIN_W, MAX_W)
+#:   窗口高 = clamp(内容高 + 垂直 chrome, MIN_H, MAX_H)
+#: 上下限都是**窗口**尺寸，不是图片像素尺寸；图片按内容框等比缩放、只缩不放。
+#: 实测 Frset 为 346×226 ~ 562×626，内容框 ≈ 524×524。
+PV_IMG_MAX_W, PV_IMG_MAX_H = 562, 626
+PV_IMG_MIN_W, PV_IMG_MIN_H = 346, 226
 PV_TXT_MAX_W, PV_TXT_MAX_H = 392, 270
 #: 预览窗正文最多渲染多少字。**不是视觉截断**：正常长度的文本一律完整显示
 #: （超长时预览窗长到屏幕高度、内部可滚动）；只有超过这个量级才切掉，

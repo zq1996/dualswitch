@@ -352,8 +352,23 @@ class PreviewBubble(QFrame):
         self._body_wrap.setFixedHeight(max(56, body_h))
 
         h = head_h + max(56, body_h) + foot_h
-        self.resize(w, min(h, max_h))
+        w, h = self._clamp_popover(kind, w, h, max_w, max_h)
+        self.resize(w, h)
         self._apply_inner_geometry()
+
+    @staticmethod
+    def _clamp_popover(kind: str, w: int, h: int, max_w: int, max_h: int) -> tuple[int, int]:
+        """窗口尺寸 = clamp(内容 + chrome, 下限, 上限)（Frset 模型，2026-10-23 实测）。
+
+        上限已经在 `SIZE_CAPS` 里按内容类型定好，这里只补**下限** ——
+        而且只给图片补：小截图不放大（糊），但气泡也不能塌成一条，
+        给它一个最小窗口、图居中留白，看起来仍然是个正经的预览窗。
+        文本/代码/文件没有下限，它们本来就该贴着内容走。
+        """
+        if kind == "image":
+            w = max(w, min(theme.PV_IMG_MIN_W, max_w))
+            h = max(h, min(theme.PV_IMG_MIN_H, max_h))
+        return min(w, max_w), min(h, max_h)
 
     @staticmethod
     def _screen_cap() -> int:
@@ -417,7 +432,11 @@ class PreviewBubble(QFrame):
         if isinstance(child, QLabel):
             pix = child.pixmap()
             if pix is not None and not pix.isNull():
-                return pix.height() + 2
+                # pixmap 尺寸是**物理像素**。Retina 下必须除以 devicePixelRatio 才是
+                # 逻辑高度（QLabel.sizeHint() 在这点上同样给物理高度），
+                # 否则 301 的图会被当成 602 算，窗口高度直接翻倍、图被挤成一条缝。
+                dpr = float(pix.devicePixelRatio() or 1.0)
+                return int(round(pix.height() / dpr)) + 2
             fm = QFontMetrics(child.font())
             if child.wordWrap():
                 flags = Qt.TextWordWrap | Qt.TextExpandTabs
@@ -537,7 +556,7 @@ class PreviewBubble(QFrame):
         self._btn_find.setVisible(ui_kind == "file")
         self.sync_size()
 
-    #: 分类上限（INTERACTIONS §3.4）
+    #: 分类上限（INTERACTIONS §3.4），值是**窗口**尺寸，不是内容尺寸
     SIZE_CAPS = {
         "image": (theme.PV_IMG_MAX_W, theme.PV_IMG_MAX_H),
         # 文本/代码的高度上限交给屏幕：内容多长就长多高，长到屏幕放不下时内部滚动
@@ -546,6 +565,18 @@ class PreviewBubble(QFrame):
         "file": (theme.PV_CARD_MAX_W, 320),
         "link": (theme.PV_CARD_MAX_W, 320),
     }
+
+    #: 窗口上限里不能给图片的部分：头部 40 + 底栏 49 + 正文上下内边距 28
+    #: （注脚行已删，见 _build_image；它跟标题/底栏重复，白吃 32px 高度）
+    IMG_CHROME_H = 40 + 49 + 28
+
+    @classmethod
+    def _image_area(cls) -> tuple[int, int]:
+        """图片最大可渲染区域 = 窗口上限 − chrome（与 sync_size 用的是同一组数）。"""
+        return (
+            theme.PV_IMG_MAX_W - 28 - ARROW_MARGIN,
+            theme.PV_IMG_MAX_H - cls.IMG_CHROME_H,
+        )
 
     def _replace_pill(self, record) -> None:  # noqa: ANN001
         while self._pill_box.count():
@@ -564,22 +595,26 @@ class PreviewBubble(QFrame):
             pix = QPixmap.fromImage(image)
             # 只缩不放：QPixmap.scaled 的 KeepAspectRatio 会**放大**小图，
             # 100px 的截图被拉到 300px 只会糊（显示宽度同时决定气泡宽度）。
-            avail_w = theme.PV_IMG_MAX_W - 28 - ARROW_MARGIN
-            avail_h = theme.PV_IMG_MAX_H - 40 - 49 - 28 - 32   # 头 + 底栏 + 内边距 + 注脚
+            avail_w, avail_h = self._image_area()
             factor = min(1.0, avail_w / max(1, pix.width()), avail_h / max(1, pix.height()))
+            disp_w = max(1, int(pix.width() * factor))
+            disp_h = max(1, int(pix.height() * factor))
+            # Retina：位图要按 devicePixelRatio 渲染**真实像素**，再用
+            # setDevicePixelRatio 折算回逻辑尺寸。否则 521 逻辑像素的位图在 2x 屏上
+            # 会被插值放大 2 倍，截图里的文字直接糊掉（2026-10-23 用户实测反馈）。
+            dpr = float(self.devicePixelRatioF() or 1.0)
             scaled = pix.scaled(
-                max(1, int(pix.width() * factor)),
-                max(1, int(pix.height() * factor)),
+                max(1, int(disp_w * dpr)),
+                max(1, int(disp_h * dpr)),
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation,
             )
+            scaled.setDevicePixelRatio(dpr)
             pix_label.setPixmap(scaled)
-            self._image_w = scaled.width()
+            self._image_w = disp_w       # 逻辑宽度 —— 决定气泡宽，不能用 scaled.width()（那是物理像素）
         self._body_lay.addWidget(pix_label, 0, Qt.AlignHCenter)
-        if record.width and record.height:
-            note = QLabel(f"{record.width}×{record.height} · {human_size(record.size)}")
-            note.setObjectName("pvNote")
-            self._body_lay.addWidget(note, 0, Qt.AlignHCenter)
+        # 尺寸/大小不在正文重复：标题栏已有「图片 1560×1216」，底栏也有「… · 2.3MB · 1560×1216」。
+        # 正文里再摆一行注脚会白白吃掉 32px 高度 —— 图片区跟着矮一截（Frset 是 524，我们原来只有 477）。
 
     def _build_text(self, record) -> None:  # noqa: ANN001
         self._build_scroll_body(record.text or "", "pvText")
@@ -808,6 +843,10 @@ class PreviewController(QObject):
             top = screen.bottom() - h - 12
         if top < screen.top() + 12:
             top = screen.top() + 12
+        # 翻到右侧时可能顶出屏幕右缘（窗口上限放宽到 562 后更容易），夹回来
+        left_min = screen.left() + 12
+        left_max = screen.right() - w - 12
+        left = left_min if left_max < left_min else min(max(left, left_min), left_max)
         self.bubble.setGeometry(left, top, w, h)
         # 箭头对准缩略图中线
         self.bubble.set_arrow(arrow_right, thumb_r.center().y() - top)
