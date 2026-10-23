@@ -7,7 +7,7 @@ import json
 import pytest
 
 from dualswitch import config as config_mod
-from dualswitch.config import ConfigError, from_dict
+from dualswitch.config import ConfigError, ReadbackConfig, from_dict
 
 
 def test_defaults_are_valid():
@@ -23,14 +23,27 @@ def test_partial_override_keeps_defaults():
     assert cfg.hotkey == "ralt+space"
     assert cfg.sources["windows"] == 17
     assert cfg.sources["mac"] == 18
-    assert cfg.readback.delay_ms == 300
+    # 用默认值本身做期望：回读延迟要跟着「显示器切换耗时」调整，
+    # 写死 300 会在改默认值时假失败
+    assert cfg.readback.delay_ms == ReadbackConfig().delay_ms
 
 
 def test_readback_merge():
     cfg = from_dict({"readback": {"enabled": False, "delay_ms": 250}})
     assert cfg.readback.enabled is False
-    assert cfg.readback.delay_ms == 250
-    assert cfg.readback.timeout_ms == 1000
+    assert cfg.readback.delay_ms == 250          # 显式给的值必须覆盖默认
+    assert cfg.readback.timeout_ms == ReadbackConfig().timeout_ms
+
+
+def test_readback_timeout_exceeds_delay():
+    """回读总预算必须大于首次等待，否则一轮都读不到（静默期 + 切换耗时）。"""
+    rb = ReadbackConfig()
+    assert rb.timeout_ms > rb.delay_ms, (
+        f"timeout_ms({rb.timeout_ms}) 必须大于 delay_ms({rb.delay_ms})，否则回读永远不执行"
+    )
+    assert rb.delay_ms >= 2500, (
+        "Q2790PC 实测切换要 2–3 秒，回读太早会在切换进行中插事务，可能打断切换"
+    )
 
 
 def test_unknown_key_rejected():

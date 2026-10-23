@@ -255,10 +255,16 @@ def test_absent_flag_clears_when_monitor_returns():
     assert ctl.source_state == "windows"
 
 
-def test_settle_window_is_short_enough():
-    """切完后的静默期不能太长：8 秒会让「切了但屏没动」看着像判错。"""
+def test_settle_window_covers_monitor_switch_time():
+    """静默期必须大于显示器完成切换的时间。
+
+    Q2790PC 实测一次切换要 2–3 秒。静默期太短会在「切换进行中」去枚举，
+    把「还在切」误判成「没切成功」—— 曾经设成 3 秒就踩了这个坑。
+    """
     ctl, _ = new_controller()
-    assert ctl.detect_settle_s <= 3.0
+    assert ctl.detect_settle_s >= 5.0, (
+        f"detect_settle_s={ctl.detect_settle_s} 小于显示器切换耗时（2–3 秒）+ 余量"
+    )
 
 
 # --------------------------------------------------------------------------- #
