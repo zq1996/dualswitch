@@ -112,6 +112,9 @@ class SwitchController:
         # 两台都打不到这块屏时（拔线 / 关电 / 对端关机）作废「见过」证据，
         # 否则会一直把「枚举不到」解释成「画面在对面」——见 _note_no_monitor()
         self._monitor_absent = False
+        # 上一次远端代发失败的原因（空串 = 上次成功或还没试过）。
+        # 失败时拼进 result.error，界面 / 日志才说得清「到底卡在哪一环」。
+        self._last_remote_error = ""
 
     def set_notifier(self, notifier: Notifier) -> None:
         """托盘就绪后再挂上通知通道。"""
@@ -402,7 +405,9 @@ class SwitchController:
         ):
             if self._try_remote(result, target, value):
                 return result
-            result.error = "未检测到外接显示器（可能没接线，或画面在 Windows 那台）"
+            result.error = "未检测到外接显示器"
+            if self._last_remote_error:
+                result.error += f"；请对端代发也失败：{self._last_remote_error}"
             log.warning("跳过切换：本次运行还没有枚举到过外接屏，对端也不可用")
             self._record(result)
             return result
@@ -424,10 +429,14 @@ class SwitchController:
                 self._note_no_monitor(str(exc))
             result.set_call_ms = (self._clock() - t_send) * 1000.0
             result.error = str(exc)
-            log.error("切换失败（目标 %s / 值 %d）：%s", target, value, exc)
+            if self._last_remote_error:
+                # 把代发那一环的失败原因也带上：只报本地错会让人以为「屏没接」，
+                # 而真正的原因往往是「对端根本没连上」。
+                result.error = f"{exc}；请对端代发也失败：{self._last_remote_error}"
+            log.error("切换失败（目标 %s / 值 %d）：%s", target, value, result.error)
             self._record(result)
             if self.cfg.notify:
-                self._notify("切换失败", f"未能把显示器切到 {target}。\n{exc}")
+                self._notify("切换失败", f"未能把显示器切到 {target}。\n{result.error}")
             return result
         except Exception as exc:  # 兜底，避免驱动层抛出奇怪异常
             result.set_call_ms = (self._clock() - t_send) * 1000.0
@@ -465,30 +474,43 @@ class SwitchController:
     ) -> bool:
         """请对端代发一次 Set。成功则把 result 补全并记录，返回 True。
 
-        失败只写日志（不覆盖 result.error），让调用方决定报哪个原因 ——
-        本地错和对端错同时存在时，本地错更有信息量（比如"没找到显示器"）。
+        失败**一定**写清楚原因（`self._last_remote_error` + warning 日志）。
+        以前 `remote_ready()` 为假时静默 `return False`，用户点了切换只看到本地
+        那句「未发现物理显示器」，完全不知道真正原因是「对端根本没连上」——
+        这是「对端代发不好用」最主要的信息缺口。
         """
         fn = self.remote_switch
         if fn is None:
+            self._last_remote_error = "本机没有挂载同步引擎（剪贴板同步未启用或启动失败）"
+            log.warning("跳过远端代发：%s", self._last_remote_error)
             return False
         if self.remote_ready is not None:
             try:
-                if not self.remote_ready():
-                    return False
-            except Exception:  # noqa: BLE001 - 状态查询不该影响切换
+                ready = bool(self.remote_ready())
+            except Exception as exc:  # noqa: BLE001 - 状态查询不该影响切换
+                ready = False
+                log.warning("远端可用性查询失败：%s", exc)
+            if not ready:
+                self._last_remote_error = "对端离线或未配对（链路没连上）"
+                log.warning("跳过远端代发：%s", self._last_remote_error)
                 return False
         started = self._clock()
         try:
             ok, detail = fn(value)
         except Exception as exc:  # noqa: BLE001
+            self._last_remote_error = f"代发调用异常：{exc}"
             log.warning("远端代发切屏异常：%s", exc)
             return False
         if not ok:
+            self._last_remote_error = detail or "对端拒绝"
             log.warning(
-                "远端代发切屏失败：%s（本地原因：%s）", detail or "对端拒绝", local_error or "-"
+                "远端代发切屏失败：%s（本地原因：%s）",
+                self._last_remote_error,
+                local_error or "-",
             )
             return False
 
+        self._last_remote_error = ""
         result.ok = True
         result.via = "remote"
         result.readback = "skipped"        # 屏不在本机，没有可回读的对象
