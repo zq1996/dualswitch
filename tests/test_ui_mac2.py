@@ -1795,3 +1795,38 @@ def test_clip_hotkey_callback_defers_to_main_thread(app, cfg):
     init_src = inspect.getsource(runner_mod.UiRunner2.__init__)
     assert "clipboardHotkeyPressed.connect(self._on_clipboard_hotkey)" in init_src, \
         "信号没有连到主线程槽，热键会静默失效"
+
+
+# --------------------------------------------------------------------------- #
+# Dock 图标：Qt 的 setWindowIcon 传不进 Dock（2026-10-23 热键唤起显示白纸）
+# --------------------------------------------------------------------------- #
+def test_dock_icon_is_set_on_nsapplication(app, cfg):
+    """Dock 图标必须显式塞给 NSApplication。
+
+    macOS 的 Dock 只看 `NSApp.applicationIconImage` 或 .app 的 Info.plist，
+    `QApplication.setWindowIcon()` 管不到。命令行启动时没有 bundle 图标，
+    热键把窗口唤到前台就是一张白纸。
+    """
+    NSAppKit = pytest.importorskip("AppKit")
+
+    from dualswitch.ui.mac2 import runner as runner_mod
+
+    bubble = runner_mod.UiRunner2.__new__(runner_mod.UiRunner2)   # 只借方法，不建窗口
+    bubble._apply_dock_icon()
+
+    img = NSAppKit.NSApplication.sharedApplication().applicationIconImage()
+    assert img is not None, "Dock 图标没设上"
+    size = img.size()
+    assert size.width >= 256, f"Dock 图标分辨率太低：{size.width}×{size.height}"
+
+
+def test_dock_icon_call_exists_in_init(app, cfg):
+    """无 pyobjc 的环境也能跑的守卫：构造函数里必须调用 _apply_dock_icon。"""
+    import inspect
+
+    from dualswitch.ui.mac2 import runner as runner_mod
+
+    init_src = inspect.getsource(runner_mod.UiRunner2.__init__)
+    assert "_apply_dock_icon()" in init_src, "构造函数没有设置 Dock 图标"
+    method_src = inspect.getsource(runner_mod.UiRunner2._apply_dock_icon)
+    assert "setApplicationIconImage_" in method_src, "没有真正调用 NSApplication.setApplicationIconImage_"
