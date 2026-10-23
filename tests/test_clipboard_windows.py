@@ -409,6 +409,33 @@ def test_first_poll_is_none_after_construction(backend):
         assert backend.poll() is None
 
 
+def test_read_now_sees_content_that_predates_the_backend():
+    """`read_now()` 必须无视「内容没变」，读到进程启动前就在剪贴板里的内容。
+
+    2026-10-23 联调暴露的 bug：macOS 后端有 `read_now()`，Windows 后端漏了，于是
+    `dualswitch clip get` 落到 `poll()` 上 —— `poll()` 构造时把当前序列号记成基线，
+    所以「不是本进程写的」内容一律读不到，`clip get` 永远打印「剪贴板为空」。
+    现场证据：对端同步过来的文本已在系统剪贴板里（`Get-Clipboard` 能读到 27 字），
+    `clip get` 却报空。这条用例把「另一个进程先写好、新后端再读」这条路钉住。
+    """
+    # 先用**另一个**后端实例写进去，模拟「内容早就在剪贴板里」
+    writer = win.WindowsClipboardBackend()
+    try:
+        writer.write(make_text("对端同步过来的文本 🖥️"))
+    finally:
+        writer.close()
+
+    fresh = win.WindowsClipboardBackend()      # 新实例：基线序列号 = 当前序列号
+    try:
+        assert fresh.poll() is None, "poll 按契约就该返回 None（内容没变）"
+        item = fresh.read_now()
+        assert item is not None, "read_now 读不到已有内容 → clip get 会报「剪贴板为空」"
+        assert item.kind == "text"
+        assert item.text == "对端同步过来的文本 🖥️"
+    finally:
+        fresh.close()
+
+
 @pytest.mark.parametrize("sample", [
     "纯文本 ASCII",
     "中文 + emoji 🖥️⌨️",

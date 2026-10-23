@@ -1036,6 +1036,37 @@ class WindowsClipboardBackend:
         log.debug("poll：读到 %s（%s）", item.describe(), item.digest[:12])
         return item
 
+    def read_now(self) -> ClipItem | None:
+        """无条件读一次（忽略「内容没变」的判断）。
+
+        给 `dualswitch clip get` 与自检工具用：它们要看的是「此刻剪贴板里是什么」，
+        不是「相对上次有没有变化」。macOS 后端一直有这个方法，Windows 后端漏了，
+        后果是 `clip get` 落到 `poll()` 上 —— 而 `poll()` 在构造时把当前序列号记成基线
+        （`self._last_seq = _sequence()`），于是**进程启动前就在剪贴板里的内容永远读不到**，
+        一律打印「剪贴板为空」。2026-10-23 联调时暴露：对端同步过来的文本明明已在系统剪贴板
+        （`Get-Clipboard` 能读到），`clip get` 却报空。
+
+        注意：这里**不能**复用 `poll()`（序列号/摘要两道闸都会挡掉），也不吞自写回弹 ——
+        调用方问的就是「现在是什么」。
+        """
+        if self._closed:
+            return None
+        with self._lock:
+            item = self._read_once()
+        if item is _BUSY:
+            # 被别的程序占着：等 10ms 再试一次，仍占用就如实返回空
+            time.sleep(0.01)
+            with self._lock:
+                item = self._read_once()
+            if item is _BUSY:
+                log.debug("read_now：剪贴板被占用，放弃本次读取")
+                return None
+        if item is None or item is _BUSY:
+            return None
+        self._last_digest = item.digest
+        self._last_kind = item.kind
+        return item
+
     def _read_once(self) -> ClipItem | object | None:
         """在**一次** OpenClipboard 会话里把内容读全（格式枚举与读取必须在同一个会话）。
 
