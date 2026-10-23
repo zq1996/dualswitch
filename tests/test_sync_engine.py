@@ -326,3 +326,142 @@ def test_auth_fail_waits_grow_and_reset():
     transport._handle_ready(type("L", (), {"authenticated": True, "peer_device": "", "peer_host": "",
                                            "describe": lambda self: "x"})())
     assert transport._auth_fail_wait == AUTH_FAIL_MIN_WAIT_S, "握手成功要复位"
+
+
+# --------------------------------------------------------------------------- #
+# 剪贴板开关与链路解耦（2026-10-23）
+#
+# 「对端代发切屏」和「剪贴板内容同步」共用一条 TCP 链路，但**不是同一件事**。
+# 以前 SyncEngine.start() 第一行 `if not cfg.enabled: return`，
+# cli._start_clip_engine() 也先判 `clipboard.enabled` 再决定要不要起引擎，
+# 于是关掉剪贴板开关 = 连「请对端代发」一起废掉，界面上只显示「对端离线」。
+# --------------------------------------------------------------------------- #
+def test_link_survives_clipboard_disabled():
+    """两端都关掉剪贴板内容同步，链路仍要建立、代发仍要可用。"""
+    port_a, port_b = _free_port(), _free_port()
+    key_hex = P.derive_key("123456").hex()
+    cfg_a = ClipboardConfig(
+        port=port_a, peer=f"127.0.0.1:{port_b}", psk=key_hex,
+        device_id="mac-aaaa", enabled=False,
+    )
+    cfg_b = ClipboardConfig(
+        port=port_b, peer=f"127.0.0.1:{port_a}", psk=key_hex,
+        device_id="win-bbbb", enabled=False,
+    )
+    engine_a = SyncEngine(cfg_a, host_label="mac", backend=MockBackend())
+    engine_b = SyncEngine(cfg_b, host_label="windows", backend=MockBackend())
+    served: list[int] = []
+    engine_b.set_switch_executor(lambda value: (served.append(value), (True, ""))[1])
+    engine_a.start()
+    engine_b.start()
+    try:
+        ok = _wait_until(
+            lambda: engine_a.switch_ready and engine_b.switch_ready, timeout=6.0
+        )
+        assert ok, f"链路没起来：A={engine_a.state} B={engine_b.state}"
+
+        # 内容同步确实关着：如实上报，且不采集本机剪贴板
+        assert engine_a.status()["enabled"] == "no"
+        assert engine_a._clip_on is False
+
+        # 但代发链路必须是通的 —— 这正是本次修复的目的
+        ok, detail = engine_a.request_switch(17)
+        assert ok, detail
+        assert served == [17]
+    finally:
+        engine_a.stop()
+        engine_b.stop()
+
+
+def test_remote_clip_rejected_when_local_clip_disabled():
+    """本机剪贴板关掉时收到对端内容：不写入，但要回执，别让对端反复重发。"""
+    port_a, port_b = _free_port(), _free_port()
+    key_hex = P.derive_key("123456").hex()
+    cfg_a = ClipboardConfig(
+        port=port_a, peer=f"127.0.0.1:{port_b}", psk=key_hex,
+        device_id="mac-aaaa", enabled=False,
+    )
+    cfg_b = ClipboardConfig(
+        port=port_b, peer=f"127.0.0.1:{port_a}", psk=key_hex,
+        device_id="win-bbbb", enabled=True,
+    )
+    backend_b = MockBackend()
+    engine_a = SyncEngine(cfg_a, host_label="mac", backend=MockBackend())
+    engine_b = SyncEngine(cfg_b, host_label="windows", backend=backend_b)
+    engine_a.start()
+    engine_b.start()
+    try:
+        assert _wait_until(
+            lambda: engine_a.switch_ready and engine_b.switch_ready, timeout=6.0
+        ), f"链路没起来：A={engine_a.state} B={engine_b.state}"
+
+        engine_b.push_now("test")
+        engine_b._wake.set()
+        assert _wait_until(lambda: engine_a.stats["received"] == 0, timeout=2.0)
+        # 关掉的那侧一条记录都不该有，也不该往剪贴板写
+        assert engine_a.records() == []
+    finally:
+        engine_a.stop()
+        engine_b.stop()
+
+
+def test_peer_state_exchange():
+    """两端互报「我看不看得到这块屏」—— 归属联合判定的数据来源（T_STATE 0x32）。"""
+    port_a, port_b = _free_port(), _free_port()
+    key_hex = P.derive_key("123456").hex()
+    cfg_a = ClipboardConfig(
+        port=port_a, peer=f"127.0.0.1:{port_b}", psk=key_hex, device_id="mac-aaaa"
+    )
+    cfg_b = ClipboardConfig(
+        port=port_b, peer=f"127.0.0.1:{port_a}", psk=key_hex, device_id="win-bbbb"
+    )
+    engine_a = SyncEngine(cfg_a, host_label="mac", backend=MockBackend())
+    engine_b = SyncEngine(cfg_b, host_label="windows", backend=MockBackend())
+    # A 看得到屏（画面在 Mac），B 看不到
+    engine_a.set_monitor_probe(lambda: True)
+    engine_b.set_monitor_probe(lambda: False)
+    engine_a.start()
+    engine_b.start()
+    try:
+        assert _wait_until(
+            lambda: engine_a.switch_ready and engine_b.switch_ready, timeout=6.0
+        ), f"链路没起来：A={engine_a.state} B={engine_b.state}"
+
+        # B 问 A：A 看得到 → True
+        assert engine_b.request_peer_state(timeout=3.0) is True
+        # A 问 B：B 看不到 → False
+        assert engine_a.request_peer_state(timeout=3.0) is False
+
+        # 心跳式询问也会把结果缓存下来（classify 读这个）
+        assert _wait_until(
+            lambda: engine_b.peer_sees_monitor() is True, timeout=8.0
+        ), "心跳没有把对端状态缓存下来"
+        assert engine_a.peer_sees_monitor() is False
+    finally:
+        engine_a.stop()
+        engine_b.stop()
+
+
+def test_peer_state_unknown_when_no_probe():
+    """对端没挂探针（老版本 / 单机）时不能瞎报：一律按「看不到」回答，本机侧回 None。"""
+    port_a, port_b = _free_port(), _free_port()
+    key_hex = P.derive_key("123456").hex()
+    cfg_a = ClipboardConfig(
+        port=port_a, peer=f"127.0.0.1:{port_b}", psk=key_hex, device_id="mac-aaaa"
+    )
+    cfg_b = ClipboardConfig(
+        port=port_b, peer=f"127.0.0.1:{port_a}", psk=key_hex, device_id="win-bbbb"
+    )
+    engine_a = SyncEngine(cfg_a, host_label="mac", backend=MockBackend())
+    engine_b = SyncEngine(cfg_b, host_label="windows", backend=MockBackend())
+    engine_a.start()
+    engine_b.start()
+    try:
+        assert _wait_until(
+            lambda: engine_a.switch_ready and engine_b.switch_ready, timeout=6.0
+        ), f"链路没起来：A={engine_a.state} B={engine_b.state}"
+        # 没挂探针 = 答「看不到」，而不是沉默
+        assert engine_b.request_peer_state(timeout=3.0) is False
+    finally:
+        engine_a.stop()
+        engine_b.stop()

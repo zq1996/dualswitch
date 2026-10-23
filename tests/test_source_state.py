@@ -262,6 +262,62 @@ def test_settle_window_is_short_enough():
 
 
 # --------------------------------------------------------------------------- #
+# 联合判定（T_STATE 0x32，2026-10-23）：问对端「你看不看得到这块屏」
+#
+# 单机只能看到自己这一侧，于是「冷启动屏在对端」和「拔线」长得一模一样。
+# 两台各报一句就能唯一定下来：只有一台看得到 ⇒ 屏在它那边；两台都看不到 ⇒ 没接线。
+# --------------------------------------------------------------------------- #
+def test_peer_sees_monitor_means_other_host():
+    ctl, _ = new_controller(monitors=[])
+    ctl.peer_sees_monitor = lambda: True
+    assert ctl.detect_source() == "mac"
+
+
+def test_both_sides_cannot_see_monitor_is_unknown():
+    """两台都看不到 ⇒ 屏不在任何一台（拔线 / 关电），不能再说「在对面」。"""
+    ctl, _ = new_controller(monitors=[])
+    ctl.remote_ready = lambda: True
+    ctl.peer_sees_monitor = lambda: False
+    assert ctl.detect_source() == SOURCE_UNKNOWN
+
+
+def test_peer_state_none_falls_back_to_old_rules():
+    """问不出来（对端旧版本 / 断链）时回落旧判据，两端版本不一致也不能变差。"""
+    ctl, _ = new_controller(monitors=[])
+    ctl.remote_ready = lambda: True
+    ctl.peer_sees_monitor = lambda: None
+    assert ctl.detect_source() == "mac"          # 靠「对端在线」兜底
+
+    bare, _ = new_controller(monitors=[])
+    bare.peer_sees_monitor = lambda: None
+    assert bare.detect_source() == SOURCE_UNKNOWN
+
+
+def test_peer_sees_beats_stale_absent_flag():
+    """对端说看得到时，本地那个「两台都打不到」的旧标记要让位。"""
+    ctl, backend = new_controller(monitors=[])
+
+    def local_fail(value):
+        raise DDCError("未发现物理显示器")
+
+    backend.set_input = local_fail
+    ctl.remote_ready = lambda: True
+    ctl.remote_switch = lambda value: (False, "对端也没找到")
+    ctl.switch_now()                              # 置上 _monitor_absent
+    assert ctl.source_state == SOURCE_UNKNOWN
+
+    ctl.peer_sees_monitor = lambda: True          # 对端现在说它看得到
+    assert ctl.detect_source() == "mac"
+
+
+def test_present_monitor_wins_over_peer_state():
+    """本机能枚举到时永远判本机 —— 对端说什么都不该覆盖这条硬事实。"""
+    ctl, _ = new_controller()
+    ctl.peer_sees_monitor = lambda: True
+    assert ctl.detect_source() == "windows"
+
+
+# --------------------------------------------------------------------------- #
 # 界面
 # --------------------------------------------------------------------------- #
 @pytest.fixture(scope="module")

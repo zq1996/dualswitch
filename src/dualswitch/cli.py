@@ -584,9 +584,13 @@ def cmd_clip(args) -> int:
 # 入口
 # --------------------------------------------------------------------------- #
 def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
-    """把剪贴板引擎挂到切屏链路上。失败只降级，绝不影响切屏。"""
-    if not cfg.clipboard.enabled:
-        return None
+    """把剪贴板引擎挂到切屏链路上。失败只降级，绝不影响切屏。
+
+    **即使 `clipboard.enabled=false` 也要起引擎**：配对状态、对端代发切屏
+    都走这条链路。以前这里第一行就 `return None`，于是关掉剪贴板同步的
+    同时把「请对端代发」一起废掉了，界面上还只显示「对端离线」。
+    内容同步是否开启由引擎自己按 `cfg.enabled` 决定（见 SyncEngine.start）。
+    """
     try:
         from .sync.engine import SyncEngine
 
@@ -619,6 +623,21 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
         # 本机打不到这块屏时（画面在对面 / 没接线），交给对端代发
         controller.remote_switch = engine.request_switch
         controller.remote_ready = lambda: engine.switch_ready
+
+        # 画面归属联合判定（T_STATE 0x32）：两台各报「我看不看得到这块屏」，
+        # 单机判不了的两种情况（冷启动屏在对端 / 拔线）都能唯一定下来。
+        def _sees_monitor() -> bool:
+            if backend is None:
+                return False
+            try:
+                monitors = backend.list_monitors()
+            except Exception:  # noqa: BLE001 - 枚举失败按「看不到」答
+                return False
+            needle = (cfg.monitor_match or "").strip()
+            return any(m.matches(needle) for m in monitors) if needle else bool(monitors)
+
+        engine.set_monitor_probe(_sees_monitor)
+        controller.peer_sees_monitor = engine.peer_sees_monitor
         log.info("剪贴板同步已挂载（设备 %s，端口 %s）", cfg.clipboard.device_id, cfg.clipboard.port)
         return engine
     except Exception as exc:  # noqa: BLE001 - 剪贴板坏了不能连累切屏

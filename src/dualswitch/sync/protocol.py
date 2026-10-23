@@ -45,6 +45,12 @@ T_PONG = 0x21
 # 旧版本收到 0x30/0x31 会走「忽略未知帧」分支，不会断连 —— 这是有序升级的前提。
 T_SWITCH = 0x30
 T_SWITCH_ACK = 0x31
+# 画面归属联合判定（2026-10-23）：两端交换「我能不能枚举到这块屏」。
+# 单机只能看到自己这一侧 —— 冷启动时屏若在对端，本机从没枚举到过它，
+# 只能报 unknown；拔线时又和「切走了」长得一模一样。两台一起看才是唯一的。
+# 旧版本收到 0x32/0x33 走「忽略未知帧」分支、不会断连 —— 这是有序升级的前提。
+T_STATE = 0x32
+T_STATE_ACK = 0x33
 T_ERROR = 0x7F
 
 TYPE_NAMES = {
@@ -56,6 +62,8 @@ TYPE_NAMES = {
     T_PONG: "PONG",
     T_SWITCH: "SWITCH",
     T_SWITCH_ACK: "SWITCH_ACK",
+    T_STATE: "STATE",
+    T_STATE_ACK: "STATE_ACK",
     T_ERROR: "ERROR",
 }
 

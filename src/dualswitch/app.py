@@ -96,6 +96,9 @@ class SwitchController:
         # 由 CLI 在引擎起来后注入；没注入 / 对端没连上时行为与以前完全一致。
         self.remote_switch: Callable[[int], tuple[bool, str]] | None = None
         self.remote_ready: Callable[[], bool] | None = None
+        # 对端「我能不能枚举到这块屏」（T_STATE 0x32 的心跳结果）。
+        # 返回 True / False / None（None = 问不出来，当没有这条证据）。
+        self.peer_sees_monitor: Callable[[], bool | None] | None = None
 
         # 外部切换（例如在 Mac 上执行 CLI）不会经过本进程，
         # 只能靠「显示器还在不在本机」反推画面归属，见 detect_source()
@@ -218,13 +221,31 @@ class SwitchController:
             absent = self._monitor_absent
         if present:
             return self.cfg.effective_host()
+        peer = self._peer_sees()
+        if peer is True:
+            # 最硬的证据：对端亲口说它枚举得到这块屏 —— 那画面一定在它那边。
+            # 冷启动屏在对端时，这条能直接把 unknown 变成确定答案。
+            return self.cfg.other_host()
         if absent:
             # 本机打不到、对端也打不到过：这块屏此刻不在任何一台机器上（拔线/关电）。
             # 不能因为「见过」就继续说是「在对面」——那是个看起来确定的假答案。
             return SOURCE_UNKNOWN
+        if peer is False:
+            # 两台都枚举不到：屏不在任何一台（拔线 / 关电 / 对端也看不到）。
+            return SOURCE_UNKNOWN
         if ever_seen or self._remote_alive():
             return self.cfg.other_host()
         return SOURCE_UNKNOWN
+
+    def _peer_sees(self) -> bool | None:
+        """对端「看不看得到这块屏」。没注入 / 老版本 / 链路断 → None。"""
+        probe = self.peer_sees_monitor
+        if probe is None:
+            return None
+        try:
+            return probe()
+        except Exception:  # noqa: BLE001 - 状态查询不该影响判定
+            return None
 
     def _remote_alive(self) -> bool:
         """对端是否在线且已配对（能替本机发 Set 的状态）。

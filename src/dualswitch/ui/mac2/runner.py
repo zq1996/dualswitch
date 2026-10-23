@@ -105,7 +105,12 @@ class UiRunner2(QObject):
         self.window.setWindowIcon(self.icon)
 
         self.switch_page = SwitchPage(cfg, hotkey_label, self._monitor_name())
-        self.clip_feed = clip_engine if clip_engine is not None else LocalClipFeed(cfg)
+        # 剪贴板同步关掉时引擎仍会起（供配对 / 对端代发切屏），但剪贴板页必须回到
+        # 本机兜底记录源 —— 否则页面挂在一个「不采集」的引擎上，永远是空列表。
+        clip_on = bool(getattr(getattr(cfg, "clipboard", None), "enabled", True))
+        self.clip_feed = (
+            clip_engine if (clip_engine is not None and clip_on) else LocalClipFeed(cfg)
+        )
         self.clipboard_page = ClipboardPage(
             self.clip_feed,
             open_external=openers.MacOpeners(),

@@ -47,6 +47,9 @@ log = logging.getLogger(__name__)
 POLL_INTERVAL_S = 0.15
 ACK_TIMEOUT_S = 5.0
 RESEND_WINDOW_S = 30.0
+# 多久问一次对端「你看得到这块屏吗」。太密浪费带宽，太稀归属判定会滞后；
+# 5 秒对切屏（人眼 1~2 秒完成）足够，且和 controller 的 2 秒轮询错开。
+PEER_STATE_INTERVAL_S = 5.0
 PAIRING_TTL_S = 300.0          # 显示端配对码有效期 5 分钟
 PAIRING_CONNECT_TIMEOUT_S = 15.0
 PAIRING_MAX_ATTEMPTS = 5
@@ -110,6 +113,15 @@ class SyncEngine:
         self._switch_seen: dict[str, tuple[float, dict[str, Any]]] = {}
         self.switch_stats = {"requested": 0, "served": 0, "failed": 0}
 
+        # ---- 画面归属联合判定（T_STATE / 0x32，2026-10-23）----
+        # 本机「现在能不能枚举到这块屏」由 CLI 注入（引擎不碰硬件）；
+        # 对端最近一次上报的结果缓存下来，供 controller.classify() 判定归属。
+        self._monitor_probe: Callable[[], bool] | None = None
+        self._peer_sees: bool | None = None      # None = 没问过 / 对端太旧 / 已失效
+        self._peer_sees_at = 0.0
+        self._peer_state_waiters: dict[str, tuple[threading.Event, dict[str, Any]]] = {}
+        self._peer_state_asked = 0.0
+
         self._lock = threading.RLock()
         self._records: deque[ClipRecord] = deque(maxlen=max(1, int(cfg.record_limit or 10)))
         self._items: dict[str, ClipItem] = {}
@@ -136,6 +148,9 @@ class SyncEngine:
         self.last_error = ""
         self.last_sync_at = 0.0
         self.state = "idle"
+        # 剪贴板内容同步是否开启。与「链路是否建立」解耦：关掉内容同步时
+        # 连接照样建（配对 / 对端代发切屏都靠它），只是不读不写剪贴板。
+        self._clip_on = bool(self.cfg.enabled)
         self._last_reason = ""
 
         # ---- 配对（INTERACTIONS-v2 §12.6）----
@@ -163,17 +178,25 @@ class SyncEngine:
     def start(self) -> None:
         if self._running:
             return
-        if not self.cfg.enabled:
-            self.state = "disabled"
-            log.info("剪贴板同步未启用（clipboard.enabled=false）")
-            return
-        if self._backend is None:
-            self._backend = create_backend("auto")
-        if getattr(self._backend, "name", "none") == "none":
-            self.state = "error"
-            self.last_error = "没有可用的剪贴板后端"
-            log.warning("剪贴板后端不可用，同步功能关闭")
-            return
+        clip_on = bool(self.cfg.enabled)
+        self._clip_on = clip_on
+        if not clip_on:
+            # 剪贴板内容同步关掉 ≠ 链路关掉：配对状态、对端代发切屏都走这条连接。
+            # 以前这里直接 return，于是「只要切屏、不要剪贴板」的用法连代发一起废掉，
+            # 界面上还只显示「对端离线」，用户完全看不出是开关导致的。
+            log.info("剪贴板内容同步未启用（clipboard.enabled=false），仅建链供配对 / 对端代发切屏")
+        else:
+            if self._backend is None:
+                try:
+                    self._backend = create_backend("auto")
+                except Exception as exc:  # noqa: BLE001 - 后端坏了不能拖垮链路
+                    log.warning("创建剪贴板后端失败：%s", exc)
+                    self._backend = None
+            if getattr(self._backend, "name", "none") == "none":
+                # 后端不可用也不 return：剪贴板降级为不可用，链路与代发继续
+                self._backend = None
+                self.last_error = "没有可用的剪贴板后端，仅保留链路"
+                log.warning("剪贴板后端不可用：内容同步关闭，链路与对端代发继续可用")
 
         if self._transport is None:
             self._transport = self._build_transport()
@@ -184,7 +207,11 @@ class SyncEngine:
         self._thread = threading.Thread(target=self._loop, name="clip-engine", daemon=True)
         self._thread.start()
         self._running = True
-        log.info("剪贴板同步已启动（后端 %s，监听 %s）", self._backend.name, self.cfg.port)
+        log.info(
+            "链路已启动（%s，监听 %s）",
+            f"剪贴板后端 {self._backend.name}" if self._backend is not None else "仅链路，剪贴板内容同步关闭",
+            self.cfg.port,
+        )
 
     def stop(self) -> None:
         if not self._running:
@@ -223,6 +250,8 @@ class SyncEngine:
             on_ack=self._on_ack,
             on_switch=self._on_switch_request,
             on_switch_ack=self._on_switch_ack,
+            on_peer_state=self._on_peer_state_request,
+            on_peer_state_ack=self._on_peer_state_ack,
             on_state=self._on_state,
             on_auth_failed=self._on_auth_failed,
             expected_peer_device=self.cfg.peer_device,
@@ -744,6 +773,95 @@ class SyncEngine:
         box.update(header)
         waiter.set()
 
+    # ------------------------------------------------------------ 画面归属联合判定
+    def set_monitor_probe(self, probe: Callable[[], bool] | None) -> None:
+        """挂上「本机现在能不能枚举到这块屏」（由 CLI 注入，引擎不碰硬件）。"""
+        self._monitor_probe = probe
+
+    def peer_sees_monitor(self, *, max_age: float = 20.0) -> bool | None:
+        """对端最近一次上报的「我能不能看到这块屏」。
+
+        返回 `None` 表示**问不出来**：没连上、对端还是旧版本（收到 0x32 直接
+        忽略）、或者上报已经过期。调用方必须把 `None` 当成「没有这条证据」，
+        回落到原来的判据 —— 这样两端不同版本并存时行为不会变差。
+        """
+        if not self.switch_ready or self._peer_sees is None:
+            return None
+        if self._clock() - self._peer_sees_at > max_age:
+            return None
+        return self._peer_sees
+
+    def request_peer_state(self, *, timeout: float = 1.0) -> bool | None:
+        """主动问一次对端（阻塞到回执或超时）。超时 / 旧版本一律返回 None。"""
+        transport = self._transport
+        if transport is None or not self.switch_ready:
+            return None
+        req = secrets.token_hex(8)
+        waiter = threading.Event()
+        box: dict[str, Any] = {}
+        with self._lock:
+            self._peer_state_waiters[req] = (waiter, box)
+        try:
+            transport.send_state({"req": req})
+        except (LinkError, OSError):
+            with self._lock:
+                self._peer_state_waiters.pop(req, None)
+            return None
+        answered = waiter.wait(timeout)
+        with self._lock:
+            self._peer_state_waiters.pop(req, None)
+        if not answered:
+            return None
+        sees = box.get("sees")
+        return None if sees is None else bool(sees)
+
+    def _on_peer_state_request(self, header: dict[str, Any]) -> None:
+        """对端问「你看得到这块屏吗」。枚举要几毫秒，放小线程里别堵读循环。"""
+        req = str(header.get("req") or "")
+        if not req:
+            return
+        threading.Thread(
+            target=self._serve_peer_state, args=(req,), name="peer-state", daemon=True
+        ).start()
+
+    def _serve_peer_state(self, req: str) -> None:
+        sees = False
+        if self._monitor_probe is not None:
+            try:
+                sees = bool(self._monitor_probe())
+            except Exception:  # noqa: BLE001 - 探测失败按「看不到」处理
+                sees = False
+        if self._transport is not None:
+            self._transport.send_state_ack({"req": req, "sees": sees})
+
+    def _on_peer_state_ack(self, header: dict[str, Any]) -> None:
+        req = str(header.get("req") or "")
+        with self._lock:
+            sees = header.get("sees")
+            if sees is not None:
+                self._peer_sees = bool(sees)
+                self._peer_sees_at = self._clock()
+            entry = self._peer_state_waiters.get(req)
+        if entry is None:
+            return                      # 心跳式询问没人等，正常
+        waiter, box = entry
+        box.update(header)
+        waiter.set()
+
+    def _maybe_ask_peer_state(self) -> None:
+        """心跳式询问：发出去就不管，回执到了更新缓存。"""
+        now = self._clock()
+        if now - self._peer_state_asked < PEER_STATE_INTERVAL_S:
+            return
+        self._peer_state_asked = now
+        transport = self._transport
+        if transport is None or not self.switch_ready:
+            return
+        try:
+            transport.send_state({"req": secrets.token_hex(8)})
+        except (LinkError, OSError):
+            return
+
     def records(self) -> list[ClipRecord]:
         with self._lock:
             return list(self._records)
@@ -823,11 +941,12 @@ class SyncEngine:
                 self._flush_manual()
                 self._expire_pending()
                 self._expire_old()
+                self._maybe_ask_peer_state()
             except Exception:  # noqa: BLE001 - worker 挂了等于同步死了，必须兜住
                 log.exception("同步 worker 出现未捕获异常")
 
     def _pump_local(self) -> None:
-        if self._backend is None:
+        if not self._clip_on or self._backend is None:
             return
         try:
             item = self._backend.poll()
@@ -975,6 +1094,12 @@ class SyncEngine:
             return
         digest = str(header.get("digest") or "")
         transport = self._transport
+        if not self._clip_on or self._backend is None:
+            # 本机剪贴板同步关闭（或后端不可用）：不写入，但要回执，
+            # 否则对端会当成没收到而反复重发
+            if transport:
+                transport.send_ack(digest, False, "本机剪贴板同步已关闭")
+            return
         try:
             item = P.message_to_item(header, payload)
         except (ValueError, P.ProtocolError) as exc:
