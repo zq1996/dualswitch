@@ -262,15 +262,20 @@ class SettingsPage(QWidget):
         return max(10, min(5000, value))
 
     def _storage_control(self) -> QWidget:
-        """存储上限：可编辑的数字框 + 旁边一个「清理」按钮。"""
+        """存储上限：可编辑的数字框 + 旁边一个「清理」按钮。
+
+        按钮只卡高度、宽度交给 sizeHint：`ghostBtn` 的 QSS 有 `padding: 0 16px`
+        和 `font-size: 12.5px`，两个汉字要 59px；写死 56px 会把「清理」裁掉半个字
+        （Windows 端同款问题，2026-10-22 用户截图）。
+        """
         box = QWidget()
         row = QHBoxLayout(box)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         self.btn_clean = QPushButton("清理")
         self.btn_clean.setObjectName("ghostBtn")
-        self.btn_clean.setFixedSize(56, 28)
-        self.btn_clean.setFont(theme.qfont(11.5, 600))
+        self.btn_clean.setFixedHeight(28)
+        self.btn_clean.setMinimumWidth(56)
         self.btn_clean.setCursor(Qt.PointingHandCursor)
         self.btn_clean.setToolTip("清空本机剪贴板记录")
         self.btn_clean.clicked.connect(self.clearRequested)

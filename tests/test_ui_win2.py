@@ -1287,3 +1287,26 @@ def test_settings_storage_row_children_do_not_overlap(app, cfg):
     page.close()
 
 
+def test_settings_buttons_are_never_narrower_than_their_hint(app, cfg):
+    """设置页的按钮宽度必须容得下自己的文字。
+
+    `ghostBtn` 的 QSS 带 `padding: 0 16px` + `font-size: 13px`，`sizeHint` 会把
+    padding 算进去（两个汉字 ≈ 58px）。之前 `_storage_control` 写死 `setFixedSize(52, 28)`，
+    Qt 只能把「清理」挤在 18px 的框里画 —— 2026-10-22 用户截图的「清理按钮被遮挡」
+    其实是**文字被裁**，不是被别的控件盖住。宽度一律交给 sizeHint。
+    """
+    from PySide6.QtWidgets import QPushButton
+
+    page = SettingsPage(cfg, os.path.join(HOME, "cfg-test.json"))
+    page.resize(624, 620)
+    page.show()
+    QTest.qWait(20)
+    clipped = [
+        (b.text(), b.width(), b.sizeHint().width())
+        for b in page.findChildren(QPushButton)
+        if b.isVisible() and b.text() and b.width() < b.sizeHint().width()
+    ]
+    assert not clipped, f"按钮比文字还窄（文字会被裁）：{clipped}"
+    page.close()
+
+

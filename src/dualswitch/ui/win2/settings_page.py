@@ -310,10 +310,11 @@ class SettingsPage(QWidget):
 
     @staticmethod
     def _action_button(text: str, signal) -> QPushButton:  # noqa: ANN001
+        """ghost 小按钮：只卡高，宽度交给 sizeHint（见 `_storage_control` 的注释）。"""
         btn = QPushButton(text)
         btn.setObjectName("ghostBtn")
-        btn.setFixedSize(56, 28)
-        btn.setFont(theme.qfont(11.5, 600))
+        btn.setFixedHeight(28)
+        btn.setMinimumWidth(56)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFocusPolicy(Qt.NoFocus)
         btn.clicked.connect(signal)
@@ -361,6 +362,12 @@ class SettingsPage(QWidget):
         宽度要卡死：这一行右侧是「已用 0.0 MB + 输入框 + MB + 清理」四段，
         字号一变大就会顶出行宽（2026-10-22 用户截图里清理按钮盖住了 MB）。
         所以这里数字框收窄、间距压到 6，`已用` 用 ElidedLabel 让位。
+
+        **按钮只卡高度、不卡宽度**：`ghostBtn` 的 QSS 带 `padding: 0 16px` +
+        `font-size: 13px`，两个汉字就要 58px；早先写死 52px 时 `sizeHint` 被压掉，
+        Qt 把「清理」两字挤在一个 18px 的框里画 —— 2026-10-22 用户截图里的
+        「清理按钮被遮挡」就是文字被裁（不是被别的控件盖住）。
+        交给 sizeHint 算宽度（QSS 的 padding 会算进去），再加一个下限保持视觉对齐。
         """
         box = QWidget()
         row = QHBoxLayout(box)
@@ -368,8 +375,8 @@ class SettingsPage(QWidget):
         row.setSpacing(6)
         self.btn_clean = QPushButton("清理")
         self.btn_clean.setObjectName("ghostBtn")
-        self.btn_clean.setFixedSize(52, 28)
-        self.btn_clean.setFont(theme.qfont(theme.FS_META, theme.W_MED))
+        self.btn_clean.setFixedHeight(28)
+        self.btn_clean.setMinimumWidth(52)
         self.btn_clean.setCursor(Qt.PointingHandCursor)
         self.btn_clean.setToolTip("清空本机剪贴板记录")
         self.btn_clean.clicked.connect(self.clearRequested)

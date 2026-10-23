@@ -514,6 +514,25 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-22 **重新打包（Windows onedir）**：旧 `dist\dualswitch` 先移出再打包，产物
+  `dist\dualswitch\dualswitch.exe`（6.2MB，整包 135MB / 184 文件），`--selfcheck` 退出码 0
+  （33 个界面模块可导入），完整性标签 High，翻译只留 3 个 zh_CN。
+  含本轮「清理」按钮裁字修复（`settings_page` 只卡高、宽度交给 `sizeHint`）。
+  桌面快捷方式**未创建**：本机工具环境禁止 COM（`WScript.Shell` 被安全策略拦），手写 .lnk
+  二进制 Windows 不认（真机 .lnk 带 `HasLinkTargetIDList`），需用户自行「发送到 → 桌面快捷方式」。
+
+- 2026-10-22 **[win2/mac2] 修「清理」按钮文字被裁（上一轮只治了「盖住」，没治「裁掉」）**。
+  · 用户截图 2：存储上限行的「清理」两个字挤成一团。根因不是被别的控件盖住，而是**按钮自己太窄**：
+    `QPushButton#ghostBtn` 的 QSS 带 `padding: 0 16px` + `font-size: 13px`，两个汉字需要 **58px**
+    （`sizeHint` 已经把 QSS padding 算进去了），上一轮把宽度收成 52px → Qt 只能在 18px 的框里画 24px 的字。
+  · 改法：**按钮只卡高度（`setFixedHeight(28)`），宽度交给 `sizeHint`**，另加 `setMinimumWidth` 保持视觉对齐；
+    顺手删掉被 QSS 覆盖、从来没生效过的 `setFont(...)`（QSS 的 `font-size` 优先于 `setFont`）。
+    同一 bug 在「高级」组的「运行 / 打开」上也有（写死 56 < 58），一并修掉；mac2 的「清理」写死 56 同样中招。
+  · 守卫用例：`test_settings_buttons_are_never_narrower_than_their_hint`（win2 / mac2 各一例）——
+    设置页任何有文字的按钮，宽度都不得小于 `sizeHint().width()`，这正好等于「文字会被裁」的判定条件。
+  · 自测：`QT_QPA_PLATFORM=offscreen pytest` → **392 passed / 10 skipped**；
+    离屏抓图核对（`QT_QPA_PLATFORM=windows` + `WA_DontShowOnScreen`）：「清理」完整显示、右侧仍留 15px 边距。
+
 - 2026-10-22 **[win2] 按四条反馈返工：字体标准 / 删底栏 / 去焦点虚框 / 修「清理」遮挡**。
   · **字体**（用户：「字体怎么感觉怪怪的，去找一下设计标准」）：字体链从「雅黑打头」改成
     **西文打头、中文回退** —— `Segoe UI Variable Text → Segoe UI → Microsoft YaHei UI →

@@ -1274,6 +1274,28 @@ def test_storage_limit_is_editable(app, cfg, tmp_path):
     assert hits == [True], "「清理」按钮要发清空请求"
 
 
+def test_settings_buttons_are_never_narrower_than_their_hint(app, cfg, tmp_path):
+    """设置页按钮宽度必须容得下文字（`ghostBtn` 的 QSS padding 16px 要算进去）。
+
+    mac2 的「清理」原来写死 56px，而 QSS 下两个汉字要 59px —— 文字会被裁掉半个字。
+    """
+    from PySide6.QtWidgets import QPushButton
+
+    from dualswitch.ui.mac2.settings_page import SettingsPage
+
+    page = SettingsPage(cfg, tmp_path / "config.json")
+    page.resize(624, 620)
+    page.show()
+    QTest.qWait(20)
+    clipped = [
+        (b.text(), b.width(), b.sizeHint().width())
+        for b in page.findChildren(QPushButton)
+        if b.isVisible() and b.text() and b.width() < b.sizeHint().width()
+    ]
+    assert not clipped, f"按钮比文字还窄（文字会被裁）：{clipped}"
+    page.close()
+
+
 def test_engine_drops_oldest_when_over_storage_limit(app, cfg):
     from dualswitch.clipboard.base import make_text
     from dualswitch.sync.engine import SyncEngine
