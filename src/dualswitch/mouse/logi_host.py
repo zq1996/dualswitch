@@ -80,6 +80,11 @@ class MouseSwitcher:
         """切到 `slot`（1-based）。**任何异常都不会向外抛。**"""
         ok, why = self.available()
         if not ok:
+            # 未启用是用户的选择，写 debug 就够；其余是「想切却切不了」，必须能被看见
+            if getattr(self.cfg, "enabled", False):
+                log.info("切鼠标跳过：%s", why)
+            else:
+                log.debug("切鼠标跳过：%s", why)
             return MouseSwitchOutcome(False, why, skipped=True, slot=slot)
 
         if not isinstance(slot, int) or not 1 <= slot <= MAX_HOSTS:
@@ -96,7 +101,9 @@ class MouseSwitcher:
         paths = self._enumerate()
         if not paths:
             # 最常见的情况：鼠标正连在另一台电脑上，或压根没连。
-            # 这不是错误，是物理约束下的正常状态。
+            # 这不是错误，是物理约束下的正常状态——但要让用户看得见，
+            # 否则「配了没反应」根本无从排查。
+            log.info("切鼠标跳过：本机枚举不到罗技鼠标（可能在对端或未连接）")
             return MouseSwitchOutcome(False, "本机枚举不到罗技鼠标（可能在对端或未连接）", slot=slot)
 
         last_reason = ""
