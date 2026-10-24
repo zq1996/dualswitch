@@ -26,6 +26,8 @@ LUCIDE = [
     "chevron-right", "eye", "scan-eye", "folder", "type", "code",
     # 文件卡片 / 文件缩略图（按扩展名分派：普通 / 图片 / 压缩包）
     "file", "file-image", "file-archive", "file-down", "hard-drive",
+    # 切换页兜底小钮（请对端代发）
+    "send",
 ]
 
 FILLED = {

@@ -833,7 +833,11 @@ def test_switch_page_four_explicit_actions(app, cfg):
     rows = page.hero.rows
     assert [(r.host, r.value) for r in rows] == [("windows", 17), ("mac", 18)]
     assert [r.btn_local.text() for r in rows] == ["本机发送 17", "本机发送 18"]
-    assert [r.btn_peer.text() for r in rows] == ["请对端发送 17", "请对端发送 18"]
+    # 「请对端发送」是兜底，降级为行尾小图标钮（2026-10-24 定案）：
+    # 文案进 tooltip + accessibleName，按钮本体无文字。
+    assert [r.btn_peer.accessibleName() for r in rows] == ["请对端发送 17", "请对端发送 18"]
+    assert all(not r.btn_peer.text() for r in rows)
+    assert all("兜底" in r.btn_peer.toolTip() for r in rows)
 
     # 画面归属未检测 → 四个按钮照样可用（不再按归属禁用，SCREEN-OWNERSHIP §3.5）
     page.set_owner(None)
@@ -863,6 +867,49 @@ def test_switch_page_readout_is_labelled(app, cfg):
     page.set_owner(None)
     assert "未检测" in page.hero.src_text.text()
     assert all(r.btn_local.isEnabled() for r in page.hero.rows)
+
+
+def test_switch_page_action_rows_geometry(app, cfg):
+    """两行动作行的几何硬约束（INTERACTIONS §10.24，2026-10-24 用户反馈整改）。
+
+    三条：两行等高、数字章等大、文字不压按钮（装不下换行、不许硬挤）。
+    老 bug：章只给 MinimumWidth → 17 行章被压到 34、18 行被拉到 57（背景框
+    不一样大）；文字列 126px 装不下「Windows 的输入口」→ 越界钻进按钮底下。
+    """
+    page = SwitchPage(cfg, "alt+space", "Q2790R3")
+    page.resize(theme.WIN_W, theme.WIN_H)
+    page.show()
+    app.processEvents()
+    rows = page.hero.rows
+    assert len(rows) == 2
+
+    # 1) 两行等高（背景框一样大）
+    assert rows[0].height() == rows[1].height() == rows[0].ROW_H
+
+    # 2) 数字章等大（不再被布局拉扯）
+    chips = [(r.chip.width(), r.chip.height()) for r in rows]
+    assert chips[0] == chips[1] == (rows[0].CHIP_W, rows[0].CHIP_H)
+
+    # 3) 文字列不与按钮重叠，且换行开关是开着的（装不下换行，不许硬挤一行）
+    for r in rows:
+        assert r.who.wordWrap(), f"{r.value} 行文字必须允许换行"
+        who_right = r.who.mapTo(r, r.who.rect().topRight()).x()
+        assert who_right <= r.btn_local.x(), f"{r.value} 行文字压到按钮上了"
+
+    # 4) 比例（2026-10-24 方案 A）：主按钮定宽不许拉满（内容只需 ~85px，
+    #    以前 stretch 到 247px 显得又大又空）；兜底是行尾 28×28 小图标钮。
+    for r in rows:
+        assert r.btn_local.width() == r.BTN_W == 150, \
+            f"{r.value} 行主按钮宽度 {r.btn_local.width()}，应定宽 150"
+        assert (r.btn_peer.width(), r.btn_peer.height()) == (28, 28), \
+            f"{r.value} 行兜底钮应为 28×28 小图标钮"
+    # 两行按钮列左右对齐
+    assert rows[0].btn_local.x() == rows[1].btn_local.x()
+    assert rows[0].btn_peer.x() == rows[1].btn_peer.x()
+    # 主按钮与小钮同行右簇、间距一致
+    for r in rows:
+        gap = r.btn_peer.x() - (r.btn_local.x() + r.btn_local.width())
+        assert gap == 8, f"{r.value} 行主按钮与兜底钮间距 {gap}，应为 8"
 
 
 # --------------------------------------------------------------------------- #

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>「请对端发送」降级 · 3 个方案对比</title>
+<style>
+:root{
+  --accent:#4E87FF; --accent-deep:#2E63E8; --accent-soft:rgba(78,135,255,.13);
+  --ink:#14181F; --ink-2:#4B5566; --ink-3:#8A93A3;
+  --line:#E3E7EE; --line-soft:#EDF0F5;
+  --bg:#EEF1F6; --card:#FFFFFF; --card-2:#F7F9FC; --card-3:#F0F3F8;
+  --ok:#0E7C4A;   --ok-bg:rgba(14,124,74,.11);
+  --run:#2E63E8;  --run-bg:rgba(46,99,232,.11);
+  --idle:#7C8698; --idle-bg:rgba(124,134,152,.13);
+  --danger:#A82B2B; --danger-bg:rgba(168,43,43,.11);
+  --warn:#B4690E; --warn-bg:rgba(180,105,14,.11);
+  --r-card:12px; --r-ctrl:10px;
+  --sh-win:0 2px 6px rgba(16,24,40,.05),0 32px 70px -22px rgba(16,24,40,.34);
+  --font:-apple-system,"SF Pro Text","PingFang SC","Helvetica Neue",system-ui,sans-serif;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  font-family:var(--font);color:var(--ink);background:var(--bg);
+  -webkit-font-smoothing:antialiased;padding:28px 22px 60px;
+  display:flex;flex-direction:column;gap:28px;align-items:center;
+}
+.intro{width:780px;max-width:100%}
+.intro h1{margin:0 0 6px;font-size:16px;font-weight:700;letter-spacing:-.01em}
+.intro p{margin:0;font-size:11.5px;color:var(--ink-2);line-height:1.7}
+.intro b{color:var(--ink)}
+
+.stage{display:flex;flex-direction:column;gap:10px;width:780px;max-width:100%}
+.stage h3{margin:0;font-size:11px;font-weight:650;color:var(--ink-3);letter-spacing:.04em;padding-left:4px;display:flex;align-items:center;gap:8px}
+.stage h3 .rec{font-size:9px;font-weight:700;color:var(--accent-deep);background:var(--accent-soft);border-radius:999px;padding:2px 8px;letter-spacing:.02em}
+.stage h3 .alt{font-size:9px;font-weight:700;color:var(--idle);background:var(--idle-bg);border-radius:999px;padding:2px 8px;letter-spacing:.02em}
+.stage .desc{margin:0;font-size:11px;color:var(--ink-2);line-height:1.65;padding-left:4px}
+.stage .desc code{font-family:var(--mono);font-size:10px;background:var(--card-3);border-radius:4px;padding:1px 5px}
+
+/* ── hero 卡片（只画这一块，窗口其余部分不变） ── */
+.hero{border-radius:var(--r-card);padding:18px 18px 16px;background:var(--card-2);
+  border:1px solid var(--line-soft);position:relative;overflow:hidden}
+.hero::after{content:"";position:absolute;right:-70px;top:-70px;width:210px;height:210px;border-radius:50%;
+  background:radial-gradient(circle,var(--accent-soft) 0%,transparent 70%);pointer-events:none}
+.hero-top{display:flex;align-items:center;gap:9px;margin-bottom:14px}
+.hero-label{font-size:11px;font-weight:650;color:var(--ink-3);letter-spacing:.05em}
+.pill{margin-left:auto;font-size:10px;font-weight:650;padding:3.5px 9px;border-radius:999px;
+  display:inline-flex;align-items:center;gap:5px}
+.pill.run{background:var(--ok-bg);color:var(--ok)}
+.pill i{width:6px;height:6px;border-radius:50%;background:currentColor;display:block}
+.hero-main{display:flex;align-items:center;gap:18px}
+.plate{width:62px;height:62px;border-radius:16px;flex-shrink:0;background:var(--card-3);
+  border:1px solid var(--line);display:flex;align-items:center;justify-content:center;color:var(--ink-2)}
+.hero-name{font-size:27px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
+.hero-sub{font-size:12px;color:var(--ink-3);margin-top:5px}
+.src{margin-top:6px;font-size:11.5px;color:var(--ink-3);display:flex;align-items:center;gap:6px}
+.src i{width:6px;height:6px;border-radius:50%;background:var(--idle);display:block;flex-shrink:0}
+
+/* ── 动作行（列宽真源：章 36 + 文字 120 + 主按钮 1fr） ── */
+.acts{margin-top:16px;display:flex;flex-direction:column;gap:8px}
+.arow{display:grid;gap:10px;align-items:center;
+  min-height:58px;padding:0 12px;border:1px solid var(--line-soft);border-radius:var(--r-ctrl);background:var(--card)}
+.val{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--ink);
+  background:var(--card-3);border:1px solid var(--line);border-radius:7px;
+  width:36px;height:26px;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1}
+.txt{min-width:0}
+.txt .port{font-size:12px;font-weight:650;color:var(--ink-2);line-height:1.25}
+.txt .who{font-size:10px;color:var(--ink-3);line-height:1.35;word-break:break-word}
+
+.btn{height:38px;border-radius:var(--r-ctrl);font:inherit;font-size:12.5px;font-weight:620;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:.14s;
+  border:1px solid transparent;white-space:nowrap}
+.btn svg{flex-shrink:0}
+.btn.local{background:var(--accent);color:#fff}
+.btn.local:hover{background:var(--accent-deep)}
+
+/* 小按钮（方案 A / B 用） */
+.mini{width:28px;height:28px;border-radius:8px;border:1px solid var(--line);background:var(--card);
+  color:var(--ink-2);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:.14s;flex-shrink:0;position:relative;padding:0}
+.mini:hover{border-color:var(--accent);color:var(--accent-deep);background:var(--accent-soft)}
+.mini[disabled]{opacity:.45;cursor:not-allowed}
+.mini[disabled]:hover{border-color:var(--line);color:var(--ink-2);background:var(--card)}
+
+/* tooltip 演示（方案 A） */
+.tipwrap{position:relative;display:flex}
+.tip{position:absolute;bottom:calc(100% + 9px);right:0;background:var(--ink);color:var(--card);
+  font-size:10.5px;font-weight:550;padding:5px 9px;border-radius:6px;white-space:nowrap;
+  box-shadow:0 6px 18px rgba(16,24,40,.18);pointer-events:none}
+.tip::after{content:"";position:absolute;top:100%;right:12px;border:5px solid transparent;border-top-color:var(--ink)}
+
+/* ⋯ 菜单演示（方案 B） */
+.menuwrap{position:relative;display:flex}
+.menu{position:absolute;top:calc(100% + 9px);right:0;width:196px;background:var(--card);
+  border:1px solid var(--line);border-radius:10px;padding:4px;z-index:5;
+  box-shadow:0 10px 28px rgba(16,24,40,.16)}
+.menu .item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:7px;
+  font-size:11.5px;color:var(--ink-2);cursor:pointer}
+.menu .item:hover{background:var(--card-2);color:var(--ink)}
+.menu .sep{height:1px;background:var(--line-soft);margin:4px 6px}
+.menu .hint{padding:5px 10px 4px;font-size:9.5px;color:var(--ink-3);line-height:1.5}
+.menu .dim{opacity:.45;cursor:not-allowed}
+.menu .dim:hover{background:transparent;color:var(--ink-2)}
+
+.hint{margin-top:9px;font-size:10.5px;color:var(--ink-3);line-height:1.6}
+.hero-note{margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft);
+  font-size:11px;display:flex;align-items:center;gap:6px;color:var(--ok)}
+.hero-note .mono{font-family:var(--mono);font-size:10.5px}
+
+/* 方案 C 的兜底条 */
+.fallback{margin-top:9px;display:flex;align-items:center;gap:10px;padding:8px 12px;
+  background:var(--card-3);border-radius:9px}
+.fallback .fb-label{font-size:10px;color:var(--ink-3);line-height:1.5}
+.fallback .fb-label b{color:var(--ink-2);font-weight:650}
+.fallback .sp{margin-left:auto;display:flex;gap:8px}
+.btn.small{height:26px;font-size:10.5px;font-weight:600;padding:0 12px;
+  background:var(--card);color:var(--ink-2);border:1px solid var(--line);border-radius:8px}
+.btn.small:hover{border-color:var(--accent);color:var(--accent-deep)}
+.btn.small[disabled]{opacity:.45;cursor:not-allowed}
+.btn.small[disabled]:hover{border-color:var(--line);color:var(--ink-2)}
+</style>
+</head>
+<body>
+
+<div class="intro">
+  <h1>「请对端发送」降级为兜底小按钮 · 3 个位置方案</h1>
+  <p>
+    背景：<b>本机发送已实测始终可达</b>（画面在哪边都能一步切回，见 SCREEN-OWNERSHIP §1.4），
+    「请对端发送」只剩兜底用途（本机 DDC 栈坏掉 / 换显示器），不配再占半个按钮位。
+    以下只画 hero 卡片区，窗口其余部分不变。三个方案共同点：行内 <b>「本机发送」变宽</b>、
+    唯一主操作；对端代发收小、弱化。离线时小按钮/菜单项置灰。
+  </p>
+</div>
+
+<!-- ══════════ 方案 A · 行尾小图标钮 ══════════ -->
+<div class="stage">
+  <h3><span class="rec">推荐</span> 方案 A · 行尾小图标钮（28px）</h3>
+  <p class="desc">
+    「本机发送 N」独占按钮位、加宽；行尾一个 <code>28×28</code> 幽灵小钮（箭头图标 = 对端代发），
+    悬停出 tooltip 说明用途。一次点击仍可达，但视觉权重只有主按钮的零头。
+  </p>
+  <div class="hero">
+    <div class="hero-top">
+      <span class="hero-label">显示器</span>
+      <span class="pill run"><i></i>对端在线</span>
+    </div>
+    <div class="hero-main">
+      <div class="plate"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+      <div>
+        <div class="hero-name">Q2790R3</div>
+        <div class="hero-sub">两个输入口 · 输入源 17 = HDMI，18 = USB-C</div>
+        <div class="src"><i></i>画面位置未检测</div>
+      </div>
+    </div>
+
+    <div class="acts">
+      <!-- 行 17：悬停态演示 -->
+      <div class="arow" style="grid-template-columns:36px 120px 1fr 28px">
+        <span class="val">17</span>
+        <div class="txt"><div class="port">HDMI</div><div class="who">Windows 的输入口</div></div>
+        <button class="btn local">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          本机发送 17
+        </button>
+        <div class="tipwrap">
+          <button class="mini" style="border-color:var(--accent);color:var(--accent-deep);background:var(--accent-soft)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+          </button>
+          <div class="tip">请对端发送 17 · 兜底通道</div>
+        </div>
+      </div>
+
+      <!-- 行 18：常态 -->
+      <div class="arow" style="grid-template-columns:36px 120px 1fr 28px">
+        <span class="val">18</span>
+        <div class="txt"><div class="port">USB-C</div><div class="who">本机输入口</div></div>
+        <button class="btn local">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          本机发送 18
+        </button>
+        <button class="mini">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="hint">「本机发送」直接把 DDC 命令发给显示器，画面在哪边都能切；行尾小按钮是兜底——本机 DDC 不可用时让对端代发。</div>
+    <div class="hero-note">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5l2.5 2.5L10 3.5"/></svg>
+      上次 请对端发送 18（Mac）· 往返 <span class="mono">142 ms</span> · 已确认
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 方案 B · ⋯ 溢出菜单 ══════════ -->
+<div class="stage">
+  <h3><span class="alt">备选</span> 方案 B · 行尾 ⋯ 溢出菜单</h3>
+  <p class="desc">
+    行尾放 <code>28×28</code> 的 <code>⋯</code> 钮，点开小菜单，「请对端发送 N」作为菜单项藏进去，
+    还能容纳未来的行级扩展项。代价：兜底动作多一次点击，急用时略绕。
+  </p>
+  <div class="hero">
+    <div class="hero-top">
+      <span class="hero-label">显示器</span>
+      <span class="pill run"><i></i>对端在线</span>
+    </div>
+    <div class="hero-main">
+      <div class="plate"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+      <div>
+        <div class="hero-name">Q2790R3</div>
+        <div class="hero-sub">两个输入口 · 输入源 17 = HDMI，18 = USB-C</div>
+        <div class="src"><i></i>画面位置未检测</div>
+      </div>
+    </div>
+
+    <div class="acts">
+      <!-- 行 17：菜单展开演示 -->
+      <div class="arow" style="grid-template-columns:36px 120px 1fr 28px">
+        <span class="val">17</span>
+        <div class="txt"><div class="port">HDMI</div><div class="who">Windows 的输入口</div></div>
+        <button class="btn local">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          本机发送 17
+        </button>
+        <div class="menuwrap">
+          <button class="mini" style="border-color:var(--accent);color:var(--accent-deep);background:var(--accent-soft)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <div class="menu">
+            <div class="item">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+              请对端发送 17
+            </div>
+            <div class="hint">兜底通道：本机 DDC 不可用时再用</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 行 18：常态 -->
+      <div class="arow" style="grid-template-columns:36px 120px 1fr 28px">
+        <span class="val">18</span>
+        <div class="txt"><div class="port">USB-C</div><div class="who">本机输入口</div></div>
+        <button class="btn local">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          本机发送 18
+        </button>
+        <button class="mini">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="hint">「本机发送」直接把 DDC 命令发给显示器，画面在哪边都能切；⋯ 菜单里的「请对端发送」是兜底。</div>
+    <div class="hero-note">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5l2.5 2.5L10 3.5"/></svg>
+      上次 请对端发送 18（Mac）· 往返 <span class="mono">142 ms</span> · 已确认
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 方案 C · 底部兜底条 ══════════ -->
+<div class="stage">
+  <h3><span class="alt">备选</span> 方案 C · 行外底部兜底条</h3>
+  <p class="desc">
+    两行彻底只留「本机发送」，按钮满宽；两行下方一条灰色兜底条
+    <code>兜底：请对端代发 → [17] [18]</code> 收纳两个小按钮。行最干净，
+    代价：兜底动作和行分离，「切 17 的兜底」要自己对上号。
+  </p>
+  <div class="hero">
+    <div class="hero-top">
+      <span class="hero-label">显示器</span>
+      <span class="pill run"><i></i>对端在线</span>
+    </div>
+    <div class="hero-main">
+      <div class="plate"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+      <div>
+        <div class="hero-name">Q2790R3</div>
+        <div class="hero-sub">两个输入口 · 输入源 17 = HDMI，18 = USB-C</div>
+        <div class="src"><i></i>画面位置未检测</div>
+      </div>
+    </div>
+
+    <div class="acts">
+      <div class="arow" style="grid-template-columns:36px 120px 1fr">
+        <span class="val">17</span>
+        <div class="txt"><div class="port">HDMI</div><div class="who">Windows 的输入口</div></div>
+        <button class="btn local">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          本机发送 17
+        </button>
+      </div>
+      <div class="arow" style="grid-template-columns:36px 120px 1fr">
+        <span class="val">18</span>
+        <div class="txt"><div class="port">USB-C</div><div class="who">本机输入口</div></div>
+        <button class="btn local">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          本机发送 18
+        </button>
+      </div>
+    </div>
+
+    <div class="fallback">
+      <div class="fb-label"><b>兜底</b> · 本机 DDC 不可用时，让握着链路的对端代发</div>
+      <div class="sp">
+        <button class="btn small">请对端代发 17</button>
+        <button class="btn small">请对端代发 18</button>
+      </div>
+    </div>
+
+    <div class="hint">「本机发送」直接把 DDC 命令发给显示器，画面在哪边都能切；兜底通道收在下面这条里。</div>
+    <div class="hero-note">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5l2.5 2.5L10 3.5"/></svg>
+      上次 请对端发送 18（Mac）· 往返 <span class="mono">142 ms</span> · 已确认
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -489,6 +489,16 @@ def qss(t: Tokens | None = None) -> str:
     QPushButton#ghostBtn:disabled {{
         color: {t.ink3}; border-color: {t.line_soft}; background: {t.card};
     }}
+    /* 切换页兜底小钮（请对端代发，28×28 图标钮，INTERACTIONS §10.24 方案 A） */
+    QPushButton#miniBtn {{
+        background: {t.card}; color: {t.ink2}; border: 1px solid {t.line};
+        border-radius: 8px; padding: 0;
+    }}
+    QPushButton#miniBtn:hover {{ border-color: {t.accent}; background: {t.accent_soft}; }}
+    QPushButton#miniBtn:pressed {{ background: {t.card3}; }}
+    QPushButton#miniBtn:disabled {{
+        background: {t.card}; border-color: {t.line_soft};
+    }}
 
     /* ---------- 药丸 ---------- */
     #pillRun {{ background: {t.ok_bg}; color: {t.ok}; border-radius: {RADIUS_PILL_FULL}px;

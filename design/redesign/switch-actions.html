@@ -89,28 +89,35 @@ body{
 
 /* ── 动作矩阵 ── */
 .acts{margin-top:16px;display:flex;flex-direction:column;gap:8px}
-.arow{display:grid;grid-template-columns:126px 1fr 1fr;gap:10px;align-items:center;
-  padding:9px 10px;border:1px solid var(--line-soft);border-radius:var(--r-ctrl);background:var(--card)}
+/* 列宽真源（2026-10-24）：章 36 + 文字列 120（「Windows 的输入口」fallback 字体
+   实测渲染 105px）；之前 126px 装不下 → 文字被按钮压住。两行等高 58。 */
+.arow{display:grid;grid-template-columns:36px 120px 1fr auto;gap:10px;align-items:center;
+  min-height:58px;padding:0 12px;border:1px solid var(--line-soft);border-radius:var(--r-ctrl);background:var(--card)}
 .tgt{display:flex;align-items:center;gap:8px;min-width:0}
 .val{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--ink);
   background:var(--card-3);border:1px solid var(--line);border-radius:7px;
-  padding:3px 7px;flex-shrink:0;line-height:1}
-.tgt .txt{min-width:0}
-.tgt .port{font-size:12px;font-weight:650;color:var(--ink-2);line-height:1.25}
-.tgt .who{font-size:10px;color:var(--ink-3);line-height:1.3;white-space:nowrap}
+  width:36px;height:26px;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1}
+.txt{min-width:0}
+.txt .port{font-size:12px;font-weight:650;color:var(--ink-2);line-height:1.25}
+.txt .who{font-size:10px;color:var(--ink-3);line-height:1.35;white-space:normal;word-break:break-word}
 
-.btn{height:38px;border-radius:var(--r-ctrl);font:inherit;font-size:12.5px;font-weight:620;
+.btn{height:38px;width:150px;border-radius:var(--r-ctrl);font:inherit;font-size:12.5px;font-weight:620;
   cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:.14s;
   border:1px solid transparent;white-space:nowrap}
 .btn svg{flex-shrink:0}
 .btn.local{background:var(--accent);color:#fff}
 .btn.local:hover{background:var(--accent-deep)}
 .btn.local:active{transform:scale(.985)}
-.btn.peer{background:var(--card);color:var(--ink-2);border-color:var(--line)}
-.btn.peer:hover{border-color:var(--accent);color:var(--accent-deep)}
-.btn.peer:active{transform:scale(.985)}
+/* 兜底小钮（方案 A）：28×28 图标钮，行尾与主按钮成簇（间距 8px） */
+.mini{width:28px;height:28px;border-radius:8px;border:1px solid var(--line);background:var(--card);
+  color:var(--ink-2);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:.14s;flex-shrink:0;padding:0}
+.mini:hover{border-color:var(--accent);color:var(--accent-deep);background:var(--accent-soft)}
+.mini[disabled]{opacity:.45;cursor:not-allowed}
+.mini[disabled]:hover{border-color:var(--line);color:var(--ink-2);background:var(--card)}
 .btn[disabled]{background:var(--idle-bg);color:var(--ink-3);border-color:transparent;cursor:not-allowed}
 .btn[disabled] svg{opacity:.55}
+.actions{display:flex;align-items:center;gap:8px}
 
 .hint{margin-top:9px;font-size:10.5px;color:var(--ink-3);line-height:1.6}
 .hero-note{margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft);
@@ -168,37 +175,25 @@ body{
 
           <div class="acts">
             <div class="arow">
-            <div class="tgt">
-              <span class="val">17</span>
-              <span class="txt"><span class="port">HDMI</span><br><span class="who">Windows 侧</span></span>
-            </div>
-            <button class="btn local">
+            <span class="val">17</span>
+            <div class="txt"><div class="port">HDMI</div><div class="who">Windows 的输入口</div></div>
+            <div class="actions"><button class="btn local">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
               本机发送 17
-            </button>
-            <button class="btn peer">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-              请对端发送 17
-            </button>
+            </button><button class="mini" title="请对端发送 17 · 兜底通道（本机 DDC 不可用时让对端代发）"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></button></div>
             </div>
 
             <div class="arow">
-            <div class="tgt">
-              <span class="val">18</span>
-              <span class="txt"><span class="port">USB-C</span><br><span class="who">Mac 侧 · 本机</span></span>
-            </div>
-            <button class="btn local">
+            <span class="val">18</span>
+            <div class="txt"><div class="port">USB-C</div><div class="who">本机输入口</div></div>
+            <div class="actions"><button class="btn local">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
               本机发送 18
-            </button>
-            <button class="btn peer">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-              请对端发送 18
-            </button>
+            </button><button class="mini" title="请对端发送 18 · 兜底通道（本机 DDC 不可用时让对端代发）"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></button></div>
             </div>
           </div>
 
-          <div class="hint">本机发不动时（画面在另一边），点同一行的「请对端发送」——由握着画面的那台发 DDC。</div>
+          <div class="hint">「本机发送」直接把 DDC 命令发给显示器，画面在哪边都能切；行尾纸飞机是兜底——本机 DDC 不可用时让对端代发。</div>
           <div class="hero-note">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5l2.5 2.5L10 3.5"/></svg>
             上次 09:36 · 让对端切到 18 · 往返 <span class="mono">142 ms</span> · 已确认
@@ -249,37 +244,25 @@ body{
 
           <div class="acts">
             <div class="arow">
-            <div class="tgt">
-              <span class="val">17</span>
-              <span class="txt"><span class="port">HDMI</span><br><span class="who">Windows 侧</span></span>
-            </div>
-            <button class="btn local">
+            <span class="val">17</span>
+            <div class="txt"><div class="port">HDMI</div><div class="who">Windows 的输入口</div></div>
+            <div class="actions"><button class="btn local">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
               本机发送 17
-            </button>
-            <button class="btn peer" disabled>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-              请对端发送 17
-            </button>
+            </button><button class="mini" title="请对端发送 17 · 兜底通道（本机 DDC 不可用时让对端代发）"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></button></div>
             </div>
 
             <div class="arow">
-            <div class="tgt">
-              <span class="val">18</span>
-              <span class="txt"><span class="port">USB-C</span><br><span class="who">Mac 侧 · 本机</span></span>
-            </div>
-            <button class="btn local">
+            <span class="val">18</span>
+            <div class="txt"><div class="port">USB-C</div><div class="who">本机输入口</div></div>
+            <div class="actions"><button class="btn local">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
               本机发送 18
-            </button>
-            <button class="btn peer" disabled>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-              请对端发送 18
-            </button>
+            </button><button class="mini" title="请对端发送 18 · 兜底通道（本机 DDC 不可用时让对端代发）"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></button></div>
             </div>
           </div>
 
-          <div class="hint">对端没连上时只能本机发。想把画面从 Windows 叫回来，得先让那边开着程序并连上。</div>
+          <div class="hint">对端没连上时行尾小钮置灰，但「本机发送」照常可用——画面在哪边都能一步切回来。</div>
           <div class="hero-note dim">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="4.2"/><path d="M6 4v2.6"/></svg>
             上次 09:31 · 本机切到 17 · <span class="mono">63 ms</span> · 回读不可用

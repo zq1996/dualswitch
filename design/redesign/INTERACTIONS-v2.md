@@ -717,9 +717,9 @@ Finder 复制图片时粘贴板里同时有 `public.file-url` 和一张**文件�
 [屏] Q2790R3
      两个输入口 · 输入源 17 = HDMI，18 = USB-C
      画面位置未检测                      ← 有读数才显示「画面在 X · 读数 17 · 6 秒前」
-[17] HDMI  / Windows 的输入口   [本机发送 17]  [请对端发送 17]
-[18] USB-C / 本机输入口         [本机发送 18]  [请对端发送 18]
-本机发不动时（画面在另一边），点同一行的「请对端发送」——由握着画面的那台发 DDC。
+[17] HDMI  / Windows 的输入口        [本机发送 17] ✈
+[18] USB-C / 本机输入口              [本机发送 18] ✈
+「本机发送」直接把 DDC 命令发给显示器，画面在哪边都能切；行尾纸飞机是兜底（请对端发送），本机 DDC 不可用时才用。
 ✓ 上次 请对端发送 18（Mac）· 142 ms
 ```
 
@@ -727,10 +727,16 @@ Finder 复制图片时粘贴板里同时有 `public.file-url` 和一张**文件�
 |---|---|
 | 大标题 | 显示器名（确定的硬件），不是「当前画面」（猜的） |
 | 「画面在 X」 | 只展示、**不参与任何按钮的可用性**；拿不到就写「画面位置未检测」 |
-| `本机发送` | 实心主色 + `monitor` 图标；调 `SwitchController.set_input_local(value)` |
-| `请对端发送` | 白底描边 + `arrow-left-right`；调 `switch_remote(value)`；对端离线置灰 |
+| `本机发送` | 实心主色 + `monitor` 图标；**定宽 150px**（内容 ~85px，不许 stretch 拉满）；调 `SwitchController.set_input_local(value)` |
+| `请对端发送` | **兜底小钮**（28×28 图标钮，`send` 图标，行尾与主按钮成簇、间距 8px）；tooltip + accessibleName 带「请对端发送 N」；调 `switch_remote(value)`；对端离线置灰。**方案 A**（`switch-fallback-btn.html` 3 案对比，用户 2026-10-24 定）：本机发送已实测始终可达（SCREEN-OWNERSHIP §1.4），兜底不配再占半个按钮位 |
 | 已删除 | 「强制切」按钮与菜单项、两张可点击的设备卡、单按钮「切换到 X」、主按钮上的键帽 |
 | 回读 | 只代表「命令下了」；`unconfirmed` 的文案改成「读通道不可用属已知」 |
+
+**行几何硬约束（2026-10-24 整改）**：两行等高 58px、数字章固定 36×26、文字列 120px
+**自动换行**（装不下换行、不许硬挤一行，更不许压按钮）、两按钮等宽且上下行列对齐。
+老 bug：章只给 `MinimumWidth` 被布局拉扯（34/57 两种宽 = 背景框不一样大），
+文字列 126px 装不下「Windows 的输入口」（fallback 字体实测渲染 105px）→ 越界压在按钮底下。
+守卫：`tests/test_ui_mac2.py::test_switch_page_action_rows_geometry`。
 
 原型：`design/redesign/switch-actions.html`（正常态 / 对端离线态）。
 设计依据与后续读数层：`docs/SCREEN-OWNERSHIP.md` §3。

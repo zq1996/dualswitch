@@ -45,10 +45,36 @@ def _title(host: str) -> str:
 # 一行动作：目标标签 + 两个发送通道
 # --------------------------------------------------------------------------- #
 class ActionRow(QFrame):
-    """`17 · HDMI / Windows 侧` + `[本机发送]` + `[请对端发送]`。"""
+    """一行 = 一个目标输入 + 本机发送（主） + 请对端代发（兜底小钮）。
+
+    布局几何（2026-10-24 定案）：
+
+    - **数字章固定 36×26**、**文字列 120px 自动换行**、**行高 58**——两行背景框
+      一样大、文字不压按钮。章原先只给 `MinimumWidth(34)`，布局把富余宽度喂给章
+      （17 行 34px / 18 行 57px），「背景框不一样大」就是这么来的。
+    - **主按钮定宽 BTN_W=150，不许 stretch**。「本机发送 N」内容只需 ~85px
+      （实测 sizeHint 107），拉满到 247px 又大又空（用户 2026-10-24 反馈「太大了」）；
+      150 = 内容 + 两侧各 ~30 留白。
+    - **兜底降级为行尾 28×28 小图标钮**（方案 A，`switch-fallback-btn.html`）：
+      本机发送已实测始终可达（SCREEN-OWNERSHIP §1.4），「请对端发送」只剩兜底
+      用途，不配再占半个按钮位。文案进 tooltip + accessibleName；对端离线置灰。
+    - 主按钮 + 小钮**靠右成簇**（间距 8px），两行按钮列左右对齐。
+    """
 
     localClicked = Signal(int)
     peerClicked = Signal(int)
+
+    ROW_H = 58
+    CHIP_W, CHIP_H = 36, 26
+    #: 文字列宽：「Windows 的输入口」fallback 字体实测渲染 105px，给到 120 免得
+    #: 常规文案无谓折行（两行文字块高度不一会让 17/18 的端口名高低错位）。
+    #: **wordWrap 仍开着**：超长文案照常折行收进行内，绝不压按钮（用户
+    #: 2026-10-24：装不下可以换行，不许硬挤）。
+    TEXT_W = 120
+    BTN_W = 150          # 主按钮定宽（内容 ~85px + 留白）；stretch 会拉到 247px
+    BTN_H = 38
+    MINI = 28            # 兜底小钮边长
+    MINI_GAP = 8         # 主按钮与小钮间距
 
     def __init__(self, host: str, value: int, is_local: bool, parent=None):
         super().__init__(parent)
@@ -56,57 +82,60 @@ class ActionRow(QFrame):
         self.value = int(value)
         self.setObjectName("actRow")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setFixedHeight(self.ROW_H)
 
         t = theme.tokens()
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setContentsMargins(12, 0, 12, 0)   # 行高固定 → 垂直居中，不留上下 padding
         lay.setSpacing(10)
 
         # 左：值 + 端口 + 归属
-        chip = QLabel(str(self.value))
-        chip.setObjectName("valChip")
-        chip.setFont(theme.qfont(12.5, 700))
-        chip.setAlignment(Qt.AlignCenter)
-        chip.setFixedHeight(24)
-        chip.setMinimumWidth(34)
+        self.chip = QLabel(str(self.value))
+        self.chip.setObjectName("valChip")
+        self.chip.setFont(theme.qfont(12.5, 700))
+        self.chip.setAlignment(Qt.AlignCenter)
+        self.chip.setFixedSize(self.CHIP_W, self.CHIP_H)
 
         col = QVBoxLayout()
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(1)
-        port = label(PORT.get(host, ""), "actPort")
-        who = label("本机输入口" if is_local else f"{_title(host)} 的输入口", "actWho")
-        col.addWidget(port)
-        col.addWidget(who)
+        self.port = label(PORT.get(host, ""), "actPort")
+        self.who = label("本机输入口" if is_local else f"{_title(host)} 的输入口", "actWho")
+        self.who.setWordWrap(True)   # 装不下就换行，不许压按钮
+        col.addWidget(self.port)
+        col.addWidget(self.who)
+        text_wrap = QWidget()
+        text_wrap.setLayout(col)
+        text_wrap.setFixedWidth(self.TEXT_W)
 
-        left = QHBoxLayout()
-        left.setContentsMargins(0, 0, 0, 0)
-        left.setSpacing(9)
-        left.addWidget(chip, 0, Qt.AlignVCenter)
-        left.addLayout(col)
-        left_wrap = QWidget()
-        left_wrap.setLayout(left)
-        left_wrap.setFixedWidth(126)
-        lay.addWidget(left_wrap, 0, Qt.AlignVCenter)
+        lay.addWidget(self.chip, 0, Qt.AlignVCenter)
+        lay.addWidget(text_wrap, 0, Qt.AlignVCenter)
 
-        # 右：两个通道
+        # 右：主按钮 + 兜底小钮靠右成簇（中间 stretch，两行按钮列自然对齐）
         self.btn_local = QPushButton(f"本机发送 {self.value}")
         self.btn_local.setObjectName("primary")
-        self.btn_local.setFixedHeight(38)
+        self.btn_local.setFixedSize(self.BTN_W, self.BTN_H)
         self.btn_local.setCursor(Qt.PointingHandCursor)
         self.btn_local.setFocusPolicy(Qt.NoFocus)
         self.btn_local.setIcon(QIcon(icons.svg_pixmap("monitor", 15, "#FFFFFF", 2.0)))
         self.btn_local.clicked.connect(lambda: self.localClicked.emit(self.value))
 
-        self.btn_peer = QPushButton(f"请对端发送 {self.value}")
-        self.btn_peer.setObjectName("ghostBtn")
-        self.btn_peer.setFixedHeight(38)
+        self.btn_peer = QPushButton()
+        self.btn_peer.setObjectName("miniBtn")
+        self.btn_peer.setFixedSize(self.MINI, self.MINI)
         self.btn_peer.setCursor(Qt.PointingHandCursor)
         self.btn_peer.setFocusPolicy(Qt.NoFocus)
-        self.btn_peer.setIcon(QIcon(icons.svg_pixmap("arrow-left-right", 15, t.ink2, 2.0)))
+        self.btn_peer.setIcon(QIcon(icons.svg_pixmap("send", 13, t.ink2, 2.0)))
+        self.btn_peer.setToolTip(f"请对端发送 {self.value} · 兜底通道（本机 DDC 不可用时让对端代发）")
+        self.btn_peer.setAccessibleName(f"请对端发送 {self.value}")
         self.btn_peer.clicked.connect(lambda: self.peerClicked.emit(self.value))
 
-        lay.addWidget(self.btn_local, 1)
-        lay.addWidget(self.btn_peer, 1)
+        lay.addStretch(1)
+        cluster = QHBoxLayout()          # 按钮簇独立布局：间距 MINI_GAP，不受外层 10px 影响
+        cluster.setSpacing(self.MINI_GAP)
+        cluster.addWidget(self.btn_local, 0, Qt.AlignVCenter)
+        cluster.addWidget(self.btn_peer, 0, Qt.AlignVCenter)
+        lay.addLayout(cluster)
 
 
 # --------------------------------------------------------------------------- #
@@ -187,7 +216,8 @@ class SwitchCard(QFrame):
 
         lay.addSpacing(9)
         self.hint = label(
-            "本机发不动时（画面在另一边），点同一行的「请对端发送」——由握着画面的那台发 DDC。",
+            "「本机发送」直接把 DDC 命令发给显示器，画面在哪边都能切；"
+            "行尾纸飞机是兜底——本机 DDC 不可用时（驱动 / 权限 / 线材）让对端代发。",
             "hintLine",
         )
         self.hint.setWordWrap(True)
