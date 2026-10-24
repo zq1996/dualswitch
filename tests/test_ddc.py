@@ -209,11 +209,12 @@ class _FakeAV:
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="m1ddc 后端专用")
-def test_mac_set_input_cold_channel_sends_twice(monkeypatch):
-    """冷通道：第一条 Set 会被 macOS 的 DCP 吞掉，必须再发一条（2026-10-24 人眼确认）。
+def test_mac_set_input_always_sends_twice(monkeypatch):
+    """本机发送固定两条：读完再写，第一条必被吞，第二条才生效（2026-10-24 人眼确认）。
 
-    事实来源：静默几分钟后单发 12s 画面不动；紧接着的第二条 0.15~5s 内生效。
-    同一台显示器从 Windows 发一条就切 ⇒ 不是显示器固件，是 mac 侧通道。
+    实测：读一次 VCP 之后的第一条 Set 回 rc=0 但画面 12s 不动，紧接着第二条 0.15~5s
+    内必中；只写不读时连发都中。app 里每次点击前几乎必然刚读过（回读线程 / 进页面直读 /
+    热键发号前直读），所以省不掉这一条。同一台屏从 Windows 发一条就切 ⇒ 不是显示器的问题。
     """
     from dualswitch.ddc import macos as mac
     from dualswitch.ddc.macos import M1ddcBackend
@@ -222,35 +223,19 @@ def test_mac_set_input_cold_channel_sends_twice(monkeypatch):
     av = _FakeAV()
     b._av = av
     monkeypatch.setattr(mac, "SET_REPEAT_GAP_S", 0.0)
-    assert b._last_send_at < 0              # 冷：从没发送过（哨兵必须是 -inf，
-    #                                         因为 macOS 的 monotonic 从 0 附近开始）
     b.set_input(17)
     assert av.calls == [(0x60, 17), (0x60, 17)]
 
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="m1ddc 后端专用")
-def test_mac_set_input_warm_channel_sends_once():
-    """热通道（刚发成功过）：一条就中，不再补发。
-
-    实测依据：同一条通道被焐热后，连续两条（间隔 3s）都生效；45s 后仍热。
-    """
-    import time as _time
-
-    from dualswitch.ddc.macos import M1ddcBackend
-
-    b = M1ddcBackend()
-    av = _FakeAV()
-    b._av = av
-    b._last_send_at = _time.monotonic()
+    # 紧接着再点一次也还是两条 —— 与「距上次发送多久」无关，别再加回热通道优化
+    av.calls.clear()
     b.set_input(18)
-    assert av.calls == [(0x60, 18)]
+    assert av.calls == [(0x60, 18), (0x60, 18)]
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="m1ddc 后端专用")
 def test_mac_set_input_falls_back_to_m1ddc(monkeypatch):
-    """本机直写通道不可用（老系统 / 句柄读不到 EDID）时退回 m1ddc，行为不变。"""
-    import time as _time
-
+    """本机直写通道不可用（老系统 / 拿不到外接屏句柄）时退回 m1ddc，同样两条。"""
+    from dualswitch.ddc import macos as mac
     from dualswitch.ddc.macos import M1ddcBackend
 
     b = M1ddcBackend()
@@ -258,6 +243,6 @@ def test_mac_set_input_falls_back_to_m1ddc(monkeypatch):
     calls = []
     monkeypatch.setattr(b, "_run", lambda args, display_args=None: calls.append(list(args)) or "")
     monkeypatch.setattr(b, "_display_args", lambda: [])
-    b._last_send_at = _time.monotonic()      # 热 → 一条
+    monkeypatch.setattr(mac, "SET_REPEAT_GAP_S", 0.0)
     b.set_input(17)
-    assert calls == [["set", "input", "17"]]
+    assert calls == [["set", "input", "17"], ["set", "input", "17"]]

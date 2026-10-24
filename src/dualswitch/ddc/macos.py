@@ -57,21 +57,23 @@ log = logging.getLogger("dualswitch.ddc")
 _DISPLAY_LINE = re.compile(r"^\[(?P<index>\d+)\]\s*(?P<name>.*?)\s*(?:\((?P<uuid>[0-9A-Fa-f-]{36})\))?$")
 
 # ---------------------------------------------------------------------------
-# 冷通道：macOS 侧的第一条 Set 会被吞掉（2026-10-24 实测，人眼确认）
+# 一读就毒：macOS 侧「谁在写之前读过一次，这一条写就被吞」（2026-10-24 实测，人眼确认）
 #
-# 事实（全部由用户看屏幕确认，不依赖回读）：
-#   · 通道静默几分钟后，第一条 Set 无论回 rc=0 还是回显目标值，显示器都不动；
-#     紧接着的第二条一定生效（间隔 0.15s~5s 都行）。
-#   · 换实现不影响结论：m1ddc 子进程和本模块 ctypes 直写表现完全一致 → 不是 m1ddc 的锅。
-#   · 同一台显示器从 Windows 发一条就切 → 不是显示器固件，是 macOS 的 DCP/AUX 通道
-#     在休眠后要「一条写来唤醒、内容丢弃」；Windows 的显示驱动常驻轮询 DDC，通道从不睡。
-#   · 一次 VCP 读（4 字节）、一次 EDID 读（0x50 只读区）都叫不醒它，只有 Set 本身能。
-#   · 通道被焐热之后能保持一段时间（45s 后仍热；静默 7 分钟后已冷）。
+# 事实（全部由用户看屏幕确认，不拿回读值当判据）：
+#   · 读一次 VCP 之后紧接着的第一条 Set：回 rc=0（m1ddc 甚至回显目标值），显示器不动；
+#     第二条一定生效（间隔 0.15s~5s 都行）。
+#   · 只写不读时，连着写几条都生效（实测第 2、3 条都中）；一旦中间插一次读，下一条又废。
+#   · 「毒」能持续很久：读完 10s、45s、7 分钟后发的第一条仍然被吞。
+#   · 换实现不影响结论：m1ddc 子进程和本模块 ctypes 直写完全一致 → 不是 m1ddc 的锅。
+#   · 同一台显示器从 Windows 发一条就切 → 不是显示器固件，是 macOS 的 DCP/AUX 侧行为。
+#   · 这也是「原来点一次好使、今天开始要点两次」的原因：旧的回读跑的是 m1ddc 那条畸形
+#     校验和的 Get（必 -118 失败，不算成功读取）；今天把直读打通后，读成功了，于是每次
+#     回读都把下一次点击的那条 Set 毒掉。
 #
-# 所以：冷通道发两条（第一条是代价），热通道发一条。
-# 这比「无条件两条」少一半 DDC 流量，也比「无条件一条」可靠。
-SET_WARM_WINDOW_S = 30.0     # 距上次发送多久之内算「热通道」（实测 45s 仍热，取更保守的 30s）
-SET_REPEAT_GAP_S = 0.15      # 冷通道两条之间的间隔，只用来错开两次 I2C 事务
+# 结论：**本机发送固定两条**。app 里没法指望「热通道」——每次点击之前几乎必然刚读过
+# （回读线程、进页面直读、热键发号前直读），所以省不掉这一条。间隔 0.15s（原 1.2s 才是
+# 「像点了两次」的元凶），整组在 I2C 锁内，总耗时约 160ms。
+SET_REPEAT_GAP_S = 0.15      # 两条之间的间隔，只用来错开两次 I2C 事务
 
 # 内置屏 / 无名的屏：m1ddc 里名字是 (null)，没有 DDC 通道
 _PLACEHOLDER_NAMES = {"", "null", "(null)", "none"}
@@ -128,7 +130,6 @@ class M1ddcBackend(BaseBackend):
         self.display_index = display_index
         self.timeout = timeout
         self._av: AVServiceI2C | None = None
-        self._last_send_at = float("-inf")   # 上次本机发送的时刻（负无穷 = 从没发过，必判「冷」）
 
     # ------------------------------------------------------------------ 内部
     def _resolve_binary(self) -> str:
@@ -301,27 +302,25 @@ class M1ddcBackend(BaseBackend):
         return monitors
 
     def set_input(self, value: int) -> None:
-        """本机发 Set：本机直写优先，m1ddc 兜底；冷通道连发两条（原因见文件头的常量注释）。"""
+        """本机发 Set：**固定两条**（读完再写，第一条必被吞，原因见文件头注释）。
+
+        写通道优先走自己常驻的 IOAVService 句柄（单条 3ms），拿不到外接屏句柄时退回
+        m1ddc 子进程。两条都在 I2C 锁内，中间不会被回读/检测线程的读插进来。
+        """
         value = int(value)
         if self._av is None:
             self._av = AVServiceI2C()
 
         def _send() -> None:
-            """发一条：本机常驻句柄优先（3ms），拿不到外接屏句柄才退回 m1ddc 子进程。"""
             if self._av is not None and self._av.set_vcp(self.vcp_code, value):
                 return
             self._run(["set", "input", str(value)], display_args=self._display_args())
 
         def _send_group() -> None:
-            warm = (time.monotonic() - self._last_send_at) < SET_WARM_WINDOW_S
-            _send()
-            if not warm:
-                # 冷通道：这一条是唤醒代价，会被 DCP 丢掉，必须再发一条
-                time.sleep(SET_REPEAT_GAP_S)
-                _send()
-            self._last_send_at = time.monotonic()
+            _send()                      # 第一条：大概率被吞（前面刚读过 VCP）
+            time.sleep(SET_REPEAT_GAP_S)
+            _send()                      # 第二条：一定生效
 
-        # 整组放进 I2C 锁：回读/检测线程的读不能在两条之间插进来抢通道
         self._av.run_exclusive(_send_group)
 
     def get_input(self) -> int:
