@@ -18,6 +18,7 @@ from typing import Callable
 from . import logging_setup
 from .config import SOURCE_UNKNOWN, Config
 from .ddc.base import DDCError, DisplayBackend, probe_active_monitors
+from .mouse import MouseSwitcher
 
 log = logging_setup.get("app")
 
@@ -101,6 +102,11 @@ class SwitchController:
         self._source_checked = False
         self._ever_seen_monitor = False
         self.history: list[SwitchResult] = []
+
+        # 鼠标联动（可选，默认关）：切屏成功后顺带切罗技鼠标的 Easy-Switch。
+        # 独立模块 + 内部吞掉所有异常，切鼠标失败绝不能影响切屏主流程。
+        self._mouse = MouseSwitcher(cfg.mouse_switch)
+        self._mouse_gen = 0
 
         # 切屏前的钩子：剪贴板同步在这里把"本机当前剪贴板"入队（必须极快返回）。
         # 放在 _execute 开头而不是 trigger() 里，是为了让托盘菜单 / CLI 的切换也带上同步。
@@ -668,6 +674,7 @@ class SwitchController:
             return result
 
         self._last_set_at = time.monotonic()
+        self._after_screen_switch(target)
         with self._lock:
             self._current_source = target
             # 指令已经发到这块屏上了：之后「看不到它」才等于「被切走了」，
@@ -692,6 +699,57 @@ class SwitchController:
         return result
 
     # ------------------------------------------------------------------ 显式通道实现
+
+    # ------------------------------------------------------------------ 鼠标联动
+    def _after_screen_switch(self, target_host: str) -> None:
+        """切屏成功后联动罗技鼠标。**永不抛异常、永不阻塞调用方。**
+
+        方向逻辑（docs/FEASIBILITY-LOGI-EASYSWITCH.md §4）：
+          * 画面去了对端 ⇒ 鼠标还挂在本机 ⇒ 本机把它推出去；
+          * 画面回了本机 ⇒ 本机够不着鼠标 ⇒ 什么都不做。由对端在它自己的
+            `_do_local` 里推回来（对端代发最终也走 `set_input_local`，链路自动闭合）。
+
+        也就是说：**谁身上还挂着鼠标、而画面已经走了，就由谁推。**
+        """
+        try:
+            if not self.cfg.mouse_switch.enabled:
+                return
+            if not target_host or target_host == self.cfg.effective_host():
+                return
+            slot = int(self.cfg.mouse_switch.peer_slot)
+            if not 1 <= slot <= 3:
+                log.debug("跳过切鼠标：peer_slot=%d 非法", slot)
+                return
+            with self._lock:
+                self._mouse_gen += 1
+                gen = self._mouse_gen
+            threading.Thread(
+                target=self._mouse_task, args=(gen, slot),
+                name="mouse-switch", daemon=True,
+            ).start()
+        except Exception:  # noqa: BLE001 - 联动失败绝不影响切屏结果
+            log.exception("切鼠标调度失败（已忽略）")
+
+    def _mouse_task(self, gen: int, slot: int) -> None:
+        """等显示器切完再动鼠标；只有最新一代请求才生效。"""
+        try:
+            settle = int(self.cfg.mouse_switch.settle_ms)
+            if settle > 0:
+                time.sleep(settle / 1000.0)
+            with self._lock:
+                if gen != self._mouse_gen:
+                    log.debug("切鼠标（第 %d 代）被更新的切换取代，跳过", gen)
+                    return
+            outcome = self._mouse.switch_to(slot)
+            if outcome.ok:
+                log.info("鼠标联动 → %s", outcome)
+            else:
+                # 失败是常态：鼠标在对端 / 没连 / 没装 hidapi / 槽位没配对。
+                # 用户不需要知道，写 debug 就够。
+                log.debug("鼠标联动跳过：%s", outcome)
+        except Exception:  # noqa: BLE001 - 线程内兜底
+            log.exception("切鼠标线程异常（已忽略）")
+
     def _do_local(self, value: int, source: str) -> SwitchResult:
         """本机发一条 Set（docs/SCREEN-OWNERSHIP.md §3.2 通道①）。
 
@@ -737,6 +795,7 @@ class SwitchController:
             return result
 
         self._last_set_at = time.monotonic()
+        self._after_screen_switch(host or "")
         with self._lock:
             if host:
                 self._current_source = host      # 给热键的 toggle 用，不代表「画面已到」
@@ -801,6 +860,7 @@ class SwitchController:
                 result.set_call_ms = (self._clock() - started) * 1000.0
                 self._last_remote_error = ""
                 self._last_set_at = time.monotonic()
+                self._after_screen_switch(host or "")
                 with self._lock:
                     if host:
                         self._current_source = host
@@ -869,6 +929,7 @@ class SwitchController:
         result.set_call_ms = (self._clock() - started) * 1000.0
         result.error = None
         self._last_set_at = time.monotonic()
+        self._after_screen_switch(target)
         with self._lock:
             self._current_source = target
             self._source_checked = True

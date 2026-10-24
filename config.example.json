@@ -45,6 +45,13 @@
     "debug_plain": false
   },
 
+  "mouse_switch": {
+    "enabled": false,
+    "local_slot": 0,
+    "peer_slot": 0,
+    "settle_ms": 800
+  },
+
   "tray": true,
   "notify": true,
   "log_level": "INFO"

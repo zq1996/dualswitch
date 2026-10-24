@@ -109,6 +109,25 @@ class ClipboardConfig:
 
 
 @dataclass
+class MouseSwitchConfig:
+    """切屏时顺带把罗技鼠标的 Easy-Switch 切过去（HID++ CHANGE_HOST 0x1814）。
+
+    默认关闭：需要用户先确认自己的鼠标有几个槽位、本机与对端各占哪个。
+    配置错了最坏结果是鼠标失联（只能按鼠标底部的物理键恢复），所以宁可默认不动。
+
+    可行性实测与约束见 `docs/FEASIBILITY-LOGI-EASYSWITCH.md`。
+    """
+
+    enabled: bool = False
+    local_slot: int = 0     # 本机占用的槽位（1-based，0 = 未配置）
+    peer_slot: int = 0      # 对端占用的槽位（1-based，0 = 未配置）
+    settle_ms: int = 800    # 切屏后等多久再切鼠标；0 = 不等待
+    # 注意：没有「请对端拉回」开关。画面回本机时，本机发不了命令（鼠标在对端），
+    # 由对端在它自己的切换路径里推回来——这条链路是自动闭合的，
+    # 因为对端代发最终也走 set_input_local → _do_local。
+
+
+@dataclass
 class Config:
     # ---- 热键 ----
     hotkey: str = "alt+space"
@@ -148,6 +167,9 @@ class Config:
 
     # ---- 剪贴板同步 ----
     clipboard: ClipboardConfig = field(default_factory=ClipboardConfig)
+
+    # ---- 鼠标联动（切屏时顺带切 Easy-Switch）----
+    mouse_switch: MouseSwitchConfig = field(default_factory=MouseSwitchConfig)
 
     # ---- 派生属性 ----
     def effective_host(self) -> str:
@@ -246,6 +268,23 @@ def _merge_clipboard(raw: dict[str, Any], base: ClipboardConfig) -> ClipboardCon
     return cfg
 
 
+def _merge_mouse_switch(raw: dict[str, Any], base: MouseSwitchConfig) -> MouseSwitchConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError("mouse_switch 必须是对象")
+    cfg = copy.deepcopy(base)
+    for key, value in raw.items():
+        if not hasattr(cfg, key):
+            raise ConfigError(f"未知的 mouse_switch 字段: {key}")
+        current = getattr(cfg, key)
+        if isinstance(current, bool):
+            setattr(cfg, key, _coerce_bool(value))
+        elif isinstance(current, int) and not isinstance(current, bool):
+            setattr(cfg, key, int(value))
+        else:
+            setattr(cfg, key, value)
+    return cfg
+
+
 def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
     """把 JSON 字典合并到默认配置上，并做严格校验。"""
     if not isinstance(raw, dict):
@@ -258,6 +297,9 @@ def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
             continue
         if key == "clipboard":
             cfg.clipboard = _merge_clipboard(value, cfg.clipboard)
+            continue
+        if key == "mouse_switch":
+            cfg.mouse_switch = _merge_mouse_switch(value, cfg.mouse_switch)
             continue
         if key == "sources":
             if not isinstance(value, dict):
@@ -310,6 +352,27 @@ def _validate_clipboard(cb: ClipboardConfig) -> None:
         raise ConfigError("clipboard.psk 必须是十六进制字符串")
 
 
+def _validate_mouse_switch(ms: MouseSwitchConfig) -> None:
+    """校验鼠标联动配置。
+
+    只在 enabled 时强制要求槽位：关闭状态下允许留空，方便用户先写一半。
+    配错的代价是鼠标失联（只能按物理键恢复），所以宁可在这里拦住。
+    """
+    if int(ms.settle_ms) < 0:
+        raise ConfigError("mouse_switch.settle_ms 不能为负")
+    if not ms.enabled:
+        return
+    for name in ("local_slot", "peer_slot"):
+        slot = int(getattr(ms, name))
+        if not (1 <= slot <= 3):
+            raise ConfigError(
+                f"mouse_switch.{name} 必须在 1..3 之间（当前 {slot}）；"
+                "请先确认鼠标底部的 Easy-Switch 灯位"
+            )
+    if int(ms.local_slot) == int(ms.peer_slot):
+        raise ConfigError("mouse_switch.local_slot 与 peer_slot 不能相同，否则切换无意义")
+
+
 def _is_hex(value: str) -> bool:
     try:
         bytes.fromhex(value)
@@ -359,6 +422,7 @@ def validate(cfg: Config) -> None:
     if cfg.debounce_ms < 0:
         raise ConfigError("debounce_ms 不能为负")
     _validate_clipboard(cfg.clipboard)
+    _validate_mouse_switch(cfg.mouse_switch)
     if not str(cfg.hotkey).strip():
         raise ConfigError("hotkey 不能为空")
     # 延迟导入，避免 config 模块反向依赖 hotkey 包

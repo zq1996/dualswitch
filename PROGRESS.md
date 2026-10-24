@@ -514,6 +514,29 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-24 21:15 **鼠标联动：切屏时顺带切罗技 Easy-Switch**（可行性 → 实现）。
+  · **实测结论**（POP Mouse 蓝牙 PID `0xB030`）：HID++ 走 `usage page 0xFF43`，
+    `CHANGE_HOST` 0x1814 运行时索引 **0x0A**，3 个槽位；Windows 真机切槽 1→2 成功，
+    macOS 端同样读到 index 0x0A / 当前槽 2。**两端 Options+ 运行中都不阻塞 HID++**，
+    不需要退出或卸载。
+  · **踩坑**：HID++ 2.0 的 byte3 是「高半字节 Function、低半字节 Software ID」。
+    写反不会报错，设备一律回 `04 05`（被当成 GetProtocolVersion 执行），极难排查。
+  · **物理约束**：命令只能由鼠标当前连接的主机发出 ⇒ **切屏发起方 ≠ 切鼠标执行方**。
+    模型是「谁身上还挂着鼠标、而画面已经走了，就由谁推出去」。画面回本机时本机
+    够不着鼠标，由对端在它自己的 `_do_local` 里推回来（对端代发最终也走
+    `set_input_local`，链路自动闭合，**不需要新增协议消息**）。
+  · **异常处理**（本次重点）：新增 `mouse/logi_host.py`，全部安静降级 ——
+    未启用 / 未装 hidapi / 枚举不到鼠标（在对端或没连）/ 设备不响应 /
+    不支持主机切换 / 被别的程序占用 / 槽位超过 hostCount（未配对）/ 写入时设备
+    断开（这是**成功**表现）/ 未预期异常，一律不外抛。切屏失败（没连显示器、
+    DDC 报错）时钩子不触发；线程内异常不外泄；连点切换只让最新一代生效
+    （`_mouse_gen`，避免把鼠标推来推去）。
+  · 配置 `mouse_switch{enabled,local_slot,peer_slot,settle_ms}`，**默认关闭**；
+    两端槽位相反（Windows local=1/peer=2，Mac local=2/peer=1）。
+  · 新增 38 个用例（`tests/test_mouse_logi_host.py`），全量 516 passed / 12 skipped。
+  · 文档 `docs/FEASIBILITY-LOGI-EASYSWITCH.md`；工具 `tools/logi_host_switch.py`
+    + `logi-mouse.bat`（CRLF）/ `logi-mouse.sh`（LF + 可执行位）。
+
 - 2026-10-24 16:45 **修 Windows 端「画面切到 Mac 后显示回弹成 Windows」**（用户报障，
   即 `docs/SCREEN-OWNERSHIP.md` §9 的 Windows 端待办）。
   · **根因**：`WindowsBackend` 从未声明 `supports_ddc_detect`，共享层
