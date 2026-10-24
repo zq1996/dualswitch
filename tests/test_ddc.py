@@ -191,3 +191,23 @@ def test_probe_active_monitors_falls_back_on_probe_error():
 
     backend = Boom(monitors=[MonitorInfo(index=0, description="AOC")])
     assert probe_active_monitors(backend) == backend.list_monitors()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="m1ddc 后端专用")
+def test_mac_set_input_sends_twice(monkeypatch):
+    """这台 AOC 的 USB-C DDC 会忽略孤立的输入源 Set（rc=0 但不执行），
+    必须两连发才生效（2026-10-24 实测：单发 12s 不动，间隔 0.4~2.8s 两连发即中）。"""
+    from dualswitch.ddc import macos as mac
+    from dualswitch.ddc.macos import M1ddcBackend
+
+    b = M1ddcBackend()
+    calls = []
+    monkeypatch.setattr(b, "_av", None)
+    monkeypatch.setattr(
+        "dualswitch.ddc.avservice.AVServiceI2C.run_exclusive", lambda self, fn: fn()
+    )
+    monkeypatch.setattr(b, "_run", lambda args, display_args=None: calls.append(list(args)) or "")
+    monkeypatch.setattr(b, "_display_args", lambda: [])
+    monkeypatch.setattr(mac, "SET_REPEAT_DELAY_S", 0.0)
+    b.set_input(17)
+    assert calls == [["set", "input", "17"], ["set", "input", "17"]]

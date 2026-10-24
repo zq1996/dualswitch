@@ -45,6 +45,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from .base import BaseBackend, DDCError, MonitorInfo
@@ -54,6 +55,12 @@ log = logging.getLogger("dualswitch.ddc")
 
 # [2] Q2790R3 (4D972D7B-4973-4865-B69A-5DD248A1EFC1)
 _DISPLAY_LINE = re.compile(r"^\[(?P<index>\d+)\]\s*(?P<name>.*?)\s*(?:\((?P<uuid>[0-9A-Fa-f-]{36})\))?$")
+
+# 这台 AOC 的 USB-C DDC 处理器会**忽略孤立的一条输入源 Set**：rc=0（m1ddc 甚至
+# 回显目标值）但显示器不执行——2026-10-24 实测单发后 12s 纹丝不动，两连发
+# （间隔 0.4~2.8s）第二发后 0.5s 内生效；HDMI 侧（对端代发）单发即中，怪癖只在
+# USB-C 这条路径。所以本机发送固定两连发。对不需要重复的显示器无害（重复设同一值）。
+SET_REPEAT_DELAY_S = 1.2
 
 # 内置屏 / 无名的屏：m1ddc 里名字是 (null)，没有 DDC 通道
 _PLACEHOLDER_NAMES = {"", "null", "(null)", "none"}
@@ -282,7 +289,17 @@ class M1ddcBackend(BaseBackend):
         return monitors
 
     def set_input(self, value: int) -> None:
-        self._run(["set", "input", str(int(value))], display_args=self._display_args())
+        # Set 必须与读互斥（同一把 I2C 锁）：显示器的 DDC 一次只能处理一个
+        # 事务，回读/轮询的 Get 与 Set 重叠时 Set 会被显示器吃掉。
+        if self._av is None:
+            self._av = AVServiceI2C()
+        def _send() -> None:
+            self._run(["set", "input", str(int(value))], display_args=self._display_args())
+        def _double_send() -> None:
+            _send()
+            time.sleep(SET_REPEAT_DELAY_S)
+            _send()          # 第二条：USB-C 路径的显示器固件才肯执行（见 SET_REPEAT_DELAY_S 注释）
+        self._av.run_exclusive(_double_send)
 
     def get_input(self) -> int:
         # 先走 IOAVService 直读：m1ddc 的 Get-VCP 校验和有 bug（漏 0x51），
