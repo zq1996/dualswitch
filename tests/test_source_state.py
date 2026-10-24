@@ -426,6 +426,7 @@ def test_poll_commits_read_host_immediately():
     """直读是即时真值：一轮就落状态，不吃「两轮确认」的 4 秒延迟。"""
     backend = _ReadBackend(current=18)
     ctl = SwitchController(make_cfg(), backend)
+    ctl.read_poll_interval_s = 0            # 每轮都直读（默认 30s，防搅扰）
     ctl.detect_interval_s = 0.02
     ctl.detect_settle_s = 0.0
     ctl.start()
@@ -435,3 +436,29 @@ def test_poll_commits_read_host_immediately():
         assert _wait_state(ctl, "windows") == "windows"
     finally:
         ctl.stop()
+
+
+def test_read_poll_respects_interval():
+    """直读轮询必须低频：持续 2s 的 I2C Get 会搅扰显示器 DDC，
+    把「本机发送」的 Set 吃掉（2026-10-24 实测「本机发送全废、代发好用」）。"""
+    backend = _ReadBackend(current=18)
+    ctl = SwitchController(make_cfg(), backend)
+    ctl.read_poll_interval_s = 30.0
+    ctl.detect_interval_s = 0.02
+    ctl.detect_settle_s = 0.0
+    ctl.start()
+    try:
+        time.sleep(0.15)                    # 首轮直读 + 若干轮跳过
+        assert backend.get_calls <= 2, f"30s 间隔下 0.15s 内不该反复直读（{backend.get_calls} 次）"
+        assert ctl.source_state == "mac"    # 首轮真值已落
+    finally:
+        ctl.stop()
+
+
+def test_execute_reads_owner_before_resolving_target():
+    """热键「切到另一台」发号前即时直读：方向不依赖 30s 轮询的新鲜度。"""
+    backend = _ReadBackend(current=18)      # 显示器说 18 → 画面在 mac
+    ctl = SwitchController(make_cfg(), backend)   # this_host=windows
+    ctl.switch_now()
+    assert backend.set_calls == [17], f"画面在 mac 就该切向 windows（实际发了 {backend.set_calls}）"
+    assert ctl.source_state == "windows"    # 发号后乐观落目标态（回读/轮询负责纠偏）

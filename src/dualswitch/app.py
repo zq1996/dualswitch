@@ -107,6 +107,13 @@ class SwitchController:
         # 外部切换（例如在 Mac 上执行 CLI）不会经过本进程，
         # 只能靠「显示器还在不在本机」反推画面归属，见 detect_source()
         self.detect_interval_s = 2.0   # 轮询间隔
+        # DDC 直读的**低频**兜底轮询间隔。直读很准但不能高频打：这台 AOC 的
+        # DDC 处理很脆，2s 一次的 Get 会让「本机发送」的 Set（同在 USB-C 线上）
+        # 被显示器吃掉——2026-10-24 实测「本机发送全废、代发好用」就是它干的
+        # （代发走对端的 HDMI 线，不受本机 I2C 流量影响）。
+        # 外部切换（OSD/对端）的感知延迟容忍到 30s；切换动作自己会即时直读。
+        self.read_poll_interval_s = 30.0
+        self._last_read_poll = float("-inf")
         # 自己刚切完的静默期，等显示器真正切走/切回。
         # ⚠️ 必须大于**显示器完成切换的时间**：Q2790PC 实测一次切换要 2–3 秒，
         # 静默期太短会在「切换进行中」去枚举，于是把「还在切换」误判成
@@ -407,14 +414,19 @@ class SwitchController:
             return
         if time.monotonic() - self._last_set_at < self.detect_settle_s:
             return                                 # 自己刚切完，等显示器真正切走/切回
-        # 直读优先：显示器亲口报输入，是即时真值，一轮就落状态。
-        # 之前「phantom 屏让 CG 枚举恒真 → 8 秒后误报画面已在 mac」的假阳性
-        # 只存在于枚举推断链里，直读没有这个问题。
-        host = self._read_host()
-        if host is not None:
-            self._commit_read_host(host)
+        # 直读后端：**低频**轮询（默认 30s），且绝不跑枚举推断——
+        # phantom 屏会让枚举恒判「画面在本机」（2026-10-24 实测 8 秒后就误报过），
+        # 与其每 30s 之间被假答案污染，不如保持上次真值不动。
+        # 直读本身的高精度靠「切换动作即时直读」（_execute）和回读来兑现。
+        if getattr(self.backend, "supports_ddc_detect", False):
+            now = time.monotonic()
+            if now - self._last_read_poll >= self.read_poll_interval_s:
+                self._last_read_poll = now
+                host = self._read_host()
+                if host is not None:
+                    self._commit_read_host(host)
             return
-        # 直读不可用才走枚举推断（不走 detect_source()，避免把 DDC 重试链跑两遍）
+        # 无直读能力的后端（mock / Windows）才走枚举推断
         try:
             monitors = self._monitors()
         except Exception as exc:  # 枚举失败不代表画面变了，直接放弃这一轮
@@ -494,6 +506,16 @@ class SwitchController:
                 log.exception("切换过程中出现未捕获异常")
 
     def _execute(self, t0: float, source: str, forced_target: str | None = None) -> SwitchResult:
+        # 发号前即时直读一次归属（显示器亲口报）——热键「切到另一台」的方向
+        # 就靠它，不依赖 30s 低频轮询的新鲜度。显式指定目标时不必读。
+        if (
+            not self.cfg.dry_run
+            and forced_target is None
+            and getattr(self.backend, "supports_ddc_detect", False)
+        ):
+            host = self._read_host()
+            if host is not None:
+                self._commit_read_host(host)
         target = self._resolve_target(forced_target)
         value = self.cfg.target_value(target)
         t_send = self._clock()
