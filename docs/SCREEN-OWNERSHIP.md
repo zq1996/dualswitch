@@ -116,20 +116,32 @@ peer = self._peer_sees()             # T_STATE 证据永远走不到
 
 ### 3.1 归属 = 输入源读数（唯一可信证据）
 
+先澄清一个容易读错的措辞：**两端跑的是同一份代码，各自有自己的「本机」**。
+所以这一节必须逐台写，不能笼统说「本机」：
+
+| 在哪台机器上跑的程序 | 它自己读 `VCP 0x60` | 它怎么定归属 |
+|---|---|---|
+| **Windows 那台** | 读得到（17 / 18，实测见 §1.2） | 读到的就是真相，直接映射；不看 Mac 报什么 |
+| **Mac 那台**（就是当前开发机） | 读不到（`-118`，IOKit 错误） | 只能采用 Windows 通过 `T_STATE` 上报的读数 |
+| 两端都拿不到（Windows 没开 / 读数超龄） | — | `SOURCE_UNKNOWN`：界面显示「不确定」，**不猜** |
+
+一句话：**能读到的那一端说了算**。这台 Mac 天生是「看不见的那一端」，所以必须依赖对端上报——
+这是硬件事实（§1.1、§1.2），不是把 Mac 当二等公民。
+
 ```
-owner(v) = {17: "windows", 18: "mac"} 的映射（来自 cfg.sources，不写死）
+owner(v) = cfg.sources 反查：17 → "windows"，18 → "mac"（不写死，按配置来）
 ```
 
 证据优先级（`SwitchController.classify()` 重写）：
 
 | 顺序 | 证据 | 说明 |
 |---|---|---|
-| 1 | **本机 `get_input()` 读数** | Windows 有（§1.2），Mac 为 `-118` ⇒ 自然落空 |
-| 2 | **对端上报的读数**（`T_STATE.input`） | Mac 靠这条拿到真相 |
-| 3 | 都没有 | `SOURCE_UNKNOWN`，界面老实说不确定 |
+| 1 | 本机 `get_input()` 读数（带年龄） | Windows 上有效；Mac 上必然是 `None` |
+| 2 | 对端上报的读数 `T_STATE.input`（带年龄） | Mac 上靠这条拿真相 |
+| 3 | 都没有 | `SOURCE_UNKNOWN` |
 
 - 两层读数都带**年龄**：本机 10s、对端 15s 内有效；超龄视为 `None`。
-- 两端读数理论上不可能冲突（只有 Windows 读得到）。真冲突时**信本机**并记一条 warning。
+- 只有两端都能读（将来换机型 / 换接线）时才可能冲突；真冲突时**信本机**并记一条 warning。
 - **删除**「枚举到 ⇒ 画面在本机」这条捷径。`_ever_seen_monitor` 只用来回答「这块屏存在过吗」，
   不再参与归属。
 
@@ -202,8 +214,12 @@ owner(v) = {17: "windows", 18: "mac"} 的映射（来自 cfg.sources，不写死
 - **旧版本共存**：老对端不发 `input` ⇒ 新端得 `unknown`，行为退化为「不确定」而不是错误答案。
 - **Windows 树只读**：`ui/win2` 的双按钮由 Windows 端决定；共享层修好后即使它还是单按钮，
   方向也会算对（`_next_target()` 读 `source_state`，后者已正确）。
-- **打包**：`/Applications/屏幕切换.app` 是 10-22 15:15 的旧二进制，**任何真机验证前必须
-  `./packaging/macos/build.sh && ./packaging/macos/install-app.sh`**，或用源码 `dualswitch ui2`。
+- **打包 / 启动方式**：`/Applications/屏幕切换.app` 是 **10-22 15:15** 的旧二进制。
+  10-24 08:53 那次启动日志写的是
+  `可执行文件：/Applications/屏幕切换.app/Contents/MacOS/dualswitch（2026-10-22 15:15:33）`，
+  说明那一轮跑的**是打包版、不是源码**，所以 10-23 晚的三个修复当天根本没生效。
+  验证前先确认日志里这一行是 `.../envs/default/bin/python3`（源码）还是 `.app/...`（打包）；
+  用打包版必须先 `./packaging/macos/build.sh && ./packaging/macos/install-app.sh`。
 
 ---
 
