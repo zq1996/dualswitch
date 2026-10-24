@@ -315,9 +315,8 @@ class UiRunner2(QObject):
         self.settings_page.openLogRequested.connect(self.open_log)
         self.settings_page.openConfigDirRequested.connect(self.open_config_dir)
 
-        # 首帧就用控制器已经确认过的状态
-        # 读数层未开工：切换页「画面位置」行暂显「未检测」（与 mac2 同步，§3.5 只做展示）
-        self.switch_page.set_owner(None)
+        # 首帧就用控制器已经确认过的状态（画面归属 → 「画面在 X」/「未检测」）
+        self._apply_owner(self._seen_source)
         if self._seen_source == SOURCE_UNKNOWN:
             self.switch_page.set_note("插上外接屏会自动恢复", ok=False)
 
@@ -614,7 +613,7 @@ class UiRunner2(QObject):
     def _force_done(self, target: str) -> None:
         self._busy = False
         self.switch_page.set_busy(False)
-        self.switch_page.set_owner(None)   # 读数层未开工，画面位置行维持「未检测」
+        self._apply_owner()                # 切完把归属重新刷一遍（别清成「未检测」）
         self._refresh_menu()
 
     # ---- 高级组（§7.5）----
@@ -741,9 +740,8 @@ class UiRunner2(QObject):
         source = self.controller.source_state
         if source != self._seen_source:
             self._seen_source = source
-            # 切换页不再按归属推方向（SCREEN-OWNERSHIP §3.4）；读数层未开工，
-            # 「画面位置」行暂显「未检测」，与 mac2 同口径。
-            self.switch_page.set_owner(None)
+            # 画面归属变了就把「画面在 X」刷出来（此前恒写 None，这行永远是「未检测」）
+            self._apply_owner(source)
             self._refresh_menu()
             self._refresh_conn_ui()
             changed = True
@@ -764,6 +762,17 @@ class UiRunner2(QObject):
         if changed:
             self._refresh_menu()
         self._refresh_tooltip()
+
+    def _apply_owner(self, source: str | None = None) -> None:
+        """把画面归属刷进切换页：windows/mac → 「画面在 X」，否则「未检测」。
+
+        Windows 没有 DDC 直读层，归属由 `Engine._detect_once` 每 2 秒的枚举推断给出
+        （显示器被切走后会从桌面消失，枚举不到即「画面在对面」）。这一行**只做展示**，
+        不影响任何按钮的可用性。
+        """
+        if source is None:
+            source = self.controller.source_state
+        self.switch_page.set_owner(source if source in ("windows", "mac") else None)
 
     def _remote_ready(self) -> bool:
         probe = self.controller.remote_ready
@@ -902,7 +911,7 @@ class UiRunner2(QObject):
         self.toast = Toast(self.window)
         self.clipboard_page.mark_dirty()
         self.clipboard_page.refresh()
-        self.switch_page.set_owner(None)   # 读数层未开工（与 _poll_state 同口径）
+        self._apply_owner()                # 换了配置也保留「画面在 X」
         if cfg.hotkey != old_hotkey or self.hotkey is None:
             self._rebuild_hotkey(cfg)
         if self.clip_engine is not None and bool(cfg.clipboard.enabled) != old_clip_on:

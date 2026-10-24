@@ -193,21 +193,71 @@ def test_probe_active_monitors_falls_back_on_probe_error():
     assert probe_active_monitors(backend) == backend.list_monitors()
 
 
+class _FakeAV:
+    """替身：只记录写了几条 Set、写的是什么。"""
+
+    def __init__(self, ok: bool = True):
+        self.calls: list[tuple[int, int]] = []
+        self.ok = ok
+
+    def run_exclusive(self, fn):
+        return fn()
+
+    def set_vcp(self, code: int, value: int) -> bool:
+        self.calls.append((int(code), int(value)))
+        return self.ok
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="m1ddc 后端专用")
-def test_mac_set_input_sends_twice(monkeypatch):
-    """这台 AOC 的 USB-C DDC 会忽略孤立的输入源 Set（rc=0 但不执行），
-    必须两连发才生效（2026-10-24 实测：单发 12s 不动，间隔 0.4~2.8s 两连发即中）。"""
+def test_mac_set_input_cold_channel_sends_twice(monkeypatch):
+    """冷通道：第一条 Set 会被 macOS 的 DCP 吞掉，必须再发一条（2026-10-24 人眼确认）。
+
+    事实来源：静默几分钟后单发 12s 画面不动；紧接着的第二条 0.15~5s 内生效。
+    同一台显示器从 Windows 发一条就切 ⇒ 不是显示器固件，是 mac 侧通道。
+    """
     from dualswitch.ddc import macos as mac
     from dualswitch.ddc.macos import M1ddcBackend
 
     b = M1ddcBackend()
+    av = _FakeAV()
+    b._av = av
+    monkeypatch.setattr(mac, "SET_REPEAT_GAP_S", 0.0)
+    assert b._last_send_at < 0              # 冷：从没发送过（哨兵必须是 -inf，
+    #                                         因为 macOS 的 monotonic 从 0 附近开始）
+    b.set_input(17)
+    assert av.calls == [(0x60, 17), (0x60, 17)]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="m1ddc 后端专用")
+def test_mac_set_input_warm_channel_sends_once():
+    """热通道（刚发成功过）：一条就中，不再补发。
+
+    实测依据：同一条通道被焐热后，连续两条（间隔 3s）都生效；45s 后仍热。
+    """
+    import time as _time
+
+    from dualswitch.ddc.macos import M1ddcBackend
+
+    b = M1ddcBackend()
+    av = _FakeAV()
+    b._av = av
+    b._last_send_at = _time.monotonic()
+    b.set_input(18)
+    assert av.calls == [(0x60, 18)]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="m1ddc 后端专用")
+def test_mac_set_input_falls_back_to_m1ddc(monkeypatch):
+    """本机直写通道不可用（老系统 / 句柄读不到 EDID）时退回 m1ddc，行为不变。"""
+    import time as _time
+
+    from dualswitch.ddc.macos import M1ddcBackend
+
+    b = M1ddcBackend()
+    b._av = _FakeAV(ok=False)
     calls = []
-    monkeypatch.setattr(b, "_av", None)
-    monkeypatch.setattr(
-        "dualswitch.ddc.avservice.AVServiceI2C.run_exclusive", lambda self, fn: fn()
-    )
     monkeypatch.setattr(b, "_run", lambda args, display_args=None: calls.append(list(args)) or "")
     monkeypatch.setattr(b, "_display_args", lambda: [])
-    monkeypatch.setattr(mac, "SET_REPEAT_DELAY_S", 0.0)
+    b._last_send_at = _time.monotonic()      # 热 → 一条
     b.set_input(17)
-    assert calls == [["set", "input", "17"], ["set", "input", "17"]]
+    assert calls == [["set", "input", "17"]]
