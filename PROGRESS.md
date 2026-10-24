@@ -514,6 +514,29 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-24 16:45 **修 Windows 端「画面切到 Mac 后显示回弹成 Windows」**（用户报障，
+  即 `docs/SCREEN-OWNERSHIP.md` §9 的 Windows 端待办）。
+  · **根因**：`WindowsBackend` 从未声明 `supports_ddc_detect`，共享层
+    （`app.py` 直读判定、2s 读轮询，Mac 端已合入）在 Windows 上整条没启用，
+    `_detect_once` 落回「枚举推断」分支 —— 而 dxva2 的 `EnumDisplayMonitors`
+    在画面切走后照样枚举得到屏（幻影），于是恒判「画面在本机」，
+    把回读确认刚写对的「画面在 mac」几秒后覆盖回 windows。
+  · **修法**（`ddc/windows.py`）：声明 `supports_ddc_detect = True` + 改过时的
+    模块 docstring；顺手改 `ui/win2/runner.py::_apply_owner` 的过时注释。
+  · **独立验证**（不依赖文档）：① 本机 `probe --json` 连续 4 轮稳定读
+    `input:17`（dxva2 读通道真实可用）；② 报障现象本身就是两条前提的实测证据 ——
+    「先显示在 Mac」来自 `_readback` 的 confirmed 路径（代码上**只有读到 18 且
+    复读无回弹**才走到 `_commit_read_host`），证明屏在 Mac 时 Windows 照样读到 18；
+    「几秒后弹回 Windows」只有幻影枚举分支在跑才可能发生，代码路径逐一核对过。
+    网上佐证：VCP 0x60 = MCCS Input Select（ddcutil issue #260 / MS Learn
+    GetVCPFeatureAndVCPFeatureReply）；ddcutil FAQ 明说「非活跃输入口上 DDC
+    是否应答因型号而异」没有普适答案 —— 因此设计上读失败 ⇒ 显示「未知」，
+    绝不回落枚举（`app.py` 直读分支），最坏退化、不会给错答案。
+  · **已知缺口**：`T_STATE` 尚未携带对端读数（`sync/engine.py` 只有旧 `sees`
+    布尔），Windows 读失败时无法借 Mac 的直读纠偏，只能显示「未知」。
+  · 回归：**478 用例 / 0 失败 / 12 skipped**（junitxml 计数），含 Mac 端新增的
+    `test_windows_owner_follows_switch_despite_phantom_monitor` 等守卫。
+
 - 2026-10-23 **对端代发补丁 2：修「界面首帧判错」+ 判不出时先问对端**。
   用户报「Mac 应用初始显示屏幕在 Mac、实际在 Windows」。两条补强：
   · **`active_monitors()` 加第二道过滤 `CGDisplayIsActive`**：只做 `NSScreen.screens()`

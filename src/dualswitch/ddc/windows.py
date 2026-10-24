@@ -1,8 +1,8 @@
 """Windows DDC/CI 后端：ctypes 直调 dxva2.dll。
 
 设计要点（对应需求文档 3.3 / 3.4 / 3.5）：
-* 只做盲发 SetVCPFeature，不读当前源、不探测能力集；
-  Q2790PC 的 HDMI 通道 VCP 响应为乱码（实测 max=14），读取探测不可靠。
+* SetVCPFeature 盲发切换；VCP 0x60 读数在 Windows 上真实可用
+  （SCREEN-OWNERSHIP.md §1.2 实测 17↔18 严格跟随物理切换），归属判定只认读数。
 * 每次调用重新枚举物理显示器并取句柄，用完立即 DestroyPhysicalMonitor。
   原因：切走之后显示器会从系统消失，缓存句柄必然失效；重新枚举只需几毫秒。
 * 所有 ctypes 调用都显式声明 argtypes，避免 64 位下句柄被截断。
@@ -103,6 +103,11 @@ class _Handle:
 
 class WindowsBackend(BaseBackend):
     name = "dxva2"
+
+    #: VCP 0x60 读数在 Windows 上可用（SCREEN-OWNERSHIP.md §1.2 实测
+    #: 17↔18 跟随物理切换），归属只认它；EnumDisplayMonitors 在画面切走后
+    #: 照样枚举得到这块屏（幻影），不能用来判「屏在不在本机」。
+    supports_ddc_detect = True
 
     # ---------------------------------------------------------------- 枚举
     def _enum_hmonitors(self) -> list[tuple[int, str]]:

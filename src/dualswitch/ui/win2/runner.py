@@ -766,8 +766,9 @@ class UiRunner2(QObject):
     def _apply_owner(self, source: str | None = None) -> None:
         """把画面归属刷进切换页：windows/mac → 「画面在 X」，否则「未检测」。
 
-        Windows 没有 DDC 直读层，归属由 `Engine._detect_once` 每 2 秒的枚举推断给出
-        （显示器被切走后会从桌面消失，枚举不到即「画面在对面」）。这一行**只做展示**，
+        归属来自 `Controller._read_host()` 的 DDC 直读（VCP 0x60，dxva2 后端
+        `supports_ddc_detect` 已开启，2s 轮询；SCREEN-OWNERSHIP.md §1.2/§9）。
+        枚举在这台屏上恒为「看得到」（幻影显示器），不参与归属。这一行**只做展示**，
         不影响任何按钮的可用性。
         """
         if source is None:
