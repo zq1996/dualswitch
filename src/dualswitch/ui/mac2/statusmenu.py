@@ -56,15 +56,12 @@ def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> l
         other_title = "Mac" if other == "mac" else "Windows"
         self_title = "Windows" if current == "windows" else "Mac"
         switch_title = f"切换到 {other_title}（{PORT[other]}）"
-        # 「强制切」= 与主按钮同一目标，但跳过「本地优先、失败才请对端」策略直接发 Set
-        force_title = f"强制切到 {other_title}（{PORT[other]}）"
         status_title = f"当前画面：{self_title}"
         led = "ok"
     else:
         peer = "Windows" if cfg.other_host() == "windows" else "Mac"
         remote_ok = bool(actions.get("remote_ready") and actions["remote_ready"]())
         switch_title = f"从 {peer} 切过来" if remote_ok else "切换（未检测到显示器）"
-        force_title = "强制切换（未检测到显示器）"
         status_title = "当前画面：未检测到"
         led = "none"
 
@@ -86,7 +83,6 @@ def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> l
             "item", switch_title, actions.get("switch"), icon="switch",
             enabled=known or remote_ok, keys=hotkey_keys,
         ),
-        MenuEntry("item", force_title, actions.get("force"), icon="force", enabled=known),
         MenuEntry("sep"),
         MenuEntry("item", "剪贴板", actions.get("clipboard"), icon="clip", keys=("⌘", "⇧", "V")),
         MenuEntry("item", "设置…", actions.get("settings"), icon="settings", keys=("⌘", ",")),

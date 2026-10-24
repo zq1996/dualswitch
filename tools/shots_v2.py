@@ -176,6 +176,10 @@ def main() -> int:
         win.attach_pages(sp, cp, st, pair)
         win.show()
         win.set_side_status("已连接 Windows", True)
+        # 切换页现在是「四条显式通道」：对端在线才让「请对端发送」可点
+        sp.set_remote_available(True)
+        sp.set_owner(None)
+        sp.set_note("上次 请对端发送 18（Mac）· 142 ms", ok=True)
         app.processEvents()
 
         suffix = "" if mode == "light" else "-dark"

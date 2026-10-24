@@ -193,13 +193,16 @@ def test_keycap_widgets_are_individual_blocks(app):
     assert sizes[1] >= theme.KEY_WIDE_W
 
 
-def test_keycaps_used_in_four_places(app, cfg):
-    """主按钮 / 菜单 / 设置页 2 行 —— 全部键帽组件，不是文本拼接。"""
+def test_keycaps_used_in_menu_and_settings(app, cfg):
+    """切换页**不再**出现键帽：方向由用户点按钮决定，键帽会暗示「按一下就按对方向」。
+
+    菜单与设置页仍然是键帽组件（不是文本拼接）。
+    """
     from dualswitch.ui.mac2.settings_page import SettingsPage
 
-    # 1) 主按钮
+    # 1) 切换页：一个键帽都不许有
     page = SwitchPage(cfg, "Right Option+Space", "Q2790R3")
-    assert page.hero.keys.labels() == ["⌥", "Space"]
+    assert page.findChildren(KeyCap) == []
     # 2) 菜单
     entries = statusmenu.build_menu_entries(cfg, "windows", "Right Option+Space", {})
     switch_row = [e for e in entries if e.title.startswith("切换到")][0]
@@ -533,13 +536,13 @@ def test_menu_structure_rows(app, cfg):
     entries = statusmenu.build_menu_entries(cfg, "windows", "Right Option+Space", {})
     kinds = [e.kind for e in entries]
     titles = [e.title for e in entries if e.title]
-    # 9 行内容 + 5 条分隔线（§1 表格 + §12.3 配对入口）
+    # 8 行内容 + 5 条分隔线（§1 表格 + §12.3 配对入口；「强制切」已按 2026-10-24 决定删除）
     assert kinds.count("sep") == 5
-    assert len(entries) == 14
+    assert len(entries) == 13
     assert titles[0] == "当前画面：Windows"
     assert "打开主界面" in titles
     assert any(t.startswith("切换到 Mac（USB-C）") for t in titles)
-    assert any(t.startswith("强制切到 Mac（USB-C）") for t in titles)
+    assert not any("强制" in t for t in titles), "「强制切」已删除，不许回来"
     assert "剪贴板" in titles
     assert "设置…" in titles
     assert any(t.startswith("配对电脑…") for t in titles)
@@ -824,17 +827,42 @@ def test_window_geometry_and_pages(app, cfg):
     win.close()
 
 
-def test_unknown_disables_devices_and_button(app, cfg):
+def test_switch_page_four_explicit_actions(app, cfg):
+    """四条显式通道：2 个目标 × 本机/对端。归属未知时按钮照样可用。"""
     page = SwitchPage(cfg, "alt+space", "Q2790R3")
-    page.set_state(SOURCE_UNKNOWN)
-    assert page.hero.name.text() == "未检测到外接显示器"
-    assert not page.card_win.isEnabled()
-    assert not page.card_mac.isEnabled()
-    assert not page.hero.button.isEnabled() or page.hero.remote_ok
-    # 对端在线时留「从 X 切过来」（ISSUE-002）
+    rows = page.hero.rows
+    assert [(r.host, r.value) for r in rows] == [("windows", 17), ("mac", 18)]
+    assert [r.btn_local.text() for r in rows] == ["本机发送 17", "本机发送 18"]
+    assert [r.btn_peer.text() for r in rows] == ["请对端发送 17", "请对端发送 18"]
+
+    # 画面归属未检测 → 四个按钮照样可用（不再按归属禁用，SCREEN-OWNERSHIP §3.5）
+    page.set_owner(None)
+    assert "未检测" in page.hero.src_text.text()
+    assert all(r.btn_local.isEnabled() for r in rows)
+
+    # 对端离线 → 只有「请对端发送」置灰，本机两条照常
+    page.set_remote_available(False)
+    assert all(r.btn_local.isEnabled() for r in rows)
+    assert not any(r.btn_peer.isEnabled() for r in rows)
     page.set_remote_available(True)
-    assert page.hero.button.isEnabled()
-    assert "切过来" in page.hero.btn_text.text()
+    assert all(r.btn_peer.isEnabled() for r in rows)
+
+    # 忙时四个全灰
+    page.set_busy(True, "Mac")
+    assert not any(r.btn_local.isEnabled() or r.btn_peer.isEnabled() for r in rows)
+    page.set_busy(False)
+    assert all(r.btn_local.isEnabled() for r in rows)
+
+
+def test_switch_page_readout_is_labelled(app, cfg):
+    """读数只做展示：带「画面在 X」，缺读数写「未检测」，都不影响按钮。"""
+    page = SwitchPage(cfg, "alt=space", "Q2790R3")
+    page.set_owner("windows", "对端读数 17 · 6 秒前")
+    assert "画面在 Windows" in page.hero.src_text.text()
+    assert "6 秒前" in page.hero.src_text.text()
+    page.set_owner(None)
+    assert "未检测" in page.hero.src_text.text()
+    assert all(r.btn_local.isEnabled() for r in page.hero.rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -1807,7 +1835,7 @@ def test_hero_pill_is_rounded(app, cfg):
     app.setStyleSheet(theme.qss())
     try:
         page = SwitchPage(cfg, "alt+space", "Q2790R3")
-        page.set_state(SOURCE_UNKNOWN)
+        page.set_remote_available(False)      # 对端离线 → 警告药丸
         page.show()
         app.processEvents()
         pill = page.hero.pill

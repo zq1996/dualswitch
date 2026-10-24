@@ -137,10 +137,9 @@ class UiRunner2(QObject):
         self._hotkey_spec = cfg.hotkey
         self._seen_history = len(controller.history)
         self._seen_source = controller.source_state
-        self.window.switchRequested.connect(lambda: self.do_switch())
-        self.window.forceRequested.connect(self.do_force)
-        # 点设备卡 = 「切到这台」，信号里带的就是目标主机，别再丢掉
-        self.window.deviceClicked.connect(self.do_switch)
+        # 两条显式通道：按钮点哪个就发哪个，不再由程序推断方向（SCREEN-OWNERSHIP §3.2）
+        self.window.localRequested.connect(self.do_local)
+        self.window.peerRequested.connect(self.do_remote)
         self.window.hiddenToBackground.connect(self._enter_background)
         self.window.pageChanged.connect(self._on_page_changed)
         self.window.quitRequested.connect(self.quit_application)
@@ -159,10 +158,9 @@ class UiRunner2(QObject):
         )
         self.settings_page.recordingChanged.connect(self._on_recording_changed)
 
-        # 首帧就用控制器已经确认过的状态
-        self.switch_page.set_state(self._seen_source)
-        if self._seen_source == SOURCE_UNKNOWN:
-            self.switch_page.set_note("插上外接屏会自动恢复", ok=False)
+        # 首帧：画面归属**不猜**（Mac 侧读不到 VCP 0x60，见 SCREEN-OWNERSHIP §1.1），
+        # 只把「对端是否在线」摆出来，四个按钮立刻可用。
+        self.switch_page.set_owner(None)
 
         self.status = None
         self._build_status()
@@ -331,10 +329,10 @@ class UiRunner2(QObject):
             self._refresh_menu()
 
     def _next_target(self) -> str:
-        """按钮文案「切换到 X」对应的目标：画面在哪台，就切到另一台。
+        """菜单栏「切换到 X」的目标（**旧语义，仅供菜单/热键用**）。
 
-        unknown 态下按钮写的是「从 X 切过来」，那就把画面叫回本机 ——
-        让动作和按钮上的字永远一致，否则点下去会「看着没反应」。
+        切换页已改成四条显式通道，不再经过这里；菜单保持「切到另一台」的老行为，
+        等读数层（SCREEN-OWNERSHIP §3.1）落地后再统一。
         """
         host = self.controller.source_state
         if host == SOURCE_UNKNOWN:
@@ -345,7 +343,12 @@ class UiRunner2(QObject):
             else self.cfg.effective_host()
         )
 
+    def _label_for(self, value: int) -> str:
+        host = self.controller.host_of_value(int(value))
+        return "Mac" if host == "mac" else ("Windows" if host == "windows" else f"输入源 {value}")
+
     def do_switch(self, target: str | None = None) -> None:
+        """菜单栏入口：沿用「切到另一台」的老语义（热键走 controller.trigger）。"""
         if self._busy:
             return
         if target not in ("windows", "mac"):
@@ -363,39 +366,40 @@ class UiRunner2(QObject):
 
         threading.Thread(target=work, name="ui-switch", daemon=True).start()
 
-    def do_force(self) -> None:
-        """强制切：跳过「本地优先、失败才请对端」，直接本机发 DDC Set（§2.3）。"""
+    # ------------------------------------------------------------------ 两条显式通道
+    def do_local(self, value: int) -> None:
+        """「本机发送」：只让本机发一条 DDC Set，不请对端、不判归属。"""
         if self._busy:
             return
-        host = self.controller.source_state
-        if host == SOURCE_UNKNOWN:
-            self.toast.show_text("未检测到显示器，无法强制切换")
-            return
-        target = "mac" if host == "windows" else "windows"
-        value = self.cfg.target_value(target)
         self._busy = True
-        self.switch_page.set_busy(True, "Mac" if target == "mac" else "Windows")
-        self.switch_page.set_note(f"强制发送 DDC Set · 目标 {value}", ok=False)
+        label = self._label_for(value)
+        self.switch_page.set_busy(True, f"本机 → {label}")
+        self.switch_page.set_note(f"本机发送 VCP 0x60={int(value)}（{label}）…", ok=False)
 
         def work() -> None:
             try:
-                self.backend.set_input(value)
-                self.switch_page.toastRequested.emit(f"已强制切换（Set {value}）")
-            except Exception as exc:  # noqa: BLE001
-                log.error("强制切换失败：%s", exc)
-                QTimer.singleShot(
-                    0, lambda: self.switch_page.set_note(f"强制切换失败：{exc}", ok=False, bad=True)
-                )
-            finally:
-                QTimer.singleShot(0, lambda: self._force_done(target))
+                self.controller.set_input_local(int(value), source="ui")
+            except Exception:  # noqa: BLE001
+                log.exception("本机发送出现异常")
 
-        threading.Thread(target=work, name="ui-force", daemon=True).start()
+        threading.Thread(target=work, name="ui-set-local", daemon=True).start()
 
-    def _force_done(self, target: str) -> None:
-        self._busy = False
-        self.switch_page.set_busy(False)
-        self.switch_page.set_state(target)
-        self._refresh_menu()
+    def do_remote(self, value: int) -> None:
+        """「请对端发送」：只请对端发，本机一条 DDC 都不发。"""
+        if self._busy:
+            return
+        self._busy = True
+        label = self._label_for(value)
+        self.switch_page.set_busy(True, f"对端 → {label}")
+        self.switch_page.set_note(f"请对端发送 VCP 0x60={int(value)}（{label}）…", ok=False)
+
+        def work() -> None:
+            try:
+                self.controller.switch_remote(int(value), source="ui")
+            except Exception:  # noqa: BLE001
+                log.exception("请对端发送出现异常")
+
+        threading.Thread(target=work, name="ui-set-remote", daemon=True).start()
 
     def _on_status_click(self) -> None:
         """菜单栏图标单击 = 弹菜单（INTERACTIONS §1：左右键都弹菜单）。"""
@@ -494,15 +498,12 @@ class UiRunner2(QObject):
         source = self.controller.source_state
         if source != self._seen_source:
             self._seen_source = source
-            self.switch_page.set_state(source)
+            # 切换页不再展示「画面在 X」（Mac 读不到 VCP 0x60，推断只会给出假答案）；
+            # 菜单与侧栏仍按旧判定刷新，等读数层落地后统一。
+            self.switch_page.set_owner(None)
             self._refresh_menu()
             self._refresh_conn_ui()
             changed = True
-            if source == SOURCE_UNKNOWN:
-                self.switch_page.set_note("插上外接屏会自动恢复", ok=False)
-            elif len(self.controller.history) == self._seen_history:
-                label = "Windows" if source == "windows" else "Mac"
-                self.switch_page.set_note(f"已同步外部切换 · 当前 {label}", ok=True)
 
         history = self.controller.history
         if len(history) > self._seen_history:
@@ -525,25 +526,28 @@ class UiRunner2(QObject):
             return False
 
     def _apply_result(self, result) -> None:  # noqa: ANN001
+        host = self.controller.host_of_value(result.value)
+        label = "Mac" if host == "mac" else ("Windows" if host == "windows" else f"输入源 {result.value}")
         if not result.ok:
-            self.switch_page.set_note("切换失败，详见日志", ok=False, bad=True)
+            self.switch_page.set_note(f"{label} 切换失败：{result.error}", ok=False, bad=True)
             self.toast.show_text(f"切换失败：{result.error}")
             return
         if result.dry_run:
             self.switch_page.set_note("[演练] 未真正发送指令", ok=True)
             return
         if getattr(result, "via", "local") == "remote":
-            peer = "Windows" if self.cfg.other_host() == "windows" else "Mac"
-            self.switch_page.set_note(f"已由 {peer} 端代发 · 回读跳过（屏不在本机）", ok=True)
+            self.switch_page.set_note(
+                f"已请对端发送 {result.value}（{label}）· 往返 {result.set_call_ms:.0f} ms", ok=True
+            )
         else:
             ms = result.set_call_ms
             suffix = {
                 "confirmed": "回读已确认",
-                "unconfirmed": "回读未确认（已知现象）",
-            }.get(result.readback, "指令已发送")
-            self.switch_page.set_note(f"上次切换 {ms:.1f} ms · {suffix}", ok=True)
-        label = "Mac" if result.target == "mac" else "Windows"
-        self.toast.show_text(f"已切换到 {label}")
+                "unconfirmed": "回读未确认（读通道不可用属已知）",
+                "skipped": "未回读",
+            }.get(result.readback, "指令已下达")
+            self.switch_page.set_note(f"本机发送 {result.value}（{label}）· {ms:.0f} ms · {suffix}", ok=True)
+        self.toast.show_text(f"已发送：切到 {label}")
 
     def _refresh_conn_ui(self) -> None:
         connected = self._remote_ready()
@@ -558,7 +562,6 @@ class UiRunner2(QObject):
         return {
             "open": self.show_window,
             "switch": lambda: self.do_switch(),
-            "force": lambda: self.do_force(),
             "clipboard": lambda: self.show_page(PAGE_CLIP),
             "settings": lambda: self.show_page(PAGE_SETTINGS),
             "pair": self.open_pair_page,
@@ -590,7 +593,6 @@ class UiRunner2(QObject):
         if label == getattr(self, "_shown_hotkey", ""):
             return
         self._shown_hotkey = label
-        self.switch_page.set_hotkey(label)
         self.window.set_side_hotkey(label)
         if self.status is not None:
             self.status.set_tooltip(f"屏幕切换 · {label}（单击图标打开菜单）")
@@ -618,7 +620,7 @@ class UiRunner2(QObject):
         self.toast = Toast(self.window)
         self.clipboard_page.mark_dirty()
         self.clipboard_page.refresh()
-        self.switch_page.set_state(self.controller.source_state)
+        self.switch_page.set_owner(None)
         if cfg.hotkey != old_hotkey or self.hotkey is None:
             self._rebuild_hotkey(cfg)
         if self.clip_engine is not None and bool(cfg.clipboard.enabled) != old_clip_on:

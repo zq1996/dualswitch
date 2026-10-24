@@ -239,3 +239,87 @@ def test_detector_respects_settle_after_own_switch():
         assert ctl.current_source == "mac"
     finally:
         ctl.stop()
+
+
+# --------------------------------------------------------------------------- #
+# 显式通道（docs/SCREEN-OWNERSHIP.md §3.2）
+#
+# 2026-10-24 的教训：把「本机发」和「请对端发」串成一条自动链路时，m1ddc 的
+# 假成功让「到底哪条起了作用」无法判断。两条通道必须互不牵连 —— 下面每条
+# 用例都在守这一个约束。
+# --------------------------------------------------------------------------- #
+def test_host_of_value_maps_config():
+    cfg = make_cfg()
+    ctl = SwitchController(cfg, MockBackend(current=17))
+    assert ctl.host_of_value(17) == "windows"
+    assert ctl.host_of_value(18) == "mac"
+    assert ctl.host_of_value(99) == ""
+
+
+def test_local_channel_only_touches_local_backend():
+    cfg = make_cfg()
+    backend = MockBackend(current=17)
+    ctl = SwitchController(cfg, backend)
+    remote: list[int] = []
+    ctl.remote_switch = lambda v: (remote.append(v), (True, ""))[1]
+    ctl.remote_ready = lambda: True
+
+    result = ctl.set_input_local(18)
+
+    assert result.ok is True
+    assert result.via == "local"
+    assert result.target == "mac"
+    assert backend.set_calls == [18]
+    assert remote == [], "本机通道不许顺手请对端"
+
+
+def test_remote_channel_does_not_touch_local_backend():
+    cfg = make_cfg()
+    backend = MockBackend(current=17)
+    ctl = SwitchController(cfg, backend)
+    remote: list[int] = []
+    ctl.remote_switch = lambda v: (remote.append(v), (True, ""))[1]
+    ctl.remote_ready = lambda: True
+
+    result = ctl.switch_remote(18)
+
+    assert result.ok is True
+    assert result.via == "remote"
+    assert remote == [18]
+    assert backend.set_calls == [], "代发通道本机一条 DDC 都不该发"
+    assert result.readback == "skipped"
+
+
+def test_remote_channel_reports_offline_reason():
+    cfg = make_cfg()
+    backend = MockBackend(current=17)
+    ctl = SwitchController(cfg, backend)
+    ctl.remote_ready = lambda: False
+
+    def _boom(_value: int):  # 不该被调用
+        raise AssertionError("对端离线时不该发请求")
+
+    ctl.remote_switch = _boom
+    result = ctl.switch_remote(17)
+
+    assert result.ok is False
+    assert "离线" in (result.error or "") or "未配对" in (result.error or "")
+    assert backend.set_calls == []
+
+
+def test_remote_channel_without_engine_says_so():
+    cfg = make_cfg()
+    ctl = SwitchController(cfg, MockBackend(current=17))
+    result = ctl.switch_remote(17)
+    assert result.ok is False
+    assert "同步引擎" in (result.error or "")
+
+
+def test_remote_channel_surfaces_peer_refusal():
+    cfg = make_cfg()
+    ctl = SwitchController(cfg, MockBackend(current=17))
+    ctl.remote_ready = lambda: True
+    ctl.remote_switch = lambda v: (False, "VCP 0x60 与本机配置不一致")
+    result = ctl.switch_remote(17)
+    assert result.ok is False
+    assert "不一致" in (result.error or "")

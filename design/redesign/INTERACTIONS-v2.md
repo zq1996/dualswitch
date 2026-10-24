@@ -703,6 +703,40 @@ Finder 复制图片时粘贴板里同时有 `public.file-url` 和一张**文件�
 
 守卫：`tests/test_ui_mac2.py::test_preview_image_clamps_to_bounds`。
 
+### 10.24 切换页：四条显式通道，不再判断「画面在哪」（2026-10-24）
+
+**起因（实测，不是推测）**：这台 AOC Q2790R3 在输入切走之后，macOS 仍把它报成
+「在线 + `CGDisplayIsActive=1` + 122 个可用模式」；Windows 那侧画面在 Mac 时
+`EnumDisplayMonitors` 也照样返回 1 块。两端都枚举得到 ⇒ **任何「按归属推方向」的逻辑
+都只能瞎猜**，于是 MAC 端恒判「画面在我这儿」、目标恒算反、四条代发触发路径全死。
+
+**改法**：把两条 DDC 通道直接摆出来，由用户选；归属只做展示。
+
+```
+显示器                                          [对端在线]
+[屏] Q2790R3
+     两个输入口 · 输入源 17 = HDMI，18 = USB-C
+     画面位置未检测                      ← 有读数才显示「画面在 X · 读数 17 · 6 秒前」
+[17] HDMI  / Windows 的输入口   [本机发送 17]  [请对端发送 17]
+[18] USB-C / 本机输入口         [本机发送 18]  [请对端发送 18]
+本机发不动时（画面在另一边），点同一行的「请对端发送」——由握着画面的那台发 DDC。
+✓ 上次 请对端发送 18（Mac）· 142 ms
+```
+
+| 规则 | 说明 |
+|---|---|
+| 大标题 | 显示器名（确定的硬件），不是「当前画面」（猜的） |
+| 「画面在 X」 | 只展示、**不参与任何按钮的可用性**；拿不到就写「画面位置未检测」 |
+| `本机发送` | 实心主色 + `monitor` 图标；调 `SwitchController.set_input_local(value)` |
+| `请对端发送` | 白底描边 + `arrow-left-right`；调 `switch_remote(value)`；对端离线置灰 |
+| 已删除 | 「强制切」按钮与菜单项、两张可点击的设备卡、单按钮「切换到 X」、主按钮上的键帽 |
+| 回读 | 只代表「命令下了」；`unconfirmed` 的文案改成「读通道不可用属已知」 |
+
+原型：`design/redesign/switch-actions.html`（正常态 / 对端离线态）。
+设计依据与后续读数层：`docs/SCREEN-OWNERSHIP.md` §3。
+守卫：`tests/test_ui_mac2.py::test_switch_page_four_explicit_actions` /
+`test_switch_page_readout_is_labelled` / `test_keycaps_used_in_menu_and_settings`。
+
 ---
 
 ## 11. 实现对照表（2026-10-21 定稿）

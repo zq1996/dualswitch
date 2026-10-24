@@ -191,9 +191,9 @@ def _lead_slot(widget: QWidget | None = None) -> QWidget:
 
 
 class MainWindow(QWidget):
-    switchRequested = Signal()
-    forceRequested = Signal()
-    deviceClicked = Signal(str)
+    # 切换页的两条显式通道（值 = VCP 0x60 的输入源号），不再有「自动算方向」的信号
+    localRequested = Signal(int)
+    peerRequested = Signal(int)
     hiddenToBackground = Signal()
     pageChanged = Signal(int)
     quitRequested = Signal()
@@ -342,9 +342,8 @@ class MainWindow(QWidget):
         self.pages.addWidget(settings_page)
         if pairing_page is not None:
             self.pages.addWidget(pairing_page)
-        self.switch_page.switchRequested.connect(self.switchRequested)
-        self.switch_page.forceRequested.connect(self.forceRequested)
-        self.switch_page.deviceClicked.connect(self.deviceClicked)
+        self.switch_page.localRequested.connect(self.localRequested)
+        self.switch_page.peerRequested.connect(self.peerRequested)
 
     def show_page(self, index: int) -> None:
         self._page = index

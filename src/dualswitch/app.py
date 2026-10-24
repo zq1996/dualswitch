@@ -185,6 +185,30 @@ class SwitchController:
         """同步执行一次切换（CLI / 托盘菜单用）。"""
         return self._execute(self._clock(), source, forced_target=target)
 
+    def host_of_value(self, value: int) -> str:
+        """VCP 0x60 的取值反查主机名；配置里没有的取值返回空串。"""
+        for host, val in self.cfg.sources.items():
+            try:
+                if int(val) == int(value):
+                    return host
+            except (TypeError, ValueError):
+                continue
+        return ""
+
+    # ------------------------------------------------------------------ 显式通道
+    def set_input_local(self, value: int, source: str = "ui") -> SwitchResult:
+        """显式通道①：**只让本机**发一条 DDC Set（界面「本机发送 17/18」）。
+
+        与 `switch_now()` 的区别：不看归属、不算目标、不自动请对端。
+        理由见 docs/SCREEN-OWNERSHIP.md §3.2 —— 本机的 `set_input` 会「返回 0 但没生效」
+        （假成功），把它和代发混成一条自动链路时，「到底哪条起了作用」就查不出来了。
+        """
+        return self._do_local(int(value), source)
+
+    def switch_remote(self, value: int, source: str = "ui") -> SwitchResult:
+        """显式通道②：**只请对端**发一条 DDC Set（界面「请对端发送 17/18」）。"""
+        return self._do_remote(int(value), source)
+
     # ------------------------------------------------------------------ 外部状态检测
     def _monitors(self) -> list:
         """枚举「画面在本机」的判据来源：优先活动信号，后端不支持时退回普通枚举。
@@ -543,6 +567,135 @@ class SwitchController:
             ).start()
         else:
             result.readback = "skipped"
+        return result
+
+    # ------------------------------------------------------------------ 显式通道实现
+    def _do_local(self, value: int, source: str) -> SwitchResult:
+        """本机发一条 Set（docs/SCREEN-OWNERSHIP.md §3.2 通道①）。
+
+        「返回 0」只写进日志，不当成功证据 —— 生效与否由 `_readback` 判断（§3.3）。
+        不碰 `_display_source`：那是「画面在哪」的判断，不是「我刚命令它去哪」。
+        """
+        t0 = self._clock()
+        host = self.host_of_value(value)
+        result = SwitchResult(
+            ok=False,
+            target=host or f"VCP 0x{self.cfg.vcp_code:02X}={value}",
+            value=value,
+            source=source,
+            send_latency_ms=0.0,
+        )
+
+        if self.cfg.dry_run:
+            result.ok = True
+            result.dry_run = True
+            result.readback = "skipped"
+            log.info("[dry-run] 本应本机发送 Set VCP 0x%02X = %d", self.cfg.vcp_code, value)
+            self._record(result)
+            return result
+
+        self._run_before_switch(source, host or str(value))
+        try:
+            self.backend.set_input(value)
+            result.ok = True
+            result.set_call_ms = (self._clock() - t0) * 1000.0
+        except DDCError as exc:
+            result.set_call_ms = (self._clock() - t0) * 1000.0
+            result.error = str(exc)
+            log.error("本机发送失败（VCP 0x%02X=%d）：%s", self.cfg.vcp_code, value, exc)
+            self._record(result)
+            if self.cfg.notify:
+                self._notify("切换失败", f"本机发送 {value} 失败。\n{exc}")
+            return result
+        except Exception as exc:  # noqa: BLE001 - 驱动层怪异常
+            result.set_call_ms = (self._clock() - t0) * 1000.0
+            result.error = f"{type(exc).__name__}: {exc}"
+            log.exception("本机发送时出现意外异常")
+            self._record(result)
+            return result
+
+        self._last_set_at = time.monotonic()
+        with self._lock:
+            if host:
+                self._current_source = host      # 给热键的 toggle 用，不代表「画面已到」
+            self._source_checked = True
+            self._ever_seen_monitor = True
+            self._monitor_absent = False
+
+        log.info("%s", result.summary())
+        self._record(result)
+        if self.cfg.readback.enabled:
+            threading.Thread(
+                target=self._readback, args=(result,), name="readback", daemon=True
+            ).start()
+        else:
+            result.readback = "skipped"
+        return result
+
+    def _do_remote(self, value: int, source: str) -> SwitchResult:
+        """只请对端发一条 Set（通道②）。本机一次 DDC 都不发。"""
+        started = self._clock()
+        host = self.host_of_value(value)
+        result = SwitchResult(
+            ok=False,
+            target=host or f"VCP 0x{self.cfg.vcp_code:02X}={value}",
+            value=value,
+            source=source,
+            via="remote",
+        )
+
+        if self.cfg.dry_run:
+            result.ok = True
+            result.dry_run = True
+            result.readback = "skipped"
+            log.info("[dry-run] 本应请对端发送 Set VCP 0x%02X = %d", self.cfg.vcp_code, value)
+            self._record(result)
+            return result
+
+        fn = self.remote_switch
+        reason = ""
+        if fn is None:
+            reason = "本机没有挂载同步引擎（剪贴板同步未启用或启动失败）"
+        elif self.remote_ready is not None:
+            try:
+                ready = bool(self.remote_ready())
+            except Exception as exc:  # noqa: BLE001 - 状态查询不该影响切换
+                ready = False
+                log.warning("远端可用性查询失败：%s", exc)
+            if not ready:
+                reason = "对端离线或未配对（链路没连上）"
+
+        if not reason:
+            try:
+                ok, detail = fn(value)
+            except Exception as exc:  # noqa: BLE001
+                ok, detail = False, f"代发调用异常：{exc}"
+            if not ok:
+                reason = detail or "对端拒绝"
+            else:
+                result.ok = True
+                result.readback = "skipped"     # 屏不在本机，没有可回读的对象
+                result.readback_detail = "由对端执行"
+                result.set_call_ms = (self._clock() - started) * 1000.0
+                self._last_remote_error = ""
+                self._last_set_at = time.monotonic()
+                with self._lock:
+                    if host:
+                        self._current_source = host
+                    self._source_checked = True
+                    self._ever_seen_monitor = True
+                    self._monitor_absent = False
+                log.info("%s", result.summary())
+                self._record(result)
+                return result
+
+        result.set_call_ms = (self._clock() - started) * 1000.0
+        result.error = reason
+        self._last_remote_error = reason
+        log.warning("请对端代发失败（VCP 0x%02X=%d）：%s", self.cfg.vcp_code, value, reason)
+        self._record(result)
+        if self.cfg.notify:
+            self._notify("切换失败", f"请对端发送 {value} 失败。\n{reason}")
         return result
 
     def _try_remote(
