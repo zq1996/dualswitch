@@ -79,6 +79,10 @@ class SwitchController:
         self._lock = threading.Lock()
         self._last_trigger = float("-inf")
         self._last_set_at = float("-inf")
+        # 回读代数：每启动一个回读线程 +1，线程发现自己是旧代就提前收工。
+        # 没有它，连点 N 次「本机发送」就会堆 N 个回读线程同时打显示器——
+        # 200ms 一发的 Get 风暴会把下一次 Set 搅掉（2026-10-24 实测「要点好几次」）。
+        self._readback_gen = 0
         self._last_detected: str | None = None
         self._confirm = 0
         self._current_source = cfg.effective_host()
@@ -106,13 +110,14 @@ class SwitchController:
 
         # 外部切换（例如在 Mac 上执行 CLI）不会经过本进程，
         # 只能靠「显示器还在不在本机」反推画面归属，见 detect_source()
-        self.detect_interval_s = 2.0   # 轮询间隔
-        # DDC 直读的**低频**兜底轮询间隔。直读很准但不能高频打：这台 AOC 的
-        # DDC 处理很脆，2s 一次的 Get 会让「本机发送」的 Set（同在 USB-C 线上）
-        # 被显示器吃掉——2026-10-24 实测「本机发送全废、代发好用」就是它干的
-        # （代发走对端的 HDMI 线，不受本机 I2C 流量影响）。
-        # 外部切换（OSD/对端）的感知延迟容忍到 30s；切换动作自己会即时直读。
-        self.read_poll_interval_s = 30.0
+        self.detect_interval_s = 2.0   # 轮询间隔（仅用于无直读后端的枚举推断）
+        # DDC 直读**不做后台轮询**（0 = 关闭）。这台 AOC 的 DDC 承受不了持续
+        # I2C 流量：2s 轮询把「本机发送」的 Set 搅掉，30s 也仍是纯开销——
+        # 归属只有一个展示行在用，切换动作全靠显式通道 + 发号前即时直读。
+        # 按需读的时机：启动 note_scan、_execute 发号前、回读确认、
+        # runner 在窗口回前台 / 切到切换页时调 refresh_owner_now()。
+        # 代价（接受）：OSD 手动切输入后，展示行要等下一次交互才刷新。
+        self.read_poll_interval_s = 0.0
         self._last_read_poll = float("-inf")
         # 自己刚切完的静默期，等显示器真正切走/切回。
         # ⚠️ 必须大于**显示器完成切换的时间**：Q2790PC 实测一次切换要 2–3 秒，
@@ -272,6 +277,20 @@ class SwitchController:
         if changed:
             log.info("显示器直报当前输入 → 画面在 %s（DDC 直读 0x60）", host)
 
+    def refresh_owner_now(self, min_gap: float = 1.0) -> None:
+        """按需直读一次归属（界面回前台 / 切到切换页时由 runner 调，放后台线程）。
+
+        min_gap 防手抖连点页面造成读风暴——这台显示器的 DDC 经不起打扰。
+        """
+        with self._lock:
+            now = time.monotonic()
+            if now - self._last_read_poll < min_gap:
+                return
+            self._last_read_poll = now
+        host = self._read_host()
+        if host is not None:
+            self._commit_read_host(host)
+
     def detect_source(self) -> str | None:
         """推断画面现在属于哪台机器：**先直读，读不了再走枚举推断**。
 
@@ -414,17 +433,18 @@ class SwitchController:
             return
         if time.monotonic() - self._last_set_at < self.detect_settle_s:
             return                                 # 自己刚切完，等显示器真正切走/切回
-        # 直读后端：**低频**轮询（默认 30s），且绝不跑枚举推断——
-        # phantom 屏会让枚举恒判「画面在本机」（2026-10-24 实测 8 秒后就误报过），
-        # 与其每 30s 之间被假答案污染，不如保持上次真值不动。
-        # 直读本身的高精度靠「切换动作即时直读」（_execute）和回读来兑现。
+        # 直读后端：**不做后台轮询**（read_poll_interval_s=0 即关闭；留这个旋钮
+        # 只为将来换一台 DDC 结实的显示器时可选开）。也绝不跑枚举推断——
+        # phantom 屏会让枚举恒判「画面在本机」（2026-10-24 实测 8 秒后就误报过）。
+        # 归属的真值全部来自按需读：note_scan / _execute 发号前 / 回读 / 界面回前台。
         if getattr(self.backend, "supports_ddc_detect", False):
-            now = time.monotonic()
-            if now - self._last_read_poll >= self.read_poll_interval_s:
-                self._last_read_poll = now
-                host = self._read_host()
-                if host is not None:
-                    self._commit_read_host(host)
+            if self.read_poll_interval_s > 0:
+                now = time.monotonic()
+                if now - self._last_read_poll >= self.read_poll_interval_s:
+                    self._last_read_poll = now
+                    host = self._read_host()
+                    if host is not None:
+                        self._commit_read_host(host)
             return
         # 无直读能力的后端（mock / Windows）才走枚举推断
         try:
@@ -842,11 +862,18 @@ class SwitchController:
 
     def _readback(self, result: SwitchResult) -> None:
         rb = self.cfg.readback
+        self._readback_gen += 1
+        gen = self._readback_gen               # 之后有新切换进来，本线程就是旧代
         deadline = time.monotonic() + rb.timeout_ms / 1000.0
         time.sleep(rb.delay_ms / 1000.0)
         last_detail = "无读数"
         attempts = 0
         while time.monotonic() < deadline:
+            if gen != self._readback_gen:
+                # 用户又点了一次新的切换：旧回读继续跑只会给显示器添 I2C 噪声，
+                # 把新 Set 搅掉。立即收工，确认责任交给最新那一代。
+                log.debug("回读（第 %d 代）被更新的切换取代，提前收工", gen)
+                return
             attempts += 1
             try:
                 current = self.backend.get_input()
@@ -857,7 +884,7 @@ class SwitchController:
                     result.readback_detail = (
                         f"VCP 0x{self.cfg.vcp_code:02X} = {current}（{attempts} 次尝试）"
                     )
-                    if self._confirm_not_bounced(result):
+                    if self._confirm_not_bounced(result, gen):
                         result.readback = "confirmed"
                         log.info("回读确认：%s", result.readback_detail)
                     else:
@@ -878,7 +905,7 @@ class SwitchController:
         if rb.notify_on_unconfirmed and self.cfg.notify:
             self._notify("切换指令已发送", "显示器未确认，详见日志。")
 
-    def _confirm_not_bounced(self, result: SwitchResult) -> bool:
+    def _confirm_not_bounced(self, result: SwitchResult, gen: int) -> bool:
         """读到目标值后隔一拍复读，确认不是「切了又被显示器抢回」。
 
         返回 False = 检测到回弹（`readback_detail` 已写明回弹后的读数）。
@@ -886,6 +913,8 @@ class SwitchController:
         不能当成失败 —— 否则正常切换会被全部误报成 unconfirmed。
         """
         time.sleep(REBOUND_CHECK_DELAY_S)
+        if gen != self._readback_gen:
+            return True                     # 已被新切换取代，别再打了，让位
         try:
             again = self.backend.get_input()
         except DDCError:

@@ -287,6 +287,7 @@ class UiRunner2(QObject):
         from ..chrome import current as chrome
 
         chrome().activate(self.window)
+        self._refresh_owner_bg()
 
     def hide_window(self) -> None:
         self.window.hide()
@@ -303,6 +304,14 @@ class UiRunner2(QObject):
         chrome().activate(self.window)
         if index == PAGE_CLIP:
             self.clipboard_page.refresh()
+        if index == PAGE_SWITCH:
+            self._refresh_owner_bg()
+
+    def _refresh_owner_bg(self) -> None:
+        """按需直读一次画面归属（后台线程，DDC 读 ~150ms 不能堵 UI）。"""
+        threading.Thread(
+            target=self.controller.refresh_owner_now, name="owner-refresh", daemon=True
+        ).start()
 
     def open_pair_page(self) -> None:
         """侧栏 / 菜单 / 剪贴板引导共用的唯一入口（§12.3）。"""
@@ -414,6 +423,7 @@ class UiRunner2(QObject):
                 self.window.showNormal()
                 if self.window.current_page() == PAGE_PAIR:
                     self.pairing_page.activate()
+            self._refresh_owner_bg()
             if self._retry_on_activate and self.hotkey is None and not self._hotkey_suspended:
                 QTimer.singleShot(250, self.retry_hotkey)
         return super().eventFilter(obj, event)

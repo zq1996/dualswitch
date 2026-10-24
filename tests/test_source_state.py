@@ -426,7 +426,7 @@ def test_poll_commits_read_host_immediately():
     """直读是即时真值：一轮就落状态，不吃「两轮确认」的 4 秒延迟。"""
     backend = _ReadBackend(current=18)
     ctl = SwitchController(make_cfg(), backend)
-    ctl.read_poll_interval_s = 0            # 每轮都直读（默认 30s，防搅扰）
+    ctl.read_poll_interval_s = 0.02         # >0 才开轮询（默认 0 = 关闭，防搅扰）
     ctl.detect_interval_s = 0.02
     ctl.detect_settle_s = 0.0
     ctl.start()
@@ -434,6 +434,25 @@ def test_poll_commits_read_host_immediately():
         assert _wait_state(ctl, "mac") == "mac"
         backend.current = 17
         assert _wait_state(ctl, "windows") == "windows"
+    finally:
+        ctl.stop()
+
+
+def test_ddc_polling_disabled_by_default():
+    """默认**不做**后台 DDC 轮询：检测线程空转，零 I2C 流量。
+
+    这台显示器的 DDC 承受不了持续读——历史教训是 2s 轮询把「本机发送」
+    的 Set 全部搅掉。归属靠按需读（发号前 / 回读 / 界面回前台）。
+    """
+    backend = _ReadBackend(current=18)
+    ctl = SwitchController(make_cfg(), backend)   # 默认 read_poll_interval_s = 0
+    ctl.detect_interval_s = 0.02
+    ctl.detect_settle_s = 0.0
+    ctl.start()
+    try:
+        time.sleep(0.12)
+        assert backend.get_calls == 0, "默认关闭轮询时检测线程不许碰 DDC"
+        assert ctl.source_state == SOURCE_UNKNOWN   # 没读就没结论，不猜
     finally:
         ctl.stop()
 
@@ -462,3 +481,29 @@ def test_execute_reads_owner_before_resolving_target():
     ctl.switch_now()
     assert backend.set_calls == [17], f"画面在 mac 就该切向 windows（实际发了 {backend.set_calls}）"
     assert ctl.source_state == "windows"    # 发号后乐观落目标态（回读/轮询负责纠偏）
+
+
+def test_readback_superseded_by_newer_switch():
+    """连点「本机发送」时旧回读必须让位。
+
+    旧回读线程如果继续跑，200~500ms 一发的 Get 会和新 Set 在显示器的
+    DDC 上撞车——2026-10-24 实测「本机发送要点好几次才生效」的机制。
+    """
+    import threading
+
+    from dualswitch.app import SwitchResult
+
+    backend = _ReadBackend(current=17)              # 永远读回 17（模拟读不到目标）
+    ctl = SwitchController(make_cfg(), backend)
+    ctl.cfg.readback.delay_ms = 50
+    ctl.cfg.readback.timeout_ms = 300
+    ctl.cfg.readback.interval_ms = 50
+
+    result = SwitchResult(ok=True, target="mac", value=18, source="test")
+    thread = threading.Thread(target=ctl._readback, args=(result,), daemon=True)
+    thread.start()
+    time.sleep(0.05)
+    ctl._readback_gen += 1                          # 模拟用户又点了一次新切换
+    thread.join(timeout=2.0)
+    assert not thread.is_alive(), "被取代的旧回读必须提前收工"
+    assert result.readback == "pending"             # 没资格写结论
