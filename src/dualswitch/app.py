@@ -464,16 +464,17 @@ class SwitchController:
         # 这一个判据决定下面两条路，见 _picture_here() 上的注释。
         picture_here = None if policy_force else self._picture_here()
 
-        # 屏不在本机、而目标正是「把画面叫回来」⇒ 只有握着它的那台能发这个 Set。
-        # **不能等 DDCError**：m1ddc 打在一个没在监听的输入口上会返回 0（假成功），
-        # 于是永远不进 except、永远不触发代发 —— 这就是「对端代发从来没好用过」
-        # 的最后一环。这里用「活动信号」提前判定，直接请对端。
+        # 屏不在本机、而目标正是「把画面叫回来」⇒ 请对端代发兜底。
+        # **修正（2026-10-24 实测，SCREEN-OWNERSHIP §1.4）**：本机的 DDC 写通道
+        # 始终可达——画面在对面时「本机发送」照样一步切回来（DDC/CI 是随线走的
+        # 旁路，显示器每个输入口都监听）。旧注释「m1ddc 打在没监听的输入口上
+        # 返回 0（假成功）」已被证伪。这里保留代发只是兜底（本机 DDC 栈坏掉时），
+        # 不再是「画面在对面时的必经路」。
         wants_here = target == self.cfg.effective_host()
         if picture_here is False and wants_here:
             if self._try_remote(result, target, value):
                 return result
-            # 屏确实不在本机：本地这条 DDC 事务打不到它，如实报错，
-            # 不要让「假成功」把界面骗成已切换。
+            # 屏确实不在本机：本地这条 DDC 事务打不到它，如实报错。
             result.ok = False
             result.set_call_ms = (self._clock() - t_send) * 1000.0
             result.error = f"画面不在本机，请对端代发失败：{self._last_remote_error or '未知原因'}"
@@ -484,10 +485,9 @@ class SwitchController:
             return result
 
         # 判不出屏在不在本机（后端没有活动信号，例如 Windows / 缺 pyobjc），
-        # 而目标又是「把画面叫回来」⇒ **先请对端试一次**。
-        # 对端此刻握着画面时这一步一定有效，而且比「先在本机发一条注定打不到的
-        # Set、失败了再回头」更快；对端没握着画面时它会干净地失败，再走本地。
-        # 这样即使本机的枚举/DCC 通道在说谎（幻影显示器、假成功），也能切。
+        # 而目标又是「把画面叫回来」⇒ **先请对端试一次**，失败再走本地。
+        # （2026-10-24 实测：本机 DDC 写通道始终可达，本地这条路本身就够；
+        #  先请对端只是省一次本地调用的偏好，不再是「本机发不动」的补救。）
         if picture_here is None and wants_here and not policy_force:
             if self._try_remote(result, target, value):
                 return result
