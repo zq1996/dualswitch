@@ -173,7 +173,7 @@ peer = self._peer_sees()             # T_STATE 证据永远走不到
 
 | 在哪台机器上跑的程序 | 它自己读 `VCP 0x60` | 它怎么定归属 |
 |---|---|---|
-| **Windows 那台** | 读得到（17 / 18，实测见 §1.2） | 读到的就是真相，直接映射；不看 Mac 报什么 |
+| **Windows 那台** | 读得到（17 / 18，实测见 §1.2） | 读到的就是真相，直接映射；不看 Mac 报什么。**代码里曾没启用**（后端未声明 `supports_ddc_detect`），见 §9 |
 | **Mac 那台**（就是当前开发机） | 读不到（`-118`，IOKit 错误） | 只能采用 Windows 通过 `T_STATE` 上报的读数 |
 | 两端都拿不到（Windows 没开 / 读数超龄） | — | `SOURCE_UNKNOWN`：界面显示「不确定」，**不猜** |
 
@@ -401,3 +401,58 @@ PYTHONPATH=src python3 tools/e2e_remote_switch.py
    实验判断是谁在抢源；与新架构无关，但会让「切换成功」看起来像失败。
 2. **Windows 写入后读数回显窗口**有多长未测，暂取 5s。
 3. Windows 端 `probe` 的 `active` 恒为 null（后端未实现），日志里不要据此判断归属。
+
+---
+
+## 9. Windows 端「切完不跟着变」（2026-10-24 晚，用户报障）
+
+**现象**：在 Windows 端点「本机发送 18」把画面切到 Mac，Mac 端显示立刻跟上，Windows 端仍写
+「画面在 Windows」。Mac 端点切换时两端都正常。
+
+**根因**（不是链路，也不是 Mac 端）：
+
+1. `classify()` 的第一条就是 `if present: return effective_host()`。Windows 的
+   `EnumDisplayMonitors` / dxva2 在画面切走后**照样枚举得到这块屏**（§1.2 实测
+   `monitors` 恒为 1），所以这条在 Windows 上恒真，后面的证据全走不到。
+2. `WindowsBackend` 从来没声明 `supports_ddc_detect`（继承 `BaseBackend` 的 `False`），
+   `_read_host()` 永远返回 `None` —— §1.2 已经验证可用的 VCP 0x60 读数压根没被调用。
+3. `_do_local()`（界面四个按钮走的通道）按设计不写 `_display_source`，而
+   `_detect_once()` 在 6s 静默期后又用枚举写回 `windows`。所以不是「回弹」，
+   是从头到尾没变过。
+4. `T_STATE` 心跳只交换 `sees` 布尔，两端都恒 `true`，协议层零信息量（§3.1 设计的
+   `T_STATE.input` 并未实现）。
+
+**共享层已改**（`src/dualswitch/app.py`，macOS 端作者维护）：
+
+| 位置 | 改动 |
+|---|---|
+| `READ_POLL_BY_BACKEND` + `__init__` | 轮询默认值按后端名给：`dxva2` → 2.0s，其余 0（macOS 读会毒化 Set，§3.6 不变） |
+| `_detect_once()` | 静默期只管枚举分支；直读分支不受限（读到即此刻真值，切换中读旧值也是真的） |
+| `detect_source()` | 声明了直读的后端读失败 → 返回 `None`（这一轮判不了），**不再回落枚举** |
+| `note_scan()` | 同上，读失败保持上次结论 |
+| `_readback()` | 回读确认成功时顺手 `_commit_read_host()`，界面不必等下一轮轮询 |
+
+**Windows 端待办（`ddc/windows.py`，1 行）**：
+
+```python
+class WindowsBackend(BaseBackend):
+    name = "dxva2"
+    #: VCP 0x60 读数在 Windows 上可用（§1.2 实测 17↔18 跟随物理切换），
+    #: 归属只认它；枚举在这台屏上恒为「看得到」，不能用来判。
+    supports_ddc_detect = True
+```
+
+顺手把模块 docstring 第 4–6 行「只做盲发 Set、不读当前源」那句改掉，它已被 §1.2 推翻。
+
+**验收**（Windows 端 pull 后）：
+
+```powershell
+python -m dualswitch probe --json
+```
+切换画面时 `input` 必须跟着 17↔18 变；再开 UI，点「本机发送 18」后 2–3 秒内
+小字应变成「画面在 Mac」。日志应出现 `显示器直报当前输入 → 画面在 mac（DDC 直读 0x60）`。
+
+回归：`tests/test_source_state.py` 新增 3 条（`test_dxva2_enables_read_polling_by_default`、
+`test_windows_owner_follows_switch_despite_phantom_monitor`、
+`test_readback_confirmation_updates_owner`），并把两条「读失败回落枚举」的旧用例
+反向改写（那条捷径正是本 bug）。

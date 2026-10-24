@@ -27,6 +27,12 @@ Notifier = Callable[[str, str], None]  # (标题, 正文)
 # Q2790PC 实测：Set 18 后 1 秒内回读是 18，3 秒后画面仍在 HDMI。
 REBOUND_CHECK_DELAY_S = 1.2
 
+# 后端名 → 直读轮询间隔。macOS 的 IOAVService 读会毒化下一条 Set
+# （SCREEN-OWNERSHIP §3.6：读一次，紧接着的写必被吞），所以那边 0 = 不轮询。
+# Windows 的 dxva2 走系统 DDC 栈，§1.2 实测每 2s 读一次期间切屏照样一次到位，
+# 开着它界面才能跟着「另一台/OSD 切的」自动刷新。
+READ_POLL_BY_BACKEND = {"dxva2": 2.0}
+
 
 @dataclass
 class SwitchResult:
@@ -111,13 +117,15 @@ class SwitchController:
         # 外部切换（例如在 Mac 上执行 CLI）不会经过本进程，
         # 只能靠「显示器还在不在本机」反推画面归属，见 detect_source()
         self.detect_interval_s = 2.0   # 轮询间隔（仅用于无直读后端的枚举推断）
-        # DDC 直读**不做后台轮询**（0 = 关闭）。这台 AOC 的 DDC 承受不了持续
-        # I2C 流量：2s 轮询把「本机发送」的 Set 搅掉，30s 也仍是纯开销——
-        # 归属只有一个展示行在用，切换动作全靠显式通道 + 发号前即时直读。
-        # 按需读的时机：启动 note_scan、_execute 发号前、回读确认、
-        # runner 在窗口回前台 / 切到切换页时调 refresh_owner_now()。
-        # 代价（接受）：OSD 手动切输入后，展示行要等下一次交互才刷新。
-        self.read_poll_interval_s = 0.0
+        # 直读**是否后台轮询**（0 = 关闭，全靠按需读：启动 note_scan、发号前、
+        # 回读确认、runner 在窗口回前台 / 切到切换页时调 refresh_owner_now()）。
+        # 按后端给默认值：macOS 这台 AOC 的 DDC 承受不了持续 I2C 流量（读会毒化
+        # 下一条 Set，§3.6），必须关；Windows 的 dxva2 没有这个问题（§1.2 实测
+        # 每 2s 读一次期间切屏照样一次到位），不轮询的话界面会永远停在启动时
+        # 那一次读数上——「Windows 切到 Mac 了，Windows 还显示在 Windows」就是它。
+        self.read_poll_interval_s = READ_POLL_BY_BACKEND.get(
+            getattr(backend, "name", ""), 0.0
+        )
         self._last_read_poll = float("-inf")
         # 自己刚切完的静默期，等显示器真正切走/切回。
         # ⚠️ 必须大于**显示器完成切换的时间**：Q2790PC 实测一次切换要 2–3 秒，
@@ -307,6 +315,13 @@ class SwitchController:
         host = self._read_host()
         if host:
             return host
+        # 声明了「能直读」的后端，读不到就是**这一轮判不了**，绝不回落到枚举：
+        # 这台屏（AOC Q2790R3）在输入端切走后照样枚举得到（§1.2 Windows 实测
+        # monitors 恒为 1），枚举在这类屏上零信息量，拿它推「画面在本机」必错。
+        # 只有没声明直读的老后端 / 其它平台才继续走推断链。
+        if getattr(self.backend, "supports_ddc_detect", False):
+            log.debug("DDC 直读没拿到结果，本轮不判归属（不回落到枚举推断）")
+            return None
         try:
             monitors = self._monitors()
         except Exception as exc:  # 枚举失败不代表画面变了，直接放弃这一轮
@@ -397,6 +412,10 @@ class SwitchController:
         直读可用时显示器一句话就说清归属，`monitors` 只作读失败时的兜底。
         """
         detected = self._read_host()
+        if not detected and getattr(self.backend, "supports_ddc_detect", False):
+            # 能直读却读不到：保持上一次的结论，别拿枚举猜一个（理由同 detect_source）。
+            log.debug("启动探测没读到当前输入，归属保持上次结论")
+            return
         if not detected:
             detected = self.classify(monitors)
         else:
@@ -431,12 +450,10 @@ class SwitchController:
     def _detect_once(self) -> None:
         if self.cfg.dry_run:                       # 演练模式不碰真实状态
             return
-        if time.monotonic() - self._last_set_at < self.detect_settle_s:
-            return                                 # 自己刚切完，等显示器真正切走/切回
-        # 直读后端：**不做后台轮询**（read_poll_interval_s=0 即关闭；留这个旋钮
-        # 只为将来换一台 DDC 结实的显示器时可选开）。也绝不跑枚举推断——
-        # phantom 屏会让枚举恒判「画面在本机」（2026-10-24 实测 8 秒后就误报过）。
-        # 归属的真值全部来自按需读：note_scan / _execute 发号前 / 回读 / 界面回前台。
+        # 直读后端：**只读、绝不跑枚举推断**——phantom 屏会让枚举恒判「画面在本机」
+        # （2026-10-24 实测 8 秒后就误报过）。读到的就是此刻真值，所以也不受
+        # 「自己刚切完的静默期」限制：切换进行中读到旧值、切完读到新值，都是真的。
+        # 是否轮询由 read_poll_interval_s 决定（dxva2 = 2s，macOS = 0 靠按需读）。
         if getattr(self.backend, "supports_ddc_detect", False):
             if self.read_poll_interval_s > 0:
                 now = time.monotonic()
@@ -446,7 +463,9 @@ class SwitchController:
                     if host is not None:
                         self._commit_read_host(host)
             return
-        # 无直读能力的后端（mock / Windows）才走枚举推断
+        if time.monotonic() - self._last_set_at < self.detect_settle_s:
+            return                                 # 自己刚切完，等显示器真正切走/切回
+        # 无直读能力的后端（老版本 / 其它平台）才走枚举推断
         try:
             monitors = self._monitors()
         except Exception as exc:  # 枚举失败不代表画面变了，直接放弃这一轮
@@ -887,6 +906,11 @@ class SwitchController:
                     if self._confirm_not_bounced(result, gen):
                         result.readback = "confirmed"
                         log.info("回读确认：%s", result.readback_detail)
+                        # 回读已经拿到真值，顺手让归属跟上：界面不必再等轮询
+                        # （Windows 端点完「本机发送」后，显示行就靠这一下来纠正）。
+                        host = self.host_of_value(current)
+                        if host:
+                            self._commit_read_host(host)
                     else:
                         result.readback = "unconfirmed"
                         log.warning("回读回弹（切了又被抢回）：%s", result.readback_detail)

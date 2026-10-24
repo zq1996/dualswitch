@@ -393,25 +393,34 @@ def test_detect_prefers_direct_ddc_read():
     assert ctl.detect_source() == "windows"
 
 
-def test_detect_falls_back_to_enumeration_when_read_fails():
-    """读失败（老机器/链路断）回落枚举推断，行为与直读落地前完全一致。"""
+def test_read_failure_does_not_fall_back_to_enumeration():
+    """读失败**不许**拿枚举猜「画面在本机」。
+
+    这台屏（AOC Q2790R3）在输入端切走后照样枚举得到（SCREEN-OWNERSHIP §1.2：
+    画面在 Mac 时 Windows 的 `monitors` 恒为 1），枚举在这类屏上零信息量。
+    读不到就只报「这一轮判不了」，界面保持上一次的结论，绝不跳回本机。
+    """
     backend = _ReadBackend(current=18, fail_get=True)
     ctl = SwitchController(make_cfg(), backend)
-    assert ctl.detect_source() == "windows"     # 枚举到屏 → 本机（this_host=windows）
+    assert ctl.detect_source() is None          # 不判，而不是判 windows
 
 
 def test_backend_without_decl_supports_keeps_old_behaviour():
-    """没声明 supports_ddc_detect 的后端（mock / Windows）不吃直读路径。"""
+    """没声明 supports_ddc_detect 的后端才继续走枚举推断（老版本 / 其它平台）。"""
     ctl, backend = new_controller()             # MockBackend 不声明 → False
     assert ctl._read_host() is None
     assert ctl.detect_source() == "windows"     # 仍走枚举推断
 
 
-def test_unmapped_input_value_falls_back():
-    """显示器报了配置之外的值（OSD 切到第三输入）→ 不猜，回落枚举推断。"""
+def test_unmapped_input_value_is_not_guessed():
+    """显示器报了配置之外的值（OSD 切到第三输入）⇒ 没人能认领，不猜。
+
+    旧行为是回落枚举判「在本机」，那等于把「画面在第三个输入口」
+    说成「画面在本机」——正是这个 bug 的另一副面孔。
+    """
     backend = _ReadBackend(current=27)          # 27 不在 sources 里
     ctl = SwitchController(make_cfg(), backend)
-    assert ctl.detect_source() == "windows"
+    assert ctl.detect_source() is None
 
 
 def test_note_scan_uses_direct_read_over_monitors():
@@ -507,3 +516,62 @@ def test_readback_superseded_by_newer_switch():
     thread.join(timeout=2.0)
     assert not thread.is_alive(), "被取代的旧回读必须提前收工"
     assert result.readback == "pending"             # 没资格写结论
+
+
+# --------------------------------------------------------------------------- #
+# Windows 端「切完不跟着变」（2026-10-24 用户报障）
+#
+# dxva2 的 EnumDisplayMonitors 在画面切走后照样枚举得到这块屏，于是旧链路
+# 「枚举到 ⇒ 画面在本机」在 Windows 上恒真，界面永远显示在 Windows。
+# 修法：Windows 后端声明 supports_ddc_detect（读 VCP 0x60 是真的，§1.2 实测），
+# 归属只认读数，并按后端开 2s 轮询（dxva2 的读不会毒化 Set，§3.6 只适用于 macOS）。
+# --------------------------------------------------------------------------- #
+class _WindowsLikeBackend(_ReadBackend):
+    """模拟 Windows 的 dxva2：读得到当前输入，但枚举里永远有屏（phantom）。"""
+
+    name = "dxva2"
+
+
+def test_dxva2_enables_read_polling_by_default():
+    """轮询默认值按后端给：dxva2 开 2s，macOS / mock 保持关闭。"""
+    win = SwitchController(make_cfg(), _WindowsLikeBackend(current=17))
+    assert win.read_poll_interval_s == 2.0
+    other = SwitchController(make_cfg(), _ReadBackend(current=17))   # name = mock
+    assert other.read_poll_interval_s == 0.0
+
+
+def test_windows_owner_follows_switch_despite_phantom_monitor():
+    """Windows 端点完「本机发送 18」后，显示行必须跟着变成「画面在 mac」。
+
+    前提是枚举恒为「看得到屏」——只有直读轮询能纠正它。
+    """
+    backend = _WindowsLikeBackend(current=17)
+    ctl = SwitchController(make_cfg(), backend)      # this_host=windows
+    ctl.detect_interval_s = 0.02
+    ctl.detect_settle_s = 0.0
+    ctl.read_poll_interval_s = 0.02
+    ctl.start()
+    try:
+        assert _wait_state(ctl, "windows") == "windows"
+        assert backend.list_monitors(), "前提：phantom 屏一直枚举得到"
+        ctl.set_input_local(18)                      # 用户点「本机发送 18」
+        assert _wait_state(ctl, "mac") == "mac"
+    finally:
+        ctl.stop()
+
+
+def test_readback_confirmation_updates_owner(monkeypatch):
+    """回读确认成功后顺手落归属——界面不必等下一轮轮询。"""
+    from dualswitch.app import SwitchResult
+
+    monkeypatch.setattr("dualswitch.app.REBOUND_CHECK_DELAY_S", 0.0)
+    backend = _WindowsLikeBackend(current=18)
+    ctl = SwitchController(make_cfg(), backend)
+    ctl.cfg.readback.delay_ms = 0
+    ctl.cfg.readback.timeout_ms = 500
+    ctl.cfg.readback.interval_ms = 10
+
+    result = SwitchResult(ok=True, target="mac", value=18, source="test")
+    ctl._readback(result)
+    assert result.readback == "confirmed"
+    assert ctl.source_state == "mac"
