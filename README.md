@@ -43,7 +43,7 @@ GitHub 上没有同时满足「Windows + macOS 双端 + 全局热键 + 托盘常
 git clone <repo> dualswitch && cd dualswitch
 
 py -3 -m venv .venv
-.\.venv\Scripts\pip install -e ".[tray,gui]"   # gui = PySide6 图形界面
+.\.venv\Scripts\pip install -e ".[tray,gui,mouse]"   # gui = PySide6；mouse = 罗技鼠标联动
 
 .\.venv\Scripts\dualswitch probe     # 只读探测，不会切屏
 .\.venv\Scripts\dualswitch doctor    # 环境自检
@@ -64,7 +64,7 @@ py -3 -m venv .venv
 ```bash
 brew install m1ddc                    # DDC/CI 后端
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[tray,macos]"        # macos extra = pyobjc
+pip install -e ".[tray,macos,mouse]"  # macos extra = pyobjc；mouse = 罗技鼠标联动
 
 m1ddc set input 17                    # 【开发前强制验证】应切到 Windows 画面
 m1ddc set input 18                    # 【开发前强制验证】应切回 Mac 画面（USB-C = 18）

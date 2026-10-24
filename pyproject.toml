@@ -22,6 +22,10 @@ tray = ["pystray>=0.19", "pillow>=9"]
 macos = ["pyobjc-framework-Quartz>=9.0", "pyobjc-framework-ApplicationServices>=9.0"]
 # 图形界面（主窗口 + 托盘）。不装也能用 CLI / 无界面常驻
 gui = ["PySide6-Essentials>=6.6"]
+# 切屏时联动罗技鼠标 Easy-Switch（HID++ CHANGE_HOST）。
+# 不装则功能静默降级（日志写「未安装 hidapi」），切屏本身不受影响。
+# 注意：必须装到**运行应用的那个解释器**里——装到另一个 python3 等于没装。
+mouse = ["hidapi>=0.14"]
 dev = ["pytest>=7"]
 
 [project.scripts]
