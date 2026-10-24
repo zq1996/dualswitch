@@ -125,9 +125,30 @@ def test_disabled_tap_is_re_enabled():
     assert backend.tap_resets == 2
 
 
-def test_key_up_is_swallowed_too():
+def test_plain_space_key_up_passes_through():
+    """普通空格的 keyUp 必须原样放行。
+
+    曾经无条件吞掉 keycode 49 的 keyUp：用户打字时 keyDown 送达、keyUp 消失，
+    中文输入法 / 编辑器全都行为怪异（2026-10-24 用户实报「单击空格打字有问题」）。
+    """
     backend, hits, Q = make_backend()
-    assert backend.handle_event(Q, None, Q.kCGEventKeyUp, FakeEvent(49)) is None
+    out = backend.handle_event(Q, None, Q.kCGEventKeyUp, FakeEvent(49))
+    assert out is not None, "没按修饰键的空格 keyUp 不许吞"
+
+
+def test_hotkey_key_up_swallowed_after_matched_down():
+    """命中热键的 keyDown 被吞后，配对的 keyUp 也吞（不留残键）。"""
+    backend, hits, Q = make_backend()
+    down = FakeEvent(49, hk.FLAG_ALTERNATE | hk.FLAG_DEVICE_RALT)
+    assert backend.handle_event(Q, None, Q.kCGEventKeyDown, down) is None
+    assert backend.handle_event(Q, None, Q.kCGEventKeyUp, FakeEvent(49, hk.FLAG_ALTERNATE)) is None
+
+
+def test_key_up_after_unmatched_down_passes_through():
+    """keyDown 没命中（比如左 Option），它的 keyUp 也不能吞。"""
+    backend, hits, Q = make_backend()
+    backend.handle_event(Q, None, Q.kCGEventKeyDown, FakeEvent(49, hk.FLAG_ALTERNATE | 0x20))
+    assert backend.handle_event(Q, None, Q.kCGEventKeyUp, FakeEvent(49)) is not None
 
 
 def test_callback_exception_does_not_break_tap():

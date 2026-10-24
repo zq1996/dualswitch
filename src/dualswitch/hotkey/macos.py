@@ -189,6 +189,12 @@ class QuartzEventTapBackend:
         self._source = None
         self._ralt_down = False
         self._keycode = 0
+        # 上一颗 keyDown 是否被吞（swallow=True 且命中热键）。keyUp 只在
+        # 配对时才吞 —— 否则**每一次普通空格 keyUp 都会被吃掉**：用户打字
+        # 时 keyDown 送达、keyUp 凭空消失，中文输入法/编辑器全都行为怪异
+        # （2026-10-24 用户实报「单击空格打字都有问题」）。热键是
+        # Option+Space，keycode 49 与普通空格相同，修饰键检查只能救 keyDown。
+        self._swallowed_down = False
         # 诊断计数：doctor / 日志里能看出 tap 到底有没有收到键、被系统禁过几次
         self.events_seen = 0
         self.matches = 0
@@ -265,6 +271,7 @@ class QuartzEventTapBackend:
                 if self._flags_ok(event_flags(Q, event)):
                     self.matches += 1
                     log.info("热键命中：%s（第 %d 次）", self.describe(), self.matches)
+                    self._swallowed_down = self.swallow
                     try:
                         self.callback()
                     except Exception:
@@ -272,13 +279,17 @@ class QuartzEventTapBackend:
                         if self.callback_errors <= 3:      # 只记前几次，别刷屏
                             log.exception("热键回调异常（第 %d 次）", self.callback_errors)
                     return None if self.swallow else event
+                self._swallowed_down = False
             return event
 
-        # 吞了 keyDown 就顺手吞掉配对的 keyUp，避免留下「只抬起没按下」的残键
-        if event_type == Q.kCGEventKeyUp and self.swallow:
+        # 只吞「刚被吞掉的 keyDown」配对的 keyUp，避免留下「只抬起没按下」的
+        # 残键。普通按键（没按修饰键的空格）的 keyUp 必须原样放行。
+        if event_type == Q.kCGEventKeyUp and self.swallow and self._swallowed_down:
             keycode = int(Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventKeycode))
             if keycode == self._keycode:
+                self._swallowed_down = False
                 return None
+        self._swallowed_down = False
         return event
 
     def _run(self) -> None:
