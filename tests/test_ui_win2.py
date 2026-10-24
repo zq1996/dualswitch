@@ -1,6 +1,6 @@
 """Windows2 界面测试（对应设计 `docs/UI-WINDOWS2-DESIGN.md` §11 验收清单）。
 
-覆盖：窗口骨架（自绘标题栏只留最小化/关闭）/ 三态切换页 / 剪贴板行交互与动作分派 /
+覆盖：窗口骨架（自绘标题栏只留最小化/关闭）/ 切换页四条显式通道（INTERACTIONS §10.24，与 mac2 同构）/ 剪贴板行交互与动作分派 /
 预览气泡时序与尺寸 / 设置页五组与落盘 / 托盘菜单 8 行与键帽 / 打开方式分派 /
 窗口内清空遮罩 / 键盘导航 / 路径缩略（`~\\Downloads`）。
 
@@ -207,7 +207,7 @@ def test_close_semantics(app, cfg, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# 2. 切换页三态（§5.2 / §11.4）
+# 2. 切换页：四条显式通道（INTERACTIONS §10.24，与 mac2 同构）
 # --------------------------------------------------------------------------- #
 def test_pill_is_drawn_with_rounded_corners(app, cfg):
     """19px 高的药丸自绘圆角 —— QSS 的 border-radius 在这个高度会被 Qt 整条丢掉。"""
@@ -222,51 +222,78 @@ def test_pill_is_drawn_with_rounded_corners(app, cfg):
     assert middle.alpha() > 0
 
 
-def test_switch_page_three_states(app, cfg):
+def test_switch_page_four_explicit_actions(app, cfg):
+    """四条显式通道：2 个目标 × 本机/对端。归属未知时按钮照样可用。"""
     page = SwitchPage(cfg, "Alt+Space", "AOC Q2790PC")
-    page.set_state("windows")
-    assert page.hero.name.text() == "Windows"
-    assert page.hero.btn_text.text() == "切换到 Mac"
-    assert page.hero.keys.labels() == ["Alt", "Space"]
-    assert "HDMI" in page.hero.sub.text() and "输入源 17" in page.hero.sub.text()
-    assert page.card_win.isEnabled() and page.card_mac.isEnabled()
+    rows = page.hero.rows
+    assert [(r.host, r.value) for r in rows] == [("windows", 17), ("mac", 18)]
+    assert [r.btn_local.text() for r in rows] == ["本机发送 17", "本机发送 18"]
+    # 「请对端发送」是兜底，降级为行尾小图标钮：文案进 tooltip + accessibleName
+    assert [r.btn_peer.accessibleName() for r in rows] == ["请对端发送 17", "请对端发送 18"]
+    assert all(not r.btn_peer.text() for r in rows)
+    assert all("兜底" in r.btn_peer.toolTip() for r in rows)
 
-    page.set_state("mac")
-    assert page.hero.btn_text.text() == "切换到 Windows"
-    assert "USB-C" in page.hero.sub.text() and "输入源 18" in page.hero.sub.text()
+    # 画面归属未检测 → 四个按钮照样可用（不再按归属禁用）
+    page.set_owner(None)
+    assert "未检测" in page.hero.src_text.text()
+    assert all(r.btn_local.isEnabled() for r in rows)
 
-    # unknown：整体置灰、不显示键帽
-    page.set_state(SOURCE_UNKNOWN)
-    assert page.hero.name.text() == "未检测到外接显示器"
-    assert not page.card_win.isEnabled() and not page.card_mac.isEnabled()
-    assert not page.hero.keys.isVisible()
-    assert not page.hero.button.isEnabled()
-
-    # unknown + 对端在线 → 出现「从 Mac 切过来」（切回入口不能砍）
+    # 对端离线 → 只有「请对端发送」置灰，本机两条照常
+    page.set_remote_available(False)
+    assert all(r.btn_local.isEnabled() for r in rows)
+    assert not any(r.btn_peer.isEnabled() for r in rows)
     page.set_remote_available(True)
-    assert page.hero.button.isEnabled()
-    assert page.hero.btn_text.text() == "从 Mac 切过来"
+    assert all(r.btn_peer.isEnabled() for r in rows)
+
+    # 忙时四个全灰
+    page.set_busy(True, "Mac")
+    assert not any(r.btn_local.isEnabled() or r.btn_peer.isEnabled() for r in rows)
+    page.set_busy(False)
+    assert all(r.btn_local.isEnabled() for r in rows)
 
 
-def test_device_card_click_toasts_when_already_here(app, cfg):
+def test_switch_page_readout_is_labelled(app, cfg):
+    """读数只做展示：带「画面在 X」，缺读数写「未检测」，都不影响按钮。"""
     page = SwitchPage(cfg, "Alt+Space", "AOC Q2790PC")
-    page.set_state("windows")
-    toasts, switches = [], []
-    page.toastRequested.connect(toasts.append)
-    page.deviceClicked.connect(switches.append)
-    page._on_device("windows")
-    assert toasts == ["画面已经在这台机器上"]
-    page._on_device("mac")
-    assert switches == ["mac"]
+    page.set_owner("windows", "对端读数 17 · 6 秒前")
+    assert "画面在 Windows" in page.hero.src_text.text()
+    assert "6 秒前" in page.hero.src_text.text()
+    page.set_owner(None)
+    assert "未检测" in page.hero.src_text.text()
+    assert all(r.btn_local.isEnabled() for r in page.hero.rows)
 
 
-def test_force_disabled_when_unknown(app, cfg):
+def test_switch_page_action_rows_geometry(app, cfg):
+    """两行动作行几何硬约束（与 mac2 的 test_switch_page_action_rows_geometry 同口径）。
+
+    两行等高、数字章等大、文字不压按钮（换行兜底）、主按钮定宽 150、
+    兜底钮 28×28、按钮列对齐、簇间距 8。
+    """
+    from dualswitch.ui.win2.switch_page import ActionRow
+
     page = SwitchPage(cfg, "Alt+Space", "AOC Q2790PC")
-    page.set_state(SOURCE_UNKNOWN)
-    toasts = []
-    page.toastRequested.connect(toasts.append)
-    page._on_force()
-    assert toasts == ["未检测到显示器，无法强制切换"]
+    page.resize(780, 580)
+    page.show()
+    app.processEvents()
+    rows = page.hero.rows
+    assert len(rows) == 2
+
+    assert rows[0].height() == rows[1].height() == ActionRow.ROW_H
+    chips = [(r.chip.width(), r.chip.height()) for r in rows]
+    assert chips[0] == chips[1] == (ActionRow.CHIP_W, ActionRow.CHIP_H)
+
+    for r in rows:
+        assert r.who.wordWrap(), f"{r.value} 行文字必须允许换行"
+        who_right = r.who.mapTo(r, r.who.rect().topRight()).x()
+        assert who_right <= r.btn_local.x(), f"{r.value} 行文字压到按钮上了"
+        assert r.btn_local.width() == ActionRow.BTN_W == 150
+        assert (r.btn_peer.width(), r.btn_peer.height()) == (ActionRow.MINI, ActionRow.MINI)
+
+    assert rows[0].btn_local.x() == rows[1].btn_local.x()
+    assert rows[0].btn_peer.x() == rows[1].btn_peer.x()
+    for r in rows:
+        gap = r.btn_peer.x() - (r.btn_local.x() + r.btn_local.width())
+        assert gap == ActionRow.MINI_GAP, f"{r.value} 行主按钮与兜底钮间距 {gap}"
 
 
 # --------------------------------------------------------------------------- #

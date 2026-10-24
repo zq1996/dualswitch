@@ -327,9 +327,8 @@ class TitleBar(QWidget):
 # 主窗口
 # --------------------------------------------------------------------------- #
 class MainWindow(QWidget):
-    switchRequested = Signal()
-    forceRequested = Signal()
-    deviceClicked = Signal(str)
+    localRequested = Signal(int)      # 「本机发送 N」（INTERACTIONS §10.24 四条显式通道）
+    peerRequested = Signal(int)       # 「请对端发送 N」（兜底小钮）
     hiddenToBackground = Signal()
     pageChanged = Signal(int)
     quitRequested = Signal()          # 侧栏「退出应用」/ 设置里关掉托盘 → 真退出
@@ -486,9 +485,8 @@ class MainWindow(QWidget):
         self.pages.addWidget(settings_page)
         if pairing_page is not None:
             self.pages.addWidget(pairing_page)
-        self.switch_page.switchRequested.connect(self.switchRequested)
-        self.switch_page.forceRequested.connect(self.forceRequested)
-        self.switch_page.deviceClicked.connect(self.deviceClicked)
+        self.switch_page.localRequested.connect(self.localRequested)
+        self.switch_page.peerRequested.connect(self.peerRequested)
 
     def show_page(self, index: int) -> None:
         self._page = index

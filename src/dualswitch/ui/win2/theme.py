@@ -514,6 +514,31 @@ def qss(t: Tokens | None = None) -> str:
     #heroNoteOk {{ color: {t.ok}; font-size: 11px; }}
     #heroNoteDim {{ color: {t.ink2}; font-size: 11px; }}
     #heroNoteBad {{ color: {t.danger}; font-size: 11px; }}
+    #srcLine {{ color: {t.ink3}; font-size: 11.5px; }}
+    #srcDotOk {{ background: {t.ok}; border-radius: 3px; }}
+    #srcDotIdle {{ background: {t.ink3}; border-radius: 3px; }}
+    #hintLine {{ color: {t.ink3}; font-size: 10.5px; }}
+    /* 四条通道（INTERACTIONS §10.24）：一行 = 一个目标 + 本机发送(主) + 兜底小钮 */
+    #actRow {{
+        background: {t.card}; border: 1px solid {t.line_soft};
+        border-radius: {RADIUS_CTRL}px;
+    }}
+    #valChip {{
+        background: {t.card3}; border: 1px solid {t.line}; border-radius: 7px;
+        color: {t.ink};
+    }}
+    #actPort {{ color: {t.ink2}; font-size: 13px; font-weight: 650; }}
+    #actWho {{ color: {t.ink3}; font-size: 11px; }}
+    /* 兜底小钮（请对端代发，28×28 图标钮，方案 A） */
+    QPushButton#miniBtn {{
+        background: {t.card}; color: {t.ink2}; border: 1px solid {t.line};
+        border-radius: 8px; padding: 0;
+    }}
+    QPushButton#miniBtn:hover {{ border-color: {t.accent}; background: {t.accent_soft}; }}
+    QPushButton#miniBtn:pressed {{ background: {t.card3}; }}
+    QPushButton#miniBtn:disabled {{
+        background: {t.card}; border-color: {t.line_soft};
+    }}
     QPushButton#primary {{
         background: {t.accent}; color: {t.on_accent}; border: 0;
         border-radius: {RADIUS_CTRL}px; font-size: 14px; font-weight: 650;

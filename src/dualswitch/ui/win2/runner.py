@@ -290,10 +290,8 @@ class UiRunner2(QObject):
         self._seen_history = len(controller.history)
         self._seen_source = controller.source_state
         self.uiCall.connect(self._run_ui_call, Qt.QueuedConnection)
-        self.window.switchRequested.connect(lambda: self.do_switch())
-        self.window.forceRequested.connect(self.do_force)
-        # 点设备卡 = 「切到这台」，信号里带的就是目标主机，别再丢掉
-        self.window.deviceClicked.connect(self.do_switch)
+        self.window.localRequested.connect(self.do_local)
+        self.window.peerRequested.connect(self.do_remote)
         self.window.hiddenToBackground.connect(self._enter_background)
         self.window.quitRequested.connect(self.quit_application)
         self.window.pageChanged.connect(self._on_page_changed)
@@ -318,7 +316,8 @@ class UiRunner2(QObject):
         self.settings_page.openConfigDirRequested.connect(self.open_config_dir)
 
         # 首帧就用控制器已经确认过的状态
-        self.switch_page.set_state(self._seen_source)
+        # 读数层未开工：切换页「画面位置」行暂显「未检测」（与 mac2 同步，§3.5 只做展示）
+        self.switch_page.set_owner(None)
         if self._seen_source == SOURCE_UNKNOWN:
             self.switch_page.set_note("插上外接屏会自动恢复", ok=False)
 
@@ -545,6 +544,45 @@ class UiRunner2(QObject):
 
         threading.Thread(target=work, name="ui-switch", daemon=True).start()
 
+    # ------------------------------------------------------------------ 两条显式通道
+    def _label_for(self, value: int) -> str:
+        host = self.controller.host_of_value(int(value))
+        return "Mac" if host == "mac" else ("Windows" if host == "windows" else f"输入源 {value}")
+
+    def do_local(self, value: int) -> None:
+        """「本机发送」：只让本机发一条 DDC Set，不请对端、不判归属。"""
+        if self._busy:
+            return
+        self._busy = True
+        label = self._label_for(value)
+        self.switch_page.set_busy(True, f"本机 → {label}")
+        self.switch_page.set_note(f"本机发送 VCP 0x60={int(value)}（{label}）…", ok=False)
+
+        def work() -> None:
+            try:
+                self.controller.set_input_local(int(value), source="ui")
+            except Exception:  # noqa: BLE001
+                log.exception("本机发送出现异常")
+
+        threading.Thread(target=work, name="ui-set-local", daemon=True).start()
+
+    def do_remote(self, value: int) -> None:
+        """「请对端发送」：只请对端发，本机一条 DDC 都不发。"""
+        if self._busy:
+            return
+        self._busy = True
+        label = self._label_for(value)
+        self.switch_page.set_busy(True, f"对端 → {label}")
+        self.switch_page.set_note(f"请对端发送 VCP 0x60={int(value)}（{label}）…", ok=False)
+
+        def work() -> None:
+            try:
+                self.controller.switch_remote(int(value), source="ui")
+            except Exception:  # noqa: BLE001
+                log.exception("请对端发送出现异常")
+
+        threading.Thread(target=work, name="ui-set-remote", daemon=True).start()
+
     def do_force(self) -> None:
         """强制切：跳过「本地优先、失败才请对端」，直接本机发 DDC Set（§5.3）。"""
         if self._busy:
@@ -576,7 +614,7 @@ class UiRunner2(QObject):
     def _force_done(self, target: str) -> None:
         self._busy = False
         self.switch_page.set_busy(False)
-        self.switch_page.set_state(target)
+        self.switch_page.set_owner(None)   # 读数层未开工，画面位置行维持「未检测」
         self._refresh_menu()
 
     # ---- 高级组（§7.5）----
@@ -703,7 +741,9 @@ class UiRunner2(QObject):
         source = self.controller.source_state
         if source != self._seen_source:
             self._seen_source = source
-            self.switch_page.set_state(source)
+            # 切换页不再按归属推方向（SCREEN-OWNERSHIP §3.4）；读数层未开工，
+            # 「画面位置」行暂显「未检测」，与 mac2 同口径。
+            self.switch_page.set_owner(None)
             self._refresh_menu()
             self._refresh_conn_ui()
             changed = True
@@ -837,8 +877,7 @@ class UiRunner2(QObject):
         if label == getattr(self, "_shown_hotkey", ""):
             return
         self._shown_hotkey = label
-        self.switch_page.set_hotkey(label)
-        # 侧栏自己决定显示「热键 ⌥Space」还是「热键未启用」（§14 跟随项）
+        # 新切换页无键帽（§10.24 已删）；热键显示只在侧栏 footer
         self.window.set_side_hotkey(label)
         self._refresh_menu()
 
@@ -863,7 +902,7 @@ class UiRunner2(QObject):
         self.toast = Toast(self.window)
         self.clipboard_page.mark_dirty()
         self.clipboard_page.refresh()
-        self.switch_page.set_state(self.controller.source_state)
+        self.switch_page.set_owner(None)   # 读数层未开工（与 _poll_state 同口径）
         if cfg.hotkey != old_hotkey or self.hotkey is None:
             self._rebuild_hotkey(cfg)
         if self.clip_engine is not None and bool(cfg.clipboard.enabled) != old_clip_on:
