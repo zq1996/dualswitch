@@ -158,9 +158,10 @@ class UiRunner2(QObject):
         )
         self.settings_page.recordingChanged.connect(self._on_recording_changed)
 
-        # 首帧：画面归属**不猜**（Mac 侧读不到 VCP 0x60，见 SCREEN-OWNERSHIP §1.1），
+        # 首帧：归属状态以控制器为准（note_scan 启动探测已喂过一次，
+        # DDC 直读可用时首帧就是真值；还判不出则显示「未检测」），
         # 只把「对端是否在线」摆出来，四个按钮立刻可用。
-        self.switch_page.set_owner(None)
+        self._apply_owner()
 
         self.status = None
         self._build_status()
@@ -498,9 +499,9 @@ class UiRunner2(QObject):
         source = self.controller.source_state
         if source != self._seen_source:
             self._seen_source = source
-            # 切换页不再展示「画面在 X」（Mac 读不到 VCP 0x60，推断只会给出假答案）；
-            # 菜单与侧栏仍按旧判定刷新，等读数层落地后统一。
-            self.switch_page.set_owner(None)
+            # DDC 直读可用后归属是真值了：直读给出 windows/mac 就显示
+            # 「画面在 X」；仍判不出（读失败 + 推断链也不确定）才显「未检测」。
+            self._apply_owner()
             self._refresh_menu()
             self._refresh_conn_ui()
             changed = True
@@ -524,6 +525,11 @@ class UiRunner2(QObject):
             return bool(probe())
         except Exception:  # noqa: BLE001
             return False
+
+    def _apply_owner(self) -> None:
+        """把画面归属刷进切换页：windows/mac → 「画面在 X」，否则「未检测」。"""
+        source = self.controller.source_state
+        self.switch_page.set_owner(source if source in ("windows", "mac") else None)
 
     def _apply_result(self, result) -> None:  # noqa: ANN001
         host = self.controller.host_of_value(result.value)
@@ -620,7 +626,7 @@ class UiRunner2(QObject):
         self.toast = Toast(self.window)
         self.clipboard_page.mark_dirty()
         self.clipboard_page.refresh()
-        self.switch_page.set_owner(None)
+        self._apply_owner()
         if cfg.hotkey != old_hotkey or self.hotkey is None:
             self._rebuild_hotkey(cfg)
         if self.clip_engine is not None and bool(cfg.clipboard.enabled) != old_clip_on:

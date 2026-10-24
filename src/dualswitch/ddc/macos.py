@@ -13,10 +13,13 @@ macOS 与 Windows 的两个关键差异（都是实测踩出来的）：
    会打到内置屏上，静默失败。所以这里把内置屏/无名屏过滤掉，并把真实序号
    放进 `MonitorInfo.extra["m1ddc_index"]`，发送时自动带上。
 
-2. **读通道可能整体不可用**
-   USB-C(DP Alt Mode) 接线下，这台机器的 `get input` / `get luminance` 全部返回
-   `-118`（IOKit kIOReturn 类错误），但**写通道正常**。所以读值失败必须报成
-   「不可读」而不是「解析失败」，并且绝不能让回读影响切换主流程。
+2. **m1ddc 的读通道被它自己的校验和 bug 废掉了（2026-10-24 破案）**
+   m1ddc 底层 AppleSiliconDDC 的 Get-VCP 请求校验和漏了 0x51 子地址，
+   严格显示器直接拒绝 → 表现为 `get input` 恒 `-118`，而 Set 正常。
+   **不是「这台屏不响应 DDC 读」**（旧注释的误诊，2026-10-24 实测证伪：
+   用 IOAVService 直读按规范拼校验和，17/18 两态都能读到，见
+   `ddc/avservice.py`）。所以 `get_input()` 先走 AVService 直读，
+   失败才落回 m1ddc 老路。
 
 3. **`display list` 列得出「不在用」的屏**
    屏切到 HDMI 后，USB-C 这条链路的 DCP 代理对象还在，`display list` 照样列出
@@ -45,6 +48,7 @@ import subprocess
 from pathlib import Path
 
 from .base import BaseBackend, DDCError, MonitorInfo
+from .avservice import AVServiceI2C
 
 log = logging.getLogger("dualswitch.ddc")
 
@@ -88,6 +92,9 @@ def find_m1ddc(name: str = "m1ddc") -> str | None:
 
 class M1ddcBackend(BaseBackend):
     name = "m1ddc"
+    # controller._read_host() 的开关：只有声明支持直读的后端才参与
+    # 「显示器亲口报输入」的归属判定（mock / Windows 后端不开）。
+    supports_ddc_detect = True
 
     def __init__(
         self,
@@ -102,6 +109,7 @@ class M1ddcBackend(BaseBackend):
         self.m1ddc_path = m1ddc_path or "m1ddc"
         self.display_index = display_index
         self.timeout = timeout
+        self._av: AVServiceI2C | None = None
 
     # ------------------------------------------------------------------ 内部
     def _resolve_binary(self) -> str:
@@ -277,15 +285,27 @@ class M1ddcBackend(BaseBackend):
         self._run(["set", "input", str(int(value))], display_args=self._display_args())
 
     def get_input(self) -> int:
+        # 先走 IOAVService 直读：m1ddc 的 Get-VCP 校验和有 bug（漏 0x51），
+        # 严格显示器会拒绝 → -118。直读在画面切到对端时照样能读到当前输入
+        # （USB-C 的 DP AUX 链路不随画面切换断），实测 17/18 两态 1~2 次成功。
+        if self._av is None:
+            self._av = AVServiceI2C()
+        value = self._av.get_vcp(self.vcp_code)
+        if value is not None:
+            return value
+
+        # 直读不可用（Intel 机 / 老系统 / 链路真断了）才落回 m1ddc 老路。
         out = self._run(["get", "input"], display_args=self._display_args())
         text = out.strip()
         if text.lstrip("-").isdigit():
             number = int(text)
             if number < 0:
                 raise DDCError(
-                    f"m1ddc 读通道不可用（返回 {number}，IOKit 错误码）。"
-                    "这台屏在 USB-C(DP Alt Mode) 下不响应 DDC 读请求，"
-                    "写通道正常，切换不受影响；回读校验会显示「未确认」。"
+                    f"m1ddc 读通道不可用（返回 {number}，IOKit 错误码），"
+                    "且 IOAVService 直读也没成功。已知 m1ddc 的 Get-VCP 校验和"
+                    "有 bug（漏 0x51 子地址，见 ddc/avservice.py），直读都失败"
+                    "说明链路确实不通（拔线 / 对端独占 / 系统过旧）；"
+                    "写通道正常，切换不受影响，回读校验会显示「未确认」。"
                 )
             if 0 <= number <= 0xFF:
                 return number

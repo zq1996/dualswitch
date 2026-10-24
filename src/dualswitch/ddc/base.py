@@ -76,6 +76,10 @@ class BaseBackend:
     """提供默认实现与统一的 VCP 记录，便于子类复用。"""
 
     name = "base"
+    #: 「显示器亲口报当前输入」的归属判定开关（controller._read_host()）。
+    #: 只有读通道真实可用的后端才开（m1ddc 走 IOAVService 直读）；
+    #: mock / Windows 后端不开 —— 否则测试与误报会把推断链整个带歪。
+    supports_ddc_detect = False
 
     def __init__(self, vcp_code: int = 0x60, monitor_match: str = "", monitor_index: int = 0):
         self.vcp_code = int(vcp_code)

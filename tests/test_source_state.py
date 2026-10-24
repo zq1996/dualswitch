@@ -373,3 +373,65 @@ def test_menu_unknown_disables_switch_entries():
     assert any("当前画面：未检测到外部显示器" in t for t in titles)
     switch = next(e for e in entries if "切换" in e.title and e.kind == "item")
     assert switch.enabled is False
+
+
+# --------------------------------------------------------------------------- #
+# DDC 直读优先（2026-10-24 破案后新增：显示器亲口报输入 > 一切枚举推断）
+# --------------------------------------------------------------------------- #
+class _ReadBackend(MockBackend):
+    """模拟「读通道真实可用」的后端（m1ddc 走 IOAVService 直读后的样子）。"""
+
+    supports_ddc_detect = True
+
+
+def test_detect_prefers_direct_ddc_read():
+    """直读可用时归属以显示器报的输入为准，不看枚举结果。"""
+    backend = _ReadBackend(current=18)          # 显示器说 18 → mac
+    ctl = SwitchController(make_cfg(), backend)
+    assert ctl.detect_source() == "mac"         # 枚举里明明有屏（会说 windows），直读赢
+    backend.current = 17
+    assert ctl.detect_source() == "windows"
+
+
+def test_detect_falls_back_to_enumeration_when_read_fails():
+    """读失败（老机器/链路断）回落枚举推断，行为与直读落地前完全一致。"""
+    backend = _ReadBackend(current=18, fail_get=True)
+    ctl = SwitchController(make_cfg(), backend)
+    assert ctl.detect_source() == "windows"     # 枚举到屏 → 本机（this_host=windows）
+
+
+def test_backend_without_decl_supports_keeps_old_behaviour():
+    """没声明 supports_ddc_detect 的后端（mock / Windows）不吃直读路径。"""
+    ctl, backend = new_controller()             # MockBackend 不声明 → False
+    assert ctl._read_host() is None
+    assert ctl.detect_source() == "windows"     # 仍走枚举推断
+
+
+def test_unmapped_input_value_falls_back():
+    """显示器报了配置之外的值（OSD 切到第三输入）→ 不猜，回落枚举推断。"""
+    backend = _ReadBackend(current=27)          # 27 不在 sources 里
+    ctl = SwitchController(make_cfg(), backend)
+    assert ctl.detect_source() == "windows"
+
+
+def test_note_scan_uses_direct_read_over_monitors():
+    """启动探测同样直读优先：首帧就是真值，不靠「见过屏」猜。"""
+    backend = _ReadBackend(current=18)          # 画面在 mac，但枚举也能看到屏
+    ctl = SwitchController(make_cfg(), backend)
+    ctl.note_scan(backend.list_monitors())
+    assert ctl.source_state == "mac"            # 直读赢，而不是被 phantom 枚举带成 windows
+
+
+def test_poll_commits_read_host_immediately():
+    """直读是即时真值：一轮就落状态，不吃「两轮确认」的 4 秒延迟。"""
+    backend = _ReadBackend(current=18)
+    ctl = SwitchController(make_cfg(), backend)
+    ctl.detect_interval_s = 0.02
+    ctl.detect_settle_s = 0.0
+    ctl.start()
+    try:
+        assert _wait_state(ctl, "mac") == "mac"
+        backend.current = 17
+        assert _wait_state(ctl, "windows") == "windows"
+    finally:
+        ctl.stop()

@@ -233,8 +233,42 @@ class SwitchController:
         needle = (self.cfg.monitor_match or "").strip()
         return any(m.matches(needle) for m in active) if needle else bool(active)
 
+    def _read_host(self) -> str | None:
+        """显示器亲口报当前输入（DDC 直读 VCP 0x60），反查成主机名。
+
+        2026-10-24 破案后这是**最硬**的证据：m1ddc 读失败是它自己的校验和
+        bug，绕开之后 Q2790R3 在画面切到对端时照样能读到 17/18（DP AUX
+        链路不随画面切换断）。之前的 phantom 屏推断链全是为「读不了」绕的弯，
+        直读可用时应优先于一切枚举推断。
+
+        返回 None = 后端不支持 / 读失败 / 值不认识（比如屏被 OSD 切到了
+        第三个输入），调用方回落枚举推断。
+        """
+        if not getattr(self.backend, "supports_ddc_detect", False):
+            return None
+        try:
+            value = int(self.backend.get_input())
+        except Exception as exc:  # noqa: BLE001 - 读失败只是少一条证据
+            log.debug("DDC 直读当前输入失败：%s", exc)
+            return None
+        return self.host_of_value(value) or None
+
+    def _commit_read_host(self, host: str) -> None:
+        """把直读结果落进状态。直读是即时真值，不需要两轮确认。"""
+        with self._lock:
+            self._source_checked = True
+            self._monitor_absent = False      # 答得上话，显示器肯定活着
+            self._ever_seen_monitor = True
+            changed = host != self._display_source
+            self._display_source = host
+            self._current_source = host
+        if changed:
+            log.info("显示器直报当前输入 → 画面在 %s（DDC 直读 0x60）", host)
+
     def detect_source(self) -> str | None:
-        """按「显示器还在不在本机」推断画面现在属于哪台机器。
+        """推断画面现在属于哪台机器：**先直读，读不了再走枚举推断**。
+
+        直读（`_read_host`）可靠时一步到位；读不了才退回老三样——
 
         显示器只会在它当前选中的输入端被枚举到：
           · 能枚举到这台屏 → 画面在本机
@@ -244,6 +278,9 @@ class SwitchController:
         第三条是 ISSUE-001：以前只有前两条，于是「没接显示器」被硬说成
         「画面在 Windows」。返回值 None 仍然表示这一轮判断不了（枚举异常）。
         """
+        host = self._read_host()
+        if host:
+            return host
         try:
             monitors = self._monitors()
         except Exception as exc:  # 枚举失败不代表画面变了，直接放弃这一轮
@@ -330,8 +367,17 @@ class SwitchController:
 
         可重复调用：启动时先喂一次（此时同步引擎还没挂上，`remote_ready` 为空），
         引擎连上后再喂一次，冷启动「屏在对端」的情形才能立刻判对，而不是等轮询。
+
+        直读可用时显示器一句话就说清归属，`monitors` 只作读失败时的兜底。
         """
-        detected = self.classify(monitors)
+        detected = self._read_host()
+        if not detected:
+            detected = self.classify(monitors)
+        else:
+            with self._lock:
+                self._source_checked = True
+                self._monitor_absent = False
+                self._ever_seen_monitor = True
         with self._lock:
             self._display_source = detected if detected is not None else SOURCE_UNKNOWN
             if detected not in (None, SOURCE_UNKNOWN):
@@ -361,7 +407,22 @@ class SwitchController:
             return
         if time.monotonic() - self._last_set_at < self.detect_settle_s:
             return                                 # 自己刚切完，等显示器真正切走/切回
-        detected = self.detect_source()
+        # 直读优先：显示器亲口报输入，是即时真值，一轮就落状态。
+        # 之前「phantom 屏让 CG 枚举恒真 → 8 秒后误报画面已在 mac」的假阳性
+        # 只存在于枚举推断链里，直读没有这个问题。
+        host = self._read_host()
+        if host is not None:
+            self._commit_read_host(host)
+            return
+        # 直读不可用才走枚举推断（不走 detect_source()，避免把 DDC 重试链跑两遍）
+        try:
+            monitors = self._monitors()
+        except Exception as exc:  # 枚举失败不代表画面变了，直接放弃这一轮
+            log.debug("检测画面归属失败：%s", exc)
+            self._last_detected = None
+            self._confirm = 0
+            return
+        detected = self.classify(monitors)
         if detected is None:
             self._last_detected = None
             self._confirm = 0
