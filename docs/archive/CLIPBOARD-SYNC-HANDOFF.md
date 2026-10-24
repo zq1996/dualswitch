@@ -129,7 +129,7 @@ dualswitch clip send "从 Mac 推过去"
 
 ### 2.4 最后做 10 项人工验证
 
-`docs/CLIPBOARD-SYNC-LOG.md` 第 4 节那张表，两台机器一起逐条打勾。这才是唯一需要用户动手的环节。
+`CLIPBOARD-SYNC-LOG.md` 第 4 节那张表，两台机器一起逐条打勾。这才是唯一需要用户动手的环节。
 
 ---
 

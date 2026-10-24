@@ -1,7 +1,7 @@
 # macOS 客户端界面设计
 
 > 2026-10-17 · 应用显示名 **屏幕切换**（包名 / CLI 仍是 `dualswitch`）
-> 参考 `docs/UI-DESIGN.md`（Windows 端）与 `docs/PLATFORM-SPLIT.md`（代码分层）
+> 参考 `UI-DESIGN.md`（Windows 端）与 `docs/PLATFORM-SPLIT.md`（代码分层）
 > 实现：`src/dualswitch/ui/chrome/mac.py`（外观真源）+ 共享的 `window/settings/widgets`
 
 ---
@@ -158,7 +158,7 @@ mac 的 `CGEventTap` 天生能区分左右，所以不需要 Windows 那套低�
 | 状态栏 | 底部两个圆角 | 无圆角（系统窗口不带圆角内容区） | — |
 
 其余（卡片 11–13px 圆角、`#E5E9F1` 描边、绿色指示灯、31px 主机名、间距 14/18）两端一致，
-见 `docs/UI-DESIGN.md` 第 4 节。
+见 `UI-DESIGN.md` 第 4 节。
 
 ---
 

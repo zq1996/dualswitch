@@ -1,7 +1,7 @@
 # 画面归属 与 对端代发切屏 · 现状与整改方案
 
 > 2026-10-24 立。**本文取代以下文档里的「结论」部分**，有冲突以本文为准：
-> `INVESTIGATION-INPUT-BOUNCE.md`、`TEST-PEER-DISPATCH.md`、`REMOTE-SWITCH.md` §2。
+> `archive/INVESTIGATION-INPUT-BOUNCE.md`、`archive/TEST-PEER-DISPATCH.md`、`REMOTE-SWITCH.md` §2。
 > 本文的每条结论都来自**真机实测**或**代码定位**，不以旧文档为依据。
 
 ---
@@ -69,7 +69,7 @@ Windows 上唯一可信的信号是 `VCP 0x60` 的**读数**（17/18 跟随物�
 
 ### 1.4 本机 DDC 写通道始终有效，不受「画面在哪」影响（2026-10-24 真机推翻旧假设）
 
-**旧假设**（本文旧版 / `ddc/macos.py` 旧注释 / `INVESTIGATION-INPUT-BOUNCE.md` B2）：
+**旧假设**（本文旧版 / `ddc/macos.py` 旧注释 / `archive/INVESTIGATION-INPUT-BOUNCE.md` B2）：
 「屏在 HDMI 时，USB-C 上的 `m1ddc set input` 返回 0 是**假成功**——打在一个没在监听的
 输入口上」。
 

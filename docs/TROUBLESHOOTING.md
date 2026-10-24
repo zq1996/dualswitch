@@ -307,3 +307,76 @@ dualswitch clip pair --pin 123456   # 无界面路径：两端输入同一个码
 > 注意：`clip pair` 是**两端同一个码**，界面配对是**一端显示、一端输入**。两条路径产出的 psk
 > 相同（同一个 PIN → 同一个 key），可以混用，但界面上的「已配对」状态要靠 `peer_device`，
 > 纯 CLI 配对的老配置会显示「已配对（旧版配置）」并提示重新配对。
+
+---
+
+## 11. 切屏时鼠标不跟着走（罗技 Easy-Switch 联动）
+
+前提：`mouse_switch.enabled = true`，且**两端都配了槽位**。该功能默认关闭。
+
+### 11.1 先看日志，别猜
+
+```bash
+# Windows
+findstr "鼠标" "%APPDATA%\dualswitch\logs\dualswitch.log"
+
+# macOS
+grep "鼠标" ~/Library/Application\ Support/dualswitch/logs/dualswitch.log | tail
+```
+
+| 日志 | 含义 | 处理 |
+|---|---|---|
+| 一条都没有 | 配置没加载 | 改完配置要**重启应用**（只在启动时读一次） |
+| `切鼠标跳过：未启用` | 配置没读到 | 核对路径：Windows `%APPDATA%\dualswitch\config.json`；macOS `~/Library/Application Support/dualswitch/config.json` |
+| `切鼠标跳过：未安装 hidapi` | 依赖没装到**运行应用的解释器** | 见 §11.2 |
+| `切鼠标跳过：本机枚举不到罗技鼠标` | 鼠标在对端或没连 | 正常状态，见 §11.3 |
+| `切鼠标跳过：槽位 N 超过设备主机数` | 该槽位没配对 | 先手动配对，或改 `peer_slot` |
+| `鼠标联动 → ok: 已发送切换到槽位 N` | 命令已发出 | 目标机 1–3 秒后可用 |
+
+### 11.2 hidapi 装到了别的解释器（macOS 最常见）
+
+应用可能跑在 venv，而 `pip3` 指向 Homebrew：
+
+```bash
+ps -eo command | grep "[d]ualswitch" | head -3   # 应用的真实解释器
+which python3                                     # pip3 装到哪
+```
+
+两者不一致就把 hidapi 装进应用那个（venv 里不需要 `--break-system-packages`）：
+
+```bash
+<应用的解释器> -m pip install hidapi
+```
+
+装完**必须重启进程**——`import hid` 只在模块加载时执行一次。
+
+### 11.3 为什么只有一个方向生效
+
+命令只能由鼠标当前连接的主机发出：
+
+- 画面 Windows → Mac：**Windows** 推（鼠标还在它身上）✅
+- 画面 Mac → Windows：**Mac** 推 ✅
+- 只配了一端 → 单向可用，另一个方向鼠标不跟
+
+两端槽位必须**互为镜像**：
+
+| 端 | local_slot | peer_slot |
+|---|---|---|
+| Windows | 1 | 2 |
+| Mac | 2 | 1 |
+
+### 11.4 鼠标失联了怎么救
+
+配错槽位切到空槽时，鼠标会「消失」（两台电脑都不响应）。
+
+**按鼠标底部的 Easy-Switch 物理键**切回有配对的槽位。没有别的办法——
+软件层已经够不着它了。
+
+### 11.5 单独验证设备（不经过应用）
+
+```bash
+logi-mouse.bat probe        # Windows
+sh logi-mouse.sh probe      # macOS
+```
+
+能打出「主机数=3 当前槽位=N」说明设备侧正常，问题在应用配置或依赖。

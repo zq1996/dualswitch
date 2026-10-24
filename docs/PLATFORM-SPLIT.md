@@ -22,7 +22,7 @@
 | 冲突概率 | 每次合并 3–9 个文件重叠 | **0**（剩下一行选路，两端都不需要改） |
 | 代价 | — | 约 2200 行重复代码；**跨端一致性靠文档 + 各自的自测，不靠代码** |
 
-> 因此：**两端视觉要一致的地方，写进 `docs/UI-DESIGN.md` / `docs/UI-DESIGN-MAC.md`；
+> 因此：**两端视觉要一致的地方，写进 `docs/archive/UI-DESIGN.md` / `docs/archive/UI-DESIGN-MAC.md`；
 > 在一端修了一个 bug，先判断另一端是否同样存在**（两棵树不会自动同步）。
 > 用例层面已经钉住"公开接口必须对齐"（`tests/test_chrome_contract.py::test_ui_trees_expose_the_same_api`），
 > 但**行为**上的差异是允许的、也是刻意保留的。
@@ -222,4 +222,4 @@ src/dualswitch/
 - 2026-10-17 **平台分层落地**：新增 `ui/chrome/`（base / win / mac），把标题栏、托盘/菜单栏、
   配色字体、平台文案、图标候选、打开路径全部下沉。共享文件删除全部平台分支；
   新增 `tests/test_chrome_contract.py`（契约字段 + 无平台分支双保险）。
-  同步产物：`docs/UI-DESIGN-MAC.md`（mac 端界面规格）。
+  同步产物：`docs/archive/UI-DESIGN-MAC.md`（mac 端界面规格）。

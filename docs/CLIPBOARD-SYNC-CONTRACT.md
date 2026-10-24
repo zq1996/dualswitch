@@ -401,7 +401,7 @@ class SyncEngine:
 
 ### M4 · UI（页面共享 / 入口各归各的）
 
-设计稿与规格见 [`docs/UI-DESIGN-CLIPBOARD.md`](UI-DESIGN-CLIPBOARD.md)，
+设计稿与规格见 [`docs/archive/UI-DESIGN-CLIPBOARD.md`](archive/UI-DESIGN-CLIPBOARD.md)，
 可交互稿 `design/clipboard/index.html`（`?page=clip` 剪贴板页，`?empty=1` 空态）。
 
 **硬规则：不新增窗口。** 剪贴板是 `MainWindow.pages`（`QStackedWidget`）里的一页，
@@ -564,7 +564,7 @@ dualswitch clip selftest               # 本机格式矩阵
 - [ ] `pytest -q` 全套 96+ 用例仍全绿（不许打挂既有功能）
 - [ ] `tools/check_mac_ui.py` 仍 34 项通过
 - [ ] `python tools/clip_sync_selftest.py` → 7 个场景全 PASS
-- [ ] 第 7 节表格里 10 项人工验证通过，结果记到 `docs/CLIPBOARD-SYNC-LOG.md`
+- [ ] 第 7 节表格里 10 项人工验证通过，结果记到 `docs/archive/CLIPBOARD-SYNC-LOG.md`
 
 ---
 

@@ -2,7 +2,7 @@
 
 > 2026-10-21 · 解析对象 `/Applications/Frset.app`（1.3.12，com.maoux.frset）
 > 工具：REA 6.7.0（`inspect-asset-catalog` / `inspect-desktop-application`）+ `assetutil` + `plutil` + `nm`
-> 目的：给 `docs/UI-DESIGN-MAC.md` 的重做提供可对齐的视觉规格依据
+> 目的：给 `docs/archive/UI-DESIGN-MAC.md` 的重做提供可对齐的视觉规格依据
 > 证据文件：`design/frset-ref/zh-Hans.json`（793 条中文文案）、`/tmp/frset-assets.json`（assetutil 全量导出）
 
 ---

@@ -8,7 +8,7 @@
 > 2026-10-18 · 应用显示名 **屏幕切换**
 > 可交互稿：`design/clipboard/index.html`
 > 　`?page=clip` 直接进剪贴板页 · `?empty=1` 看空态 · 打开后点标题栏的剪贴板图标可翻页
-> 依赖：`docs/UI-DESIGN.md`（Windows 外观）、`docs/UI-DESIGN-MAC.md`（mac 交互）、`docs/PLATFORM-SPLIT.md`（分层）
+> 依赖：`UI-DESIGN.md`（Windows 外观）、`UI-DESIGN-MAC.md`（mac 交互）、`docs/PLATFORM-SPLIT.md`（分层）
 > 契约：`docs/CLIPBOARD-SYNC-CONTRACT.md`（数据从哪来）
 
 ---

@@ -28,7 +28,7 @@
    需要看某个控件长什么样就打开它对照（浏览器直接开）。
 3. 设计背景（了解为什么这么设计）：`design/redesign/NOTES-v2.md`、`design/frset-ref/DESIGN-REFERENCE.md`。
 4. 契约与既有约束：`docs/CLIPBOARD-SYNC-CONTRACT.md`（同步只做文字+图片，**文件是 P2 不做**）、  
-   `docs/REMOTE-SWITCH.md`（远端代发）、`docs/UI-DESIGN-CLIPBOARD.md`（同步四态语义、行规格红线）。
+   `docs/REMOTE-SWITCH.md`（远端代发）、`docs/archive/UI-DESIGN-CLIPBOARD.md`（同步四态语义、行规格红线）。
 
 ## 后端接口（只调用，不修改这些文件）
 

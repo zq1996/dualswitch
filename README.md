@@ -1,7 +1,7 @@
 # dualswitch · 双系统单显示器切换助手
 
 > 应用显示名：**屏幕切换**（包名、CLI、配置文件目录仍为 `dualswitch`）
-> Windows 界面设计稿见 [design/windows/index.html](design/windows/index.html) 与 [docs/UI-DESIGN.md](docs/UI-DESIGN.md)；
+> Windows 界面设计稿见 [design/windows/index.html](design/windows/index.html) 与 [docs/archive/UI-DESIGN.md](docs/archive/UI-DESIGN.md)；
 > 应用图标见 [design/icon/](design/icon/)（透明底 1024 母版 + 多尺寸 ICO）。
 
 一台显示器同时接 Windows（HDMI）和 Mac（全功能 USB-C / DP Alt Mode），
@@ -100,6 +100,31 @@ dualswitch run                        # 常驻：菜单栏 + 右 Option + Space
 - **回读不阻塞**。切到 Mac 的瞬间 Windows 已经看不到显示器，回读必然失败，所以默认只写日志。
 - **失败不崩**。`set_input` 的异常全部被工作线程兜住，进程继续常驻，托盘仍可手动切换。
 
+### 3.1 鼠标联动（可选）
+
+切屏时顺带把罗技鼠标的 Easy-Switch 切过去，省掉再按一次鼠标底部按键。
+
+底层是 HID++ 2.0 的 `CHANGE_HOST`（`0x1814`）——罗技自己的 Flow 也是这么实现的。
+实测设备：POP Mouse（蓝牙 PID `0xB030`），3 个主机槽位，当前槽位可读。
+
+**一条物理约束决定了它的形状**：命令只能由鼠标**当前连着的那台**电脑发出，
+切走后原主机再也够不着这只鼠标。所以：
+
+| 场景 | 谁执行 | 可行 |
+|---|---|---|
+| 画面 Windows → Mac | Windows（鼠标还在它身上） | ✅ |
+| 画面 Mac → Windows | Mac（鼠标还在它身上） | ✅ |
+| 画面 Mac → Windows，指望 Windows 拉回鼠标 | — | ❌ 够不着 |
+
+一句话概括：**谁身上还挂着鼠标、而画面已经走了，就由谁推出去。**
+
+两端各配一份，槽位互为镜像。画面回本机时本机什么都不做——由对端在它自己的
+切换路径里推回来（对端代发最终也走 `set_input_local`，链路自动闭合）。
+
+失败一律安静降级：没装 hidapi / 没连鼠标 / 槽位没配对 / 设备被占用，都只写日志，
+**不影响切屏本身**。完整实测与约束见
+[docs/FEASIBILITY-LOGI-EASYSWITCH.md](docs/FEASIBILITY-LOGI-EASYSWITCH.md)。
+
 ---
 
 ## 4. 配置
@@ -136,6 +161,32 @@ dualswitch run                        # 常驻：菜单栏 + 右 Option + Space
 | `ddc_backend` | `auto` / `dxva2` / `m1ddc` / `command` / `mock` |
 | `command_template` | `ddc_backend=command` 时的外部命令，如 `["ddcutil","setvcp","60","{value}"]` |
 | `dry_run` | `true` 时只记录日志，不发 Set（演练用） |
+| `mouse_switch` | 切屏时联动罗技鼠标 Easy-Switch，见下 |
+
+### 鼠标联动配置
+
+默认**关闭**——配错槽位会让鼠标失联（只能按鼠标底部物理键恢复），所以不默认开。
+两端各写自己的视角，槽位互为镜像：
+
+```json
+// Windows 端
+{ "mouse_switch": { "enabled": true, "local_slot": 1, "peer_slot": 2 } }
+
+// Mac 端
+{ "mouse_switch": { "enabled": true, "local_slot": 2, "peer_slot": 1 } }
+```
+
+| 字段 | 说明 |
+|---|---|
+| `enabled` | 总开关 |
+| `local_slot` | 本机占用的槽位（1–3），等于鼠标底部第几颗灯 |
+| `peer_slot` | 对端占用的槽位（1–3） |
+| `settle_ms` | 切屏后等多久再动鼠标（默认 800），给显示器切换留时间 |
+
+前提：装了 hidapi（`pip install -e ".[mouse]"`，或安装时带上 `mouse` extra），
+且**必须装到运行应用的那个解释器**——装到另一个 python3 等于没装。
+
+改完配置要重启应用（配置只在启动时读一次）。
 
 热键冲突（被输入法/截图工具占用）时，`run` 会打印可操作提示并继续运行，托盘菜单仍可用。
 
@@ -221,18 +272,21 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\install_autostart.ps1
 dualswitch/
 ├── src/dualswitch/
 │   ├── config.py          配置加载/校验/落盘
-│   ├── app.py             切换编排（热键→Set→异步回读）
+│   ├── app.py             切换编排（热键→Set→异步回读→鼠标联动）
 │   ├── tray.py            托盘/菜单栏（pystray，无窗口模式）
-│   ├── ui/                图形界面（PySide6）：window/settings/widgets/theme/runner
+│   ├── ui/                图形界面（PySide6）：win2/（Windows v2）、mac2/（macOS v2）、chrome/（平台差异）
+│   ├── mouse/             罗技鼠标 Easy-Switch 联动（logi_host.py，HID++ 0x1814）
+│   ├── clipboard/         跨端剪贴板（windows.py / macos.py + 同步引擎在 sync/）
 │   ├── cli.py             命令行
 │   ├── ddc/               windows.py(dxva2) / macos.py(m1ddc) / command.py / mock.py
 │   └── hotkey/            windows.py(RegisterHotKey+低级钩子) / macos.py(CGEventTap)
-├── tests/                 96 个用例，无需硬件
-├── tools/                 bench_readonly.py / e2e_hotkey.py / diag_macos_hotkey.py / verify_m1ddc.sh
-├── design/                windows/index.html（界面设计稿）+ icon/（透明母版 / PNG / ICO）
+├── tests/                 516 个用例，无需硬件（鼠标联动用 fake HID 设备）
+├── tools/                 logi_host_switch.py / bench_readonly.py / e2e_hotkey.py / diag_macos_hotkey.py …
+├── design/                windows/index.html（v1 设计稿）+ redesign/（v2 规格与原型）+ icon/
 ├── start-ui.bat           双击启动图形界面（无控制台）
+├── logi-mouse.bat/.sh     单独切罗技鼠标主机槽位（排障用，Windows 用 .bat，macOS 用 sh）
 ├── packaging/             windows + macos 打包与自启（macos/install-app.sh 装进「应用程序」）
-└── docs/                  现状文档（CONTRACT / PLATFORM-SPLIT / UI-DESIGN* / TROUBLESHOOTING）+ archive/（历史记录）
+└── docs/                  现状文档（见 docs/README.md）+ archive/（历史记录，不再更新）
 ```
 
 ---
@@ -249,6 +303,13 @@ dualswitch/
 - macOS 关窗口后程序坞图标消失、只留菜单栏图标（`NSApplicationActivationPolicy` 切换），
   要找回来点菜单栏图标 →「打开主界面」。
 - CrossPaste 的 mDNS 发现依赖 UDP 5353，被路由器/防火墙拦截时改用手动 IP 连接（与本工具无关）。
+- **鼠标联动只支持罗技多主机设备**（暴露 HID++ `CHANGE_HOST` 0x1814）。单模鼠标、其他品牌、
+  以及走接收器但固件不支持的型号都用不了——用不了只是不切鼠标，切屏不受影响。
+- **`local_slot` / `peer_slot` 配错会让鼠标失联**（切到没配对的空槽），只能按鼠标底部的
+  物理 Easy-Switch 键恢复。所以该功能默认关闭，且要求显式配置。
+- 切过去后目标机需要 **1–3 秒蓝牙重连**，这段时间鼠标不可用。
+- hidapi 必须装在**运行应用的那个解释器**里。macOS 上装到 Homebrew python3 而应用跑在
+  另一个 venv 是最常见的踩坑方式，日志会写「未安装 hidapi」。
 
 ---
 

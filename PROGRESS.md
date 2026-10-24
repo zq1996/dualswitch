@@ -69,7 +69,7 @@
 >
 > **并行开发中：跨端剪贴板同步（P0 文字 + P1 图片）**
 > 分工与契约见 [`docs/CLIPBOARD-SYNC-CONTRACT.md`](docs/CLIPBOARD-SYNC-CONTRACT.md)。
-> 界面设计与可交互稿见 [`docs/UI-DESIGN-CLIPBOARD.md`](docs/UI-DESIGN-CLIPBOARD.md) 与
+> 界面设计与可交互稿见 [`docs/archive/UI-DESIGN-CLIPBOARD.md`](docs/archive/UI-DESIGN-CLIPBOARD.md) 与
 > `design/clipboard/index.html`（浏览器直接打开）。
 > **Windows 端 AI 先读该文档第 0 节**：只写 `src/dualswitch/clipboard/windows.py` 与
 > `tests/test_clipboard_windows.py`，其余文件一律只读。共用契约 `clipboard/base.py`
@@ -78,7 +78,7 @@
 > `DUALSWITCH_CLIP_TEST=real` 跑）。
 > **剪贴板同步：macOS 端 P0（文字）+ P1（图片）已全部实现并自测通过**，Windows 端后端仍未落地
 > （`clipboard/windows.py` 归 Windows 侧）。两端联调的 10 项人工验证待做，见
-> [`docs/CLIPBOARD-SYNC-LOG.md`](docs/CLIPBOARD-SYNC-LOG.md)。
+> [`docs/archive/CLIPBOARD-SYNC-LOG.md`](docs/archive/CLIPBOARD-SYNC-LOG.md)。
 >
 > 一句话状态：**两端都已落地可用。Windows 侧切屏 / 热键 / DDC / 回读 / 托盘 / 图形界面 / onedir 打包全部实测通过；
 > macOS 侧界面（菜单栏 + 原生窗口 + 四页设置）跑在真机上，`⌥ Space` 全局热键已修复并通过用户实测
@@ -120,11 +120,11 @@
 > 合并口径：页面以 macOS 端那版为准（引擎驱动），Windows 后端 + 标题栏入口 + 本机记录源
 > 全部保留；引擎起不来时页面退回 `LocalClipFeed`，不再是死入口。
 >
-> 👉 **下一步（mac 侧）**：等 Windows 后端落地后做 `docs/CLIPBOARD-SYNC-LOG.md` 里那 10 项人工联调；
+> 👉 **下一步（mac 侧）**：等 Windows 后端落地后做 `docs/archive/CLIPBOARD-SYNC-LOG.md` 里那 10 项人工联调；
 > 同时继续日常观察热键长时间可用性（tap 被系统禁用会自动重开，日志里有
 > `事件 tap 回调超时…已重新启用` 与 `激活策略 → Accessory` 可查）。
 > Windows 端双击 `dist\dualswitch\dualswitch.exe` 即进主界面（整个文件夹一起用），右键托盘可退出。
-> 界面/分层改动请看 `docs/UI-DESIGN-MAC.md` 与 `docs/PLATFORM-SPLIT.md`（后者是给另一端 AI 读的契约）。
+> 界面/分层改动请看 `docs/archive/UI-DESIGN-MAC.md` 与 `docs/PLATFORM-SPLIT.md`（后者是给另一端 AI 读的契约）。
 
 ---
 
@@ -188,9 +188,9 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 | 8 | 真机切屏验收 | ✅ **双向闭环** | `Set 18`→Mac（回读确认 64ms）；`Set 17`→Windows（回读确认 64ms）；热键真实触发也已验证 |
 | 9 | macOS 实机验证 | ✅ 切屏已验证 | `m1ddc set input 17` 成功；USB-C 真实值 = 18（需求文档的 27 是错的） |
 | 10 | macOS 端安装 dualswitch 本体 | ✅ 完成 | `pip install -e ".[tray,macos]"` + 辅助功能授权 + 打包成 `/Applications/屏幕切换.app` |
-| 11 | Windows 界面设计稿 + 应用图标 | ✅ 完成 | `design/windows/index.html`、`design/icon/`、`docs/UI-DESIGN.md` |
+| 11 | Windows 界面设计稿 + 应用图标 | ✅ 完成 | `design/windows/index.html`、`design/icon/`、`docs/archive/UI-DESIGN.md` |
 | 12 | Windows 图形界面实现（PySide6） | ✅ 完成并跑通 | `src/dualswitch/ui/`，`dualswitch ui`；64 个用例全绿 |
-| 13 | macOS 界面设计 + 实现（菜单栏 + 原生窗口） | ✅ 完成 | `docs/UI-DESIGN-MAC.md`、`ui/chrome/mac.py`；`⌘,` / `⌥ Space` / 菜单栏右键菜单 |
+| 13 | macOS 界面设计 + 实现（菜单栏 + 原生窗口） | ✅ 完成 | `docs/archive/UI-DESIGN-MAC.md`、`ui/chrome/mac.py`；`⌘,` / `⌥ Space` / 菜单栏右键菜单 |
 | 14 | 平台分层（Windows / mac 不撞同一文件） | ✅ 完成 | `ui/chrome/{base,win,mac}.py` + `docs/PLATFORM-SPLIT.md` + `tests/test_chrome_contract.py` |
 | 15 | macOS DDC 后端修缺陷（多屏序号 / -118 读失败） | ✅ 完成 | `ddc/macos.py`：自动按名字选屏、内置屏过滤、读失败给人话提示 |
 | 16 | macOS 打包（.app / .icns / 菜单栏模板图） | ✅ 脚本与资源就绪 | `packaging/macos/build.sh`、`design/icon/build_icns.py`、`build_menubar_icon.py`；未实跑 PyInstaller |
@@ -206,8 +206,8 @@ source ~/.workbuddy/binaries/python/envs/default/bin/activate && dualswitch ui  
 | 26 | 剪贴板 M2：网络层 | ✅ 完成 | `sync/{protocol,transport,discovery,engine}.py`：帧/加密/对称 TCP/选举/退避重连/环抑制三层 |
 | 27 | 剪贴板 M3：接线 | ✅ 完成 | `config.ClipboardConfig`、`SwitchController.on_before_switch`、CLI `dualswitch clip ...` |
 | 28 | 剪贴板 M4：界面 | ✅ 完成 | `ui/clipboard_page.py`（列表/预览/操作栏/空态）挂进主窗口；mac 列表 5 行、高度 620 |
-| 29 | 剪贴板 M5：自测工具 | ✅ 完成 | `tools/clip_sync_selftest.py` 7/7、`tools/clip_selftest.py` 7/7；结果见 `docs/CLIPBOARD-SYNC-LOG.md` |
-| 30 | 跨端剪贴板 · 双端联调 | 🟡 前置全绿，等真机 | Windows 侧四道自测全过：契约 real 14/3、`clip_selftest` 6 PASS/1 MANUAL、`clip_sync_selftest` **7/7**、全量 216 passed；只剩「两端各 `clip pair` 一次 + 10 项人工验证」（需两台机器 + 用户在场），清单见 `docs/CLIPBOARD-SYNC-LOG.md` 第 4 节 |
+| 29 | 剪贴板 M5：自测工具 | ✅ 完成 | `tools/clip_sync_selftest.py` 7/7、`tools/clip_selftest.py` 7/7；结果见 `docs/archive/CLIPBOARD-SYNC-LOG.md` |
+| 30 | 跨端剪贴板 · 双端联调 | 🟡 前置全绿，等真机 | Windows 侧四道自测全过：契约 real 14/3、`clip_selftest` 6 PASS/1 MANUAL、`clip_sync_selftest` **7/7**、全量 216 passed；只剩「两端各 `clip pair` 一次 + 10 项人工验证」（需两台机器 + 用户在场），清单见 `docs/archive/CLIPBOARD-SYNC-LOG.md` 第 4 节 |
 
 ---
 
@@ -514,6 +514,20 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-24 21:40 **鼠标联动真机验收通过（双向）**。Windows→Mac：屏幕与鼠标一起过去；
+  Mac→Windows：同样跟随。至此「点切屏按钮，鼠标跟着走」完整可用。
+  · 排障过程暴露两个真问题，都已修：
+    ① **默认值不落盘**——`config.json` 里没有 `mouse_switch` 段时走默认 `false`，
+    用户打开配置文件根本看不到这项，无从配置。当前靠文档 + 代写配置绕过，
+    后续应在设置页给开关，或 `load()` 时补写默认段。
+    ② **hidapi 装到别的解释器**——macOS 上应用跑在
+    `~/.workbuddy/binaries/python/envs/default/bin/python3`，而 `pip3` 指向 Homebrew，
+    日志只报「未安装 hidapi」。已加 `mouse` extra 并改 README 安装命令；
+    排障步骤写进 `TROUBLESHOOTING.md` §11（含 `ps -eo command | grep "[d]ualswitch"` 定位解释器）。
+  · 文档整理：`docs/README.md` 新建为**现行文档索引**；6 份已作废文档移入 `docs/archive/`
+    （v1 界面设计 ×3、输入源回弹调查、对端代发旧验收、剪贴板验证记录），
+    并批量修正了跨文档引用路径。
+
 - 2026-10-24 21:15 **鼠标联动：切屏时顺带切罗技 Easy-Switch**（可行性 → 实现）。
   · **实测结论**（POP Mouse 蓝牙 PID `0xB030`）：HID++ 走 `usage page 0xFF43`，
     `CHANGE_HOST` 0x1814 运行时索引 **0x0A**，3 个槽位；Windows 真机切槽 1→2 成功，
@@ -575,7 +589,7 @@ dualswitch/
     （在线但未激活要排除 / 判不出时先问对端 / 对端拒绝时改回本地）。
 
 - 2026-10-23 **修「对端代发从来没好用过」**（用户报告：Mac 端点两个方向都没反应）。
-  调查过程与已证伪的假设见 `docs/INVESTIGATION-INPUT-BOUNCE.md`（该文档第 0 节已补结论）。
+  调查过程与已证伪的假设见 `docs/archive/INVESTIGATION-INPUT-BOUNCE.md`（该文档第 0 节已补结论）。
   · **真因一（目标算错）**：`_resolve_target()` 在 `switch_mode="other"`（默认值）下
     **无条件**返回 `other_host()`。Mac 端于是永远只会把画面「送出去」：按钮写
     「切换到 Mac」，实际发 `VCP=17`，屏一动不动。改成**画面在哪台就切到另一台**
@@ -958,9 +972,9 @@ dualswitch/
     2. 副行是普通 `QLabel`，`minimumSizeHint` 是整段文字宽度，**把行撑到 500+**，
        在 404 宽的可视区里把药丸和删除按钮直接挤出屏幕 —— 旧版页面看起来"总少一截"
        就是这个原因。副行改用 `ElidedLabel`，并加了守卫用例 `test_row_fits_visible_area`。
-  · 文档：`docs/UI-DESIGN-CLIPBOARD.md`（版面图 / 行规格 / 预览 / 交互）、
+  · 文档：`docs/archive/UI-DESIGN-CLIPBOARD.md`（版面图 / 行规格 / 预览 / 交互）、
     `docs/PLATFORM-SPLIT.md`（`PLATFORM_LOGO`、`SETTINGS_IN_WINDOW` 两端都 True）、
-    `docs/UI-DESIGN-MAC.md`（去掉「Windows 仍是独立设置窗口」的旧说明）。
+    `docs/archive/UI-DESIGN-MAC.md`（去掉「Windows 仍是独立设置窗口」的旧说明）。
 
 - 2026-10-18 18:2x **[merge] 同步 `056c5cc`（macOS 端清理合并残留）+ Windows 侧收尾**。
   mac 端发现 `ui/window.py` / `ui/runner.py` 里各留了两份 `attach_clipboard` / `on_clipboard_page` /
@@ -1269,7 +1283,7 @@ dualswitch/
   `build_app_menu()` 用 `QMenuBar` 提供 `⌘,` / `⌘H` / `⌘Q`；`activateIgnoringOtherApps_` 让窗口真的到前台。
   主窗口改系统标题栏（`NATIVE_CHROME=True`，无自绘标题栏），设置行下沉到内容区「设置… ⌘ ,」。
   无 pyobjc 时自动退化到 `QtStatusItem`（Dock 里能看到图标，功能不完整但不崩）。
-  规格见 `docs/UI-DESIGN-MAC.md`。
+  规格见 `docs/archive/UI-DESIGN-MAC.md`。
 - 2026-10-17 20:30 **Windows 打包改用 onedir（onefile 在该机型不可用）**。
   onefile 启动时要往 `%TEMP%` 解压 `_MEIxxxxxx`，本机实测**双击约有 3 成概率报
   「Could not create temporary directory!」**（连续点 start 5 次失败 2 次；从脚本启动反而不复现，
@@ -1308,7 +1322,7 @@ dualswitch/
   单击误触率太高：`_on_tray_activated` 只认 `QSystemTrayIcon.DoubleClick`，单击不做任何事。
   托盘提示补「（双击图标切换）」，避免单击没反应被当成坏了；右键菜单不变。
   新增用例 `test_tray_double_click_switches_single_click_does_not`，73 全绿。
-  `docs/UI-DESIGN.md` 的交互表与待确认项同步更新（原第 7 节问题 2 标记为已定为双击）。
+  `docs/archive/UI-DESIGN.md` 的交互表与待确认项同步更新（原第 7 节问题 2 标记为已定为双击）。
 - 2026-10-17 19:15 **主页面 / 托盘的热键文案统一刷新**。
   原来热键文案只在 `on_config_saved` 一处手写刷新，托盘提示与菜单项「热键：xxx」更是启动时生成后永不更新；
   任何一条路径漏掉，界面就会停在旧值。
@@ -1401,7 +1415,7 @@ dualswitch/
   应用显示名定为 **屏幕切换**（包名 / CLI 仍为 `dualswitch`）。
   新增 `design/windows/index.html`（主窗口 / 设置 / 三种异常态 / 托盘菜单 / 图标规范，浅色 Fluent 440×600）；
   `design/icon/`（512 栅格矢量母版 + 10 档 PNG + 9 尺寸 ICO，三档字形：≤20 只留箭头、24–32 屏幕+箭头、≥40 加支架）；
-  `docs/UI-DESIGN.md`（token、页面规格、实现路径）。UI 代码尚未编写。
+  `docs/archive/UI-DESIGN.md`（token、页面规格、实现路径）。UI 代码尚未编写。
 - 2026-10-17 16:30 **双向闭环，VCP 值定案 `{windows:17, mac:18}`**。
   代码默认值、示例配置、测试、README、验证文档、扫描脚本已统一改为 18。
   真机实测：`Set 18` 回读确认 63.9ms，`Set 17` 回读确认 64.4ms，热键真实触发也通过。
