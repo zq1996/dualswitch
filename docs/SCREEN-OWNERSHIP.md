@@ -145,20 +145,23 @@ owner(v) = cfg.sources 反查：17 → "windows"，18 → "mac"（不写死，�
 - **删除**「枚举到 ⇒ 画面在本机」这条捷径。`_ever_seen_monitor` 只用来回答「这块屏存在过吗」，
   不再参与归属。
 
-### 3.2 切换动作不依赖归属
+### 3.2 切换 = 四个显式动作（不再有「自动判断该谁发」）
 
-```
-用户点了「切到 X」→ v = target_value(X)
-   1) 本机 backend.set_input(v)                     # 记 ok/error，不当成功依据
-   2) 对端在线 → engine.request_switch(v)           # 同一个值，幂等
-   3) 任一端「已下达」即继续；两端都失败才报错（错误里带两端原因）
-   4) 进入验证（§3.3）
-```
+| 界面动作 | 实际做什么 |
+|---|---|
+| 本机发送 **17** | `backend.set_input(17)` |
+| 本机发送 **18** | `backend.set_input(18)` |
+| 请对端发送 **17** | `engine.request_switch(17)` |
+| 请对端发送 **18** | `engine.request_switch(18)` |
 
-- 不再有 `wants_here` / `picture_here` 这两个门；`_try_remote` 也不再被它们挡。
-- 两端发同一个值不会打架：握屏那端生效，另一端是 no-op。代价最多多 65ms + 一次往返。
-- 对端离线就跳过第 2 步（`remote_ready`），不白等 3 秒。
-- 副作用正向：Windows 端「本机 Set 假失败但显示器其实归 Mac 输入」这类场景，由第 2 步兜住。
+- **去掉「本机优先、失败才请对端」的隐式兜底**：谁发由用户点哪个按钮决定，日志和界面永远能对上
+  是哪条路。原来那套兜底的两个门（`wants_here` / `picture_here`）在这台硬件上恒真（§2.3），
+  实际从来没生效过，却让「点了为什么没反应」变得不可解释。
+- **也去掉「两端都发同一个值」的自动双发**（2026-10-24 决定）：`m1ddc` 的 Set 会返回 0 但没生效，
+  自动双发会让「到底哪条起了作用」不可见。显式两条路 = 一次点击就能复现或排除。
+- 「请对端发送」在对端离线时**按钮置灰**（`remote_ready`），点了也不会白等 3 秒。
+- 热键（⌥Space）不再猜方向：它等价于「请对端把我这边的值送回去」？——**不**。热键保留旧语义
+  `switch_mode`（默认送到另一台），因为它是肌肉记忆入口；按钮才是显式通道。
 
 ### 3.3 成功判定 = 读数变成目标值
 
@@ -168,15 +171,38 @@ owner(v) = cfg.sources 反查：17 → "windows"，18 → "mac"（不写死，�
 - 读到 = 目标值 ⇒ `confirmed`；超时（8s）⇒ `unconfirmed`，但仍保留「指令已下达」；
 - **`m1ddc` / `SetVCPFeature` 的返回码只说明「命令下了」，不说明「生效了」**。
 
-### 3.4 三态与界面
+### 3.4 页面规格（`design/redesign/switch-actions.html`，2026-10-24）
+
+```
+显示器                                    [对端在线]
+[屏] Q2790R3
+     2560×1440 · 75 Hz · HDMI 与 USB-C 各一根线
+     画面在 Windows · 对端读数 17 · 6 秒前      ← 拿不到就写「画面位置未知」
+
+[17] HDMI / Windows 侧     [本机发送 17]  [请对端发送 17]
+[18] USB-C / Mac 侧·本机   [本机发送 18]  [请对端发送 18]
+
+本机发不动时（画面在另一边），点同一行的「请对端发送」——由握着画面的那台发 DDC。
+✓ 上次 09:36 · 请对端切到 18 · 往返 142 ms · 已确认
+```
+
+| 元素 | 规则 |
+|---|---|
+| 大标题 | 是**显示器名**（确定的硬件），不是「当前画面」（猜的） |
+| 「画面在 X」 | 一行小字，**必须带出处与年龄**；拿不到就写「未知」，绝不猜 |
+| 两个 `本机发送` | 实心主色（直接动作） |
+| 两个 `请对端发送` | 白底描边 + 纸飞机图标；对端离线时置灰 |
+| 已删除 | 「强制切」按钮、两张可点击的设备卡（都只是「本机发送 X」的重复入口）、「切换到 X」单按钮 |
+| 底部注脚 | 上一次动作 + 耗时 + 验证结果（`已确认` / `回读不可用`） |
+
+### 3.5 三态只剩展示用途
 
 | 态 | 含义 | 界面 |
 |---|---|---|
-| `windows` / `mac` | 读数明确指向某端 | 顶栏显示「当前画面：X」 |
-| `unknown` | 两端都读不到（对端离线 / 屏没接） | 顶栏显示「不确定」，**不猜** |
+| `windows` / `mac` | 读数明确指向某端 | 小字「画面在 X」+ 绿点 |
+| `unknown` | 两端都读不到（对端离线 / 屏没接） | 小字「画面位置未知」+ 灰点，**不猜** |
 
-界面改成**两个固定按钮**：「切到 Mac」「切到 Windows」各一个，直接对应显式 target，
-不再由 `source_state` 反推方向。设备卡（`deviceClicked`）已经是显式目标，保留。
+归属**不再参与任何按钮的可用性或计算**——四个按钮永远可点（对端的仅在离线时灰）。
 
 ---
 
@@ -203,17 +229,25 @@ owner(v) = cfg.sources 反查：17 → "windows"，18 → "mac"（不写死，�
 |---|---|
 | `src/dualswitch/cli.py` | `_sees_monitor()` → `_owner_value() -> int \| None`（`backend.get_input()`，异常返回 None）；接 `engine.set_owner_probe` |
 | `src/dualswitch/sync/engine.py` | `_monitor_probe` 换成 owner 探针；`T_STATE` 收发 `input`；`peer_input(max_age)` |
-| `src/dualswitch/app.py` | `classify()` 重写（3.1）；`_execute()` 去 `wants_here`/`picture_here`（3.2）；`_readback` 改读数（3.3）；`_picture_here` 删除 |
-| `src/dualswitch/ddc/macos.py` | `active_monitors()` 保留但**不再被调用**（或标 deprecated，注释指向 §1.1） |
-| `src/dualswitch/ui/mac2/switch_page.py` | 两个固定按钮 + 顶栏三态 |
-| `src/dualswitch/ui/mac2/runner.py` | `do_switch(target)` 直连两个按钮；去掉 `_next_target()` 的方向推断 |
+| `src/dualswitch/app.py` | `classify()` 重写（3.1）；新增 `set_input_local(v)` / `switch_remote(v)` 两个显式入口（3.2）；`_readback` 改读数（3.3）；`_picture_here` / `_try_remote` 的自动兜底逻辑删除 |
+| `src/dualswitch/ddc/macos.py` | `active_monitors()` 保留但**不再被调用**（标 deprecated，注释指向 §1.1） |
+| `src/dualswitch/ui/mac2/switch_page.py` | 按 §3.4 重写：四动作按钮、删 `force_btn`、删 `DeviceCard` 两块、大标题改显示器名、「画面在 X」降级为带出处的小字 |
+| `src/dualswitch/ui/mac2/runner.py` | 四个 `Signal` 直连 `do_local(value)` / `do_remote(value)`；删 `do_force` / `_next_target()` 的方向推断 |
+| `design/redesign/switch-actions.html` | 新页面原型（本次已产出，两态：正常 / 对端离线） |
 | `config.json`（本机） | `readback.delay_ms=3000`、`timeout_ms=8000` |
+
+**分两步落地**（避免一次改太多不好定位）：
+
+1. **动作层**：`app.py` 两个显式入口 + UI 四个按钮 + 删强制切。此时「画面在 X」还显示未知，
+   但切换已经可用、可复现。
+2. **读数层**：`T_STATE.input` + `classify()` 重写 + 「画面在 X」小字 + 验证改读数。
 
 ### 5.1 兼容与边界
 
 - **旧版本共存**：老对端不发 `input` ⇒ 新端得 `unknown`，行为退化为「不确定」而不是错误答案。
-- **Windows 树只读**：`ui/win2` 的双按钮由 Windows 端决定；共享层修好后即使它还是单按钮，
-  方向也会算对（`_next_target()` 读 `source_state`，后者已正确）。
+- **Windows 树只读**：`ui/win2` 的页面由 Windows 端决定。共享层只提供
+  `set_input_local(v)` / `switch_remote(v)` 两个显式入口和 `owner()` 读数；win2 若暂时沿用旧的
+  单按钮界面，功能仍可用（`_next_target()` 读 `source_state`，后者已正确），只是看不到四条通道。
 - **打包 / 启动方式**：`/Applications/屏幕切换.app` 是 **10-22 15:15** 的旧二进制。
   10-24 08:53 那次启动日志写的是
   `可执行文件：/Applications/屏幕切换.app/Contents/MacOS/dualswitch（2026-10-22 15:15:33）`，
@@ -237,13 +271,19 @@ owner(v) = cfg.sources 反查：17 → "windows"，18 → "mac"（不写死，�
 
 `tests/test_remote_switch.py`
 
-7. `test_switch_requests_peer_even_when_local_set_ok` —— 本机 Set 成功也要发 `T_SWITCH`。
-8. `test_switch_succeeds_when_only_peer_succeeds` / `test_switch_fails_only_when_both_fail`。
-9. `test_readback_confirms_from_input_reading` —— 对端上报变成目标值 ⇒ `confirmed`。
+7. `test_local_action_only_sets_locally` —— 「本机发送」**不发** `T_SWITCH`（显式通道，不自动兜底）。
+8. `test_peer_action_only_requests_peer` —— 「请对端发送」**不碰**本机 backend。
+9. `test_peer_action_blocked_when_offline` —— 对端离线时直接失败、不白等 3 秒。
+10. `test_readback_confirms_from_input_reading` —— 读数变成目标值 ⇒ `confirmed`。
+
+`tests/test_ui_mac2.py`
+
+11. `test_switch_page_has_four_actions` —— 四个按钮都在、`force_btn` 不存在、设备卡不再可点。
+12. `test_switch_page_shows_owner_with_source` —— 有读数时小字带「对端读数 · N 秒前」；无读数时写「未知」。
 
 `tests/test_sync_engine.py`
 
-10. `test_peer_state_carries_input` —— `T_STATE/ACK` 往返带 `input`；缺字段时得 `None`。
+13. `test_peer_state_carries_input` —— `T_STATE/ACK` 往返带 `input`；缺字段时得 `None`。
 
 AST 守卫（`tests/test_source_state.py`）：`classify` 内不得再出现「枚举结果直接 return 主机」的形态。
 
@@ -263,11 +303,13 @@ PYTHONPATH=src python3 tools/e2e_remote_switch.py
 
 | 步骤 | 期望 |
 |---|---|
-| 屏在 Windows，Mac 端 `probe --json` | `input: null`、归属 `unknown`/`windows`（由对端上报给出） |
-| 屏在 Windows，Mac 界面 | 顶栏「Windows」，两个按钮均可点 |
-| 点「切到 Mac」 | 2–3s 内画面切到 Mac；Mac 日志有「对端代发 → ok」或本地 Set；`readback: confirmed` |
-| 点「切到 Windows」 | 对称；**Mac 日志必须出现 `T_SWITCH` 记录**（这是历史上从没出现过的一行） |
-| 对端退出后再点 | 不白等，立刻报「对端离线」，本机 Set 结果照常显示 |
+| 屏在 Windows，Mac 端 `probe --json` | `input: null`（Mac 读不到）、对端上报应为 `17` |
+| 屏在 Windows，Mac 界面 | 小字「画面在 Windows · 对端读数 17 · N 秒前」，四个按钮都可点 |
+| 点「本机发送 18」 | 画面应切到 Mac（2–3s）；日志只有本机 Set，**没有** `T_SWITCH` |
+| 点「请对端发送 18」 | 画面应切到 Mac；**Mac 日志出现「远端代发切屏 → ok」**（历史上从没出现过的一行），Windows 日志出现「替对端切屏」 |
+| 点「本机发送 17」 | 画面回 Windows；日志只有本机 Set |
+| 对端退出后 | 两个「请对端发送」立即置灰；点本机按钮照常工作，不白等 |
+| 全流程 | 界面小字始终与真实画面一致；**一次都不许出现「说 Mac 实际 Windows」** |
 
 ---
 
