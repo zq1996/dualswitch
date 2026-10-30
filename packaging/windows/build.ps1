@@ -36,7 +36,10 @@ if (-not $Python -or -not (Test-Path $Python)) {
 }
 
 Write-Host "使用 Python: $Python"
-& $Python -m pip install --quiet --upgrade pyinstaller pystray pillow PySide6-Essentials
+# hidapi 是鼠标联动（HID++ CHANGE_HOST）的唯一依赖；不装则打包产物里没有 hid 模块，
+# 鼠标跟随会静默降级成「未安装 hidapi」。2026-10-30 实测：dist 里确实没有 hid，
+# 用 exe 启动时切屏不切鼠标，源码启动却正常。
+& $Python -m pip install --quiet --upgrade pyinstaller pystray pillow PySide6-Essentials hidapi
 
 $mode = if ($Console) { "--console" } else { "--windowed" }
 $layout = if ($OneFile) { "--onefile" } else { "--onedir" }
@@ -64,6 +67,7 @@ foreach ($shim in "theme", "widgets", "window", "settings", "statusitem", "clipb
     --add-data "$root\src\dualswitch\ui\assets;dualswitch\ui\assets" `
     --hidden-import "pystray._win32" `
     --hidden-import "PIL.ImageDraw" `
+    --hidden-import "hid" `
     --hidden-import "dualswitch.ui.win" `
     @shimArgs `
     --distpath "$root\dist" `
