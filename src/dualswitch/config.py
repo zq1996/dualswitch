@@ -13,8 +13,10 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import sys
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -441,8 +443,54 @@ def validate(cfg: Config) -> None:
 # --------------------------------------------------------------------------- #
 # 读写
 # --------------------------------------------------------------------------- #
+# 载入期发现的问题。此时日志系统通常还没初始化（`_load_config` 早于
+# `_setup_logging`），先攒着，由 cli 在日志就绪后统一打出来。
+LOAD_WARNINGS: list[str] = []
+
+
+def take_load_warnings() -> list[str]:
+    """取走并清空载入期警告（调用方负责写日志）。"""
+    global LOAD_WARNINGS
+    out, LOAD_WARNINGS = LOAD_WARNINGS, []
+    return out
+
+
+def _quarantine_unreadable(target: Path, exc: Exception) -> Path | None:
+    """把读不懂的配置另存一份，再让调用方用默认值继续。
+
+    2026-10-30 事故：旧版程序（Config 里还没有 mouse_switch 字段）读新配置，
+    `from_dict` 抛「未知的配置项」，而 `load(strict=False)` 把这个异常吞成
+    `platform_defaults()`；紧接着 `ensure_device_id_persisted` 又把这份默认配置
+    **写回同一个文件** —— 用户的槽位、配对 psk、device_id 全没了，日志里一个字都没有。
+    所以：先备份原件，且必须留下能被看见的警告。
+    """
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = target.with_name(f"{target.name}.unreadable-{stamp}")
+    n = 1
+    while dest.exists():  # 同一秒内多次失败也别互相覆盖
+        dest = target.with_name(f"{target.name}.unreadable-{stamp}-{n}")
+        n += 1
+    try:
+        shutil.copy2(target, dest)
+    except OSError:
+        LOAD_WARNINGS.append(
+            f"配置文件无法解析（{exc}），且备份失败；本次以默认配置启动，"
+            f"原文件仍在 {target}，请先手工修好再启动。"
+        )
+        return None
+    LOAD_WARNINGS.append(
+        f"配置文件无法解析（{exc}）；原件已备份到 {dest.name}，本次以默认配置启动。"
+        "常见原因：用旧版本程序读含新字段的配置。"
+    )
+    return dest
+
+
 def load(path: str | os.PathLike[str] | None = None, *, strict: bool = True) -> Config:
-    """读取配置；文件不存在时返回本平台的默认配置（不落盘）。"""
+    """读取配置；文件不存在时返回本平台的默认配置（不落盘）。
+
+    `strict=False` 时读不懂就用默认值继续跑，但**必须**先备份原件并记下警告——
+    否则调用方随后的落盘会把用户配置彻底覆盖掉。
+    """
     target = Path(path).expanduser() if path else config_path()
     if not target.exists():
         return platform_defaults()
@@ -452,9 +500,10 @@ def load(path: str | os.PathLike[str] | None = None, *, strict: bool = True) -> 
         raise ConfigError(f"配置文件不是合法 JSON: {target} ({exc})") from exc
     try:
         return from_dict(raw)
-    except ConfigError:
+    except ConfigError as exc:
         if strict:
             raise
+        _quarantine_unreadable(target, exc)
         return platform_defaults()
 
 

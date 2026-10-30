@@ -53,6 +53,9 @@ def _load_config(args, *, create: bool = False) -> tuple[Config, Path]:
 def _setup_logging(cfg: Config, console: bool = True) -> Path:
     path = config_mod.log_path()
     logging_setup.setup(cfg.log_level, path, console=console)
+    # 配置在日志就绪之前就加载完了，读不懂/被隔离之类的消息攒在 config 里，这里补打
+    for msg in config_mod.take_load_warnings():
+        log.warning("%s", msg)
     return path
 
 

@@ -128,3 +128,48 @@ def test_ensure_config_file(tmp_path):
     assert created is True and path.exists()
     _, created2 = config_mod.ensure_config_file(path)
     assert created2 is False
+
+
+def test_unreadable_config_is_quarantined_not_overwritten(tmp_path):
+    """旧版程序读到新字段时，绝不能把用户配置静默覆盖成默认值（2026-10-30 事故）。
+
+    现场：旧版 Config 没有 mouse_switch → from_dict 抛「未知的配置项」→
+    load(strict=False) 吞成默认值 → ensure_device_id_persisted 又写回同一文件，
+    槽位/配对/device_id 全丢，日志一个字都没有。
+    """
+    config_mod.take_load_warnings()          # 清掉别的用例留下的
+    path = tmp_path / "config.json"
+    # future_field = 「本版本还不认识的字段」，等价于 10-30 那次的 mouse_switch：
+    # 旧程序读新配置 → 未知配置项 → 整份配置被判非法
+    raw = {
+        "hotkey": "ctrl+alt+f9",
+        "future_field": {"enabled": True, "local_slot": 1, "peer_slot": 2},
+        "clipboard": {"psk": "ab" * 32, "device_id": "windows-keepme"},
+    }
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    cfg = config_mod.load(path, strict=False)
+
+    # 1) 用默认值继续跑（不能让程序起不来）
+    assert cfg.clipboard.device_id == ""
+    # 2) 原文件一个字节都不能动
+    assert json.loads(path.read_text(encoding="utf-8")) == raw
+    # 3) 原件有备份，且备份里能找回用户的字段
+    backups = list(tmp_path.glob("config.json.unreadable-*"))
+    assert len(backups) == 1
+    assert json.loads(backups[0].read_text(encoding="utf-8"))["clipboard"]["device_id"] == "windows-keepme"
+    # 4) 警告必须能被看见，且带上真正的原因
+    warnings = config_mod.take_load_warnings()
+    assert len(warnings) == 1
+    assert "future_field" in warnings[0] and backups[0].name in warnings[0]
+
+
+def test_strict_load_still_raises_without_backup(tmp_path):
+    """strict=True 是「报错给人看」的路径：不许悄悄备份、不许改文件。"""
+    config_mod.take_load_warnings()
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"hotkeys": "alt+space"}), encoding="utf-8")
+    with pytest.raises(ConfigError, match="未知的配置项"):
+        config_mod.load(path)
+    assert not list(tmp_path.glob("config.json.unreadable-*"))
+    assert config_mod.take_load_warnings() == []
