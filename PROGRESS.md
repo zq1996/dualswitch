@@ -514,6 +514,36 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-10-30 22:20 **清掉旧包 + 重新打包 + 桌面快捷方式**。
+  删除：`dist\dualswitch`（134MB，10-24 16:54 的旧包）、`build\dualswitch`（20MB 中间产物）、
+  `build\dualswitch.spec`、桌面 `dualswitch.exe - 快捷方式.lnk`（移入回收站）。
+  重打：`dualswitch.exe` 6.27MB，`--selfcheck` 退出码 0（33 个界面模块导入通过），
+  `_internal\hid.cp313-win_amd64.pyd` **已进包**（这是旧包缺的那块），完整性标签 High。
+  新增 `tools/make_shortcut.py`：ctypes 调 `CoCreateInstance(CLSID_ShellLink)` + vtable 生成 .lnk
+  （本机 PowerShell 的 COM 实例化与 `Add-Type` 都被安全策略拦，手搓 MS-SHLLINK 又认不出来）。
+  桌面快捷方式 `屏幕切换.lnk` → `dist\dualswitch\dualswitch.exe`，读回校验通过。
+  同时删掉 `docs/FEASIBILITY-KEYBOARD-FOLLOW.md`（键盘跟随调研：蓝牙通道软件切不了，
+  只剩软件键盘桥一条路）——结论留档在项目记忆里，不再占文档位。
+
+- 2026-10-30 22:10 **修「旧版本程序静默毁配置」**（Windows 鼠标不跟随的真凶）。
+  现场：10-30 18:55 启动的是 `dist\dualswitch\dualswitch.exe`（10-24 16:54 打包，对应
+  commit `6dd4993`，**早于** `mouse_switch` 功能 4 小时）。旧版 `Config` 没有该字段 →
+  `from_dict` 抛「未知的配置项: mouse_switch」→ `_load_config` 用 `load(strict=False)`
+  把这个异常**吞成 `platform_defaults()`** → 紧接着 `ensure_device_id_persisted()`
+  又把默认配置**写回同一个文件**。结果：槽位配置消失、`psk/peer_device` 清空、
+  `device_id` 从 `windows-b2053759` 变成 `windows-951e78ff`，日志里**一个字都没有**。
+  证据：落盘文件的字段集与顺序 = 该版本 `asdict()`；`readback 3000/8000` 恰是该版本默认值
+  （与调优值巧合相同，所以没能用回读参数区分）；`config.json` 的 CreationTime 仍是 10-17
+  （原地覆写而非重建）。
+  改动：`config.load(strict=False)` 失败时先 `_quarantine_unreadable()` 把原件备份成
+  `config.json.unreadable-<时间戳>`，警告攒进 `LOAD_WARNINGS`，由 `cli._setup_logging()`
+  在日志就绪后补打；`strict=True` 行为不变（报错、不备份、不动文件）。
+  新增 2 个守卫：`test_unreadable_config_is_quarantined_not_overwritten` /
+  `test_strict_load_still_raises_without_backup`。测试 408 passed / 7 skipped
+  （已排除会写真实剪贴板的 `*clipboard*`）。
+  另修 `packaging/windows/build.ps1`：pip 装 `hidapi` + `--hidden-import "hid"`，
+  此前 dist 产物里完全没有 hid 模块，打包版永远切不了鼠标。
+
 - 2026-10-24 21:40 **鼠标联动真机验收通过（双向）**。Windows→Mac：屏幕与鼠标一起过去；
   Mac→Windows：同样跟随。至此「点切屏按钮，鼠标跟着走」完整可用。
   · 排障过程暴露两个真问题，都已修：
