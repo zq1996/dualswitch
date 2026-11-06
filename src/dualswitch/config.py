@@ -130,6 +130,38 @@ class MouseSwitchConfig:
 
 
 @dataclass
+class KeyboardFollowConfig:
+    """键盘跟随切屏：画面在哪台，键盘就从哪台输出。
+
+    键盘物理上挂在 Windows（`capture_host`），画面切到 Mac 时把按键转发过去。
+    方案与硬伤清单见 `docs/KEYBOARD-BRIDGE.md`。
+
+    默认关闭，理由同鼠标联动：一旦吞键逻辑出错，用户会"打字打到一个看不见的
+    窗口里"，影响面比鼠标失联大得多。要先在两端都能看见状态再打开。
+    """
+
+    enabled: bool = False
+    #: 键盘挂在哪台机器上。目前只支持 windows（捕获端）；mac 那一半没实现。
+    capture_host: str = "windows"
+    #: position: Alt→⌘、Win→⌥（用户 2026-11-06 选定，Alt+C 就是复制）
+    #: semantic: 按名字映射，Win→⌘、Alt→⌥
+    mod_map: str = "position"
+    #: 紧急停止组合：一键解除吞键，把键盘还给本机。永远不被转发。
+    release_chord: str = "ctrl+alt+shift+k"
+    #: 换焦点后多少毫秒内丢弃按键。0 = 不丢（默认，丢键比误投更难解释）
+    blur_guard_ms: int = 0
+    #: 媒体键 / 侧边触控条（Consumer page）是否转发。V1 不做。
+    forward_media_keys: bool = False
+    #: T_KEYSTATE 心跳频率。它同时是链路存活判据、RTT 采样、按键对账三合一。
+    key_state_hz: int = 10
+    #: auto | forward | dedupe —— macOS 对注入的 keydown 会不会自动重复，
+    #: 决定重复键该转发还是该去重（见方案 §8.2，靠 --probe 实测）。
+    repeat_mode: str = "auto"
+    #: 进焦点时把对端 CapsLock 对齐到源端，否则会出现"打出来全是大写"。
+    align_caps: bool = True
+
+
+@dataclass
 class Config:
     # ---- 热键 ----
     hotkey: str = "alt+space"
@@ -172,6 +204,9 @@ class Config:
 
     # ---- 鼠标联动（切屏时顺带切 Easy-Switch）----
     mouse_switch: MouseSwitchConfig = field(default_factory=MouseSwitchConfig)
+
+    # ---- 键盘跟随（画面在哪台，键盘就从哪台输出）----
+    keyboard_follow: KeyboardFollowConfig = field(default_factory=KeyboardFollowConfig)
 
     # ---- 派生属性 ----
     def effective_host(self) -> str:
@@ -287,6 +322,25 @@ def _merge_mouse_switch(raw: dict[str, Any], base: MouseSwitchConfig) -> MouseSw
     return cfg
 
 
+def _merge_keyboard_follow(
+    raw: dict[str, Any], base: KeyboardFollowConfig,
+) -> KeyboardFollowConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError("keyboard_follow 必须是对象")
+    cfg = copy.deepcopy(base)
+    for key, value in raw.items():
+        if not hasattr(cfg, key):
+            raise ConfigError(f"未知的 keyboard_follow 字段: {key}")
+        current = getattr(cfg, key)
+        if isinstance(current, bool):
+            setattr(cfg, key, _coerce_bool(value))
+        elif isinstance(current, int) and not isinstance(current, bool):
+            setattr(cfg, key, int(value))
+        else:
+            setattr(cfg, key, value)
+    return cfg
+
+
 def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
     """把 JSON 字典合并到默认配置上，并做严格校验。"""
     if not isinstance(raw, dict):
@@ -302,6 +356,9 @@ def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
             continue
         if key == "mouse_switch":
             cfg.mouse_switch = _merge_mouse_switch(value, cfg.mouse_switch)
+            continue
+        if key == "keyboard_follow":
+            cfg.keyboard_follow = _merge_keyboard_follow(value, cfg.keyboard_follow)
             continue
         if key == "sources":
             if not isinstance(value, dict):
@@ -375,6 +432,38 @@ def _validate_mouse_switch(ms: MouseSwitchConfig) -> None:
         raise ConfigError("mouse_switch.local_slot 与 peer_slot 不能相同，否则切换无意义")
 
 
+def _validate_keyboard_follow(kf: KeyboardFollowConfig, hotkey: str) -> None:
+    """校验键盘跟随配置。
+
+    两条是"配错就会很难受"的，必须在这里拦住：
+
+    * `release_chord` 和切屏 `hotkey` 相同 —— 按一下既要切屏又要停转发，
+      用户会以为自己把键盘按坏了。
+    * `capture_host` 写成 mac —— 捕获端这一半还没实现，配了就是静默不工作。
+    """
+    if kf.capture_host not in ("windows", "mac"):
+        raise ConfigError("keyboard_follow.capture_host 只能是 windows / mac")
+    if kf.mod_map not in ("position", "semantic"):
+        raise ConfigError("keyboard_follow.mod_map 只能是 position / semantic")
+    if kf.repeat_mode not in ("auto", "forward", "dedupe"):
+        raise ConfigError("keyboard_follow.repeat_mode 只能是 auto / forward / dedupe")
+    if not (1 <= int(kf.key_state_hz) <= 50):
+        raise ConfigError("keyboard_follow.key_state_hz 必须在 1..50 之间")
+    if int(kf.blur_guard_ms) < 0:
+        raise ConfigError("keyboard_follow.blur_guard_ms 不能为负")
+    if kf.enabled:
+        if kf.capture_host == "mac":
+            raise ConfigError(
+                "keyboard_follow.capture_host=mac 暂不支持：捕获端只实现了 Windows"
+            )
+        if not str(kf.release_chord).strip():
+            raise ConfigError("keyboard_follow.enabled=true 时 release_chord 不能为空")
+        if str(kf.release_chord).strip().lower() == str(hotkey).strip().lower():
+            raise ConfigError(
+                "keyboard_follow.release_chord 不能和切屏热键相同（按一下会又切屏又停转发）"
+            )
+
+
 def _is_hex(value: str) -> bool:
     try:
         bytes.fromhex(value)
@@ -425,6 +514,7 @@ def validate(cfg: Config) -> None:
         raise ConfigError("debounce_ms 不能为负")
     _validate_clipboard(cfg.clipboard)
     _validate_mouse_switch(cfg.mouse_switch)
+    _validate_keyboard_follow(cfg.keyboard_follow, cfg.hotkey)
     if not str(cfg.hotkey).strip():
         raise ConfigError("hotkey 不能为空")
     # 延迟导入，避免 config 模块反向依赖 hotkey 包

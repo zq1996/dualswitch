@@ -180,6 +180,9 @@ def main() -> int:
         sp.set_remote_available(True)
         sp.set_owner(None)
         sp.set_note("上次 请对端发送 18（Mac）· 142 ms", ok=True)
+        # 「跟随画面」两行状态（2026-11-06）：截图要能看到真实文案，不是空行
+        sp.set_keyboard_follow(True, "转发中 → Mac · 往返 6ms", "run")
+        sp.set_mouse_follow(True, "跟随中 · 本机槽 2 ⇄ 对端槽 1", "ok")
         app.processEvents()
 
         suffix = "" if mode == "light" else "-dark"

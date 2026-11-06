@@ -10,8 +10,6 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/Users/zhqi/.workbuddy/binaries/python/envs/default/lib/python3.13/site-packages")
-
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import QApplication

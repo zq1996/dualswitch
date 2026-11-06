@@ -22,6 +22,7 @@
 | 文档 | 内容 | 什么时候看 |
 |---|---|---|
 | [FEASIBILITY-LOGI-EASYSWITCH.md](FEASIBILITY-LOGI-EASYSWITCH.md) | **罗技鼠标联动**：HID++ `CHANGE_HOST` 实测数据、报文格式、物理约束、异常矩阵 | 用/改鼠标联动、排查不生效时 |
+| [KEYBOARD-BRIDGE.md](KEYBOARD-BRIDGE.md) | **键盘跟随切屏**方案：焦点模型、`T_KEY` 协议、按键状态机、硬伤清单、分阶段实施（未实现） | 做键盘转发、或排查卡键/错端时 |
 
 ## 界面
 

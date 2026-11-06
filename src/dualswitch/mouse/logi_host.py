@@ -66,14 +66,25 @@ class MouseSwitcher:
 
     # ------------------------------------------------------------------ 对外
     def available(self) -> tuple[bool, str]:
-        """能否尝试切换。返回 (可用, 原因)。不可用属于正常状态，调用方静默跳过。"""
+        """能否尝试切换。返回 (可用, 原因)。不可用属于正常状态，调用方静默跳过。
+
+        **一次报全部阻塞原因，不按顺序短路。** 以前是先判 hid 再判槽位：用户装完
+        hidapi 才被告知"槽位没配"，两次往返；同时测试也被这条短路顺序绑架 ——
+        `test_unconfigured_peer_slot_is_silent_skip` 在没装 hidapi 的解释器上必红 3 条，
+        看起来像回归，实际只是断言写死了顺序。
+        """
         if not getattr(self.cfg, "enabled", False):
+            # 用户主动关掉的，不属于"配错了"，不掺别的条件
             return False, "未启用"
+
+        blockers: list[str] = []
         if hid is None:
-            return False, "未安装 hidapi（pip install hidapi）"
+            blockers.append("未安装 hidapi（pip install hidapi）")
         slot = int(getattr(self.cfg, "peer_slot", 0) or 0)
         if not 1 <= slot <= MAX_HOSTS:
-            return False, f"peer_slot 未配置或越界（当前 {slot}）"
+            blockers.append(f"peer_slot 未配置或越界（当前 {slot}）")
+        if blockers:
+            return False, "；".join(blockers)
         return True, ""
 
     def switch_to(self, slot: int) -> MouseSwitchOutcome:

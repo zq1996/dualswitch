@@ -18,8 +18,14 @@ dependencies = []
 [project.optional-dependencies]
 # 托盘/菜单栏常驻（可选，缺失时自动降级为无界面常驻）
 tray = ["pystray>=0.19", "pillow>=9"]
-# macOS 全局热键（CGEventTap），macOS 上必装
-macos = ["pyobjc-framework-Quartz>=9.0", "pyobjc-framework-ApplicationServices>=9.0"]
+# macOS 全局热键（CGEventTap）、键盘注入（CGEventPost）、剪贴板（NSPasteboard）
+# 注意 Cocoa 也要：AppKit/Foundation 是 `clipboard/macos.py` 与 mac2 界面的硬依赖，
+# 以前这里漏了，于是"按 extra 装完"仍然缺 AppKit —— 只能靠 build.sh 里另补一次。
+macos = [
+    "pyobjc-framework-Quartz>=9.0",
+    "pyobjc-framework-ApplicationServices>=9.0",
+    "pyobjc-framework-Cocoa>=9.0",
+]
 # 图形界面（主窗口 + 托盘）。不装也能用 CLI / 无界面常驻
 gui = ["PySide6-Essentials>=6.6"]
 # 切屏时联动罗技鼠标 Easy-Switch（HID++ CHANGE_HOST）。
@@ -38,5 +44,8 @@ where = ["src"]
 "dualswitch.ui" = ["assets/*.png"]
 
 [tool.pytest.ini_options]
+# 跑测试只要一句 `pytest`：临时目录和 Qt 平台都钉死在这里 / conftest。
+# 以前每次要手打 `QT_QPA_PLATFORM=offscreen ... --basetemp=.pytest-tmp`，
+# 少一个就报一堆与代码无关的错（见 tests/conftest.py 顶部注释）。
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --basetemp=.pytest-tmp"

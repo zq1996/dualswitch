@@ -124,6 +124,21 @@ def test_missing_hidapi_is_silent_skip(monkeypatch, cfg):
     assert "hidapi" in why
 
 
+def test_available_reports_every_blocker_at_once(monkeypatch):
+    """缺 hidapi + 槽位没配：两条都要说。
+
+    以前 `available()` 短路，先报 hid 就看不到槽位问题 —— 用户装完依赖还得再被拦一次；
+    更糟的是这条短路顺序让 `test_unconfigured_peer_slot_is_silent_skip` 在没装 hidapi
+    的解释器上必红，看着像回归（2026-11-06 真发生过）。
+    """
+    _patch_hid(monkeypatch, None)
+    sw = MouseSwitcher(MouseSwitchConfig(enabled=True, local_slot=1, peer_slot=0))
+    ok, why = sw.available()
+    assert ok is False
+    assert "hidapi" in why
+    assert "peer_slot" in why
+
+
 @pytest.mark.parametrize("slot", [0, 4, -1])
 def test_unconfigured_peer_slot_is_silent_skip(slot):
     sw = MouseSwitcher(MouseSwitchConfig(enabled=True, local_slot=1, peer_slot=slot))

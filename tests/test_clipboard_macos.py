@@ -6,7 +6,7 @@ macOS 独有的几条：TIFF→PNG 转换、敏感标记、HTML 兜底、双写 
 ⚠️ 这些用例会真的读写系统剪贴板（`QClipboard` 在 offscreen 下是空实现，没法用）。
 因此和契约测试一样用环境变量开关，默认跳过，避免每次跑全量测试都冲掉你手里的内容：
 
-    DUALSWITCH_CLIP_TEST=real ~/.workbuddy/binaries/python/envs/default/bin/python \\
+    DUALSWITCH_CLIP_TEST=real .venv/bin/python \\
         -m pytest tests/test_clipboard_macos.py -q -s -p no:cacheprovider --basetemp=.pytest-tmp
 
 用例结束会把原来的纯文本还回去（图片/富文本无法完整快照，这是已知的取舍）。

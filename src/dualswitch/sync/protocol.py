@@ -51,6 +51,12 @@ T_SWITCH_ACK = 0x31
 # 旧版本收到 0x32/0x33 走「忽略未知帧」分支、不会断连 —— 这是有序升级的前提。
 T_STATE = 0x32
 T_STATE_ACK = 0x33
+# 键盘跟随切屏（2026-11-06，docs/KEYBOARD-BRIDGE.md §6）。
+# 键盘物理上挂在 Windows，画面切到 Mac 时把按键转发过去。
+# 旧版本收到 0x40–0x42 走「忽略未知帧」分支、不会断连 —— 有序升级的前提。
+T_KEY = 0x40          # 单个按键：按下 / 抬起
+T_KEYSTATE = 0x41     # 10Hz 心跳 + 按下位图对账 + RTT 采样
+T_FOCUS = 0x42        # 焦点切换：谁在收键盘，epoch 由键盘所在端推进
 T_ERROR = 0x7F
 
 TYPE_NAMES = {
@@ -64,6 +70,9 @@ TYPE_NAMES = {
     T_SWITCH_ACK: "SWITCH_ACK",
     T_STATE: "STATE",
     T_STATE_ACK: "STATE_ACK",
+    T_KEY: "KEY",
+    T_KEYSTATE: "KEYSTATE",
+    T_FOCUS: "FOCUS",
     T_ERROR: "ERROR",
 }
 
@@ -355,6 +364,45 @@ def random_pin() -> str:
     return f"{secrets.randbelow(900_000) + 100_000}"
 
 
+# --------------------------------------------------------------------------- #
+# 键盘帧（0x40–0x42）—— 字段名两端必须一致，所以只在这里拼
+# --------------------------------------------------------------------------- #
+def key_header(
+    epoch: int, seq: int, usage: int, down: bool, mods: int = 0, ts_ms: int = 0,
+) -> dict[str, Any]:
+    """单个按键。`m` 是事件发生时**含这一下本身**的修饰键位图。"""
+    header: dict[str, Any] = {
+        "e": int(epoch), "s": int(seq), "u": int(usage),
+        "d": 1 if down else 0, "m": int(mods) & 0xFF,
+    }
+    if ts_ms:
+        header["t"] = int(ts_ms)     # 只用于测延迟，不参与任何逻辑
+    return header
+
+
+def key_state_header(
+    epoch: int, seq: int, down_usages, *, caps: bool | None = None,
+    rtt_ms: float | None = None,
+) -> dict[str, Any]:
+    """10Hz 心跳：活着 + 按下对账 + RTT。`down` 全空也照发（心跳的意义就在这）。"""
+    header: dict[str, Any] = {
+        "e": int(epoch), "s": int(seq),
+        "down": sorted(int(u) for u in down_usages),
+    }
+    if caps is not None:
+        header["caps"] = 1 if caps else 0
+    if rtt_ms is not None:
+        header["rtt"] = round(float(rtt_ms), 2)
+    return header
+
+
+def focus_header(epoch: int, target: str, *, caps: bool | None = None) -> dict[str, Any]:
+    header: dict[str, Any] = {"e": int(epoch), "target": str(target)}
+    if caps is not None:
+        header["caps"] = 1 if caps else 0
+    return header
+
+
 __all__ = [
     "MAGIC",
     "PBKDF2_ROUNDS",
@@ -366,8 +414,11 @@ __all__ = [
     "ProtocolError",
     "T_ACK",
     "T_ERROR",
+    "T_FOCUS",
     "T_HELLO",
     "T_HELLO_OK",
+    "T_KEY",
+    "T_KEYSTATE",
     "T_ONECLIP",
     "T_PING",
     "T_PONG",
@@ -375,8 +426,11 @@ __all__ = [
     "auth_token",
     "derive_key",
     "encode_frame",
+    "focus_header",
     "hello_header",
     "item_to_message",
+    "key_header",
+    "key_state_header",
     "make_nonce",
     "message_to_item",
     "payload_length",

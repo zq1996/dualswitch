@@ -299,6 +299,9 @@ class Transport:
         on_switch_ack: Callable[[dict[str, Any]], None] | None = None,
         on_peer_state: Callable[[dict[str, Any]], None] | None = None,
         on_peer_state_ack: Callable[[dict[str, Any]], None] | None = None,
+        on_key: Callable[[dict[str, Any]], None] | None = None,
+        on_key_state: Callable[[dict[str, Any]], None] | None = None,
+        on_focus: Callable[[dict[str, Any]], None] | None = None,
         on_state: Callable[[str, str], None] | None = None,
         on_auth_failed: Callable[[str, str], None] | None = None,
         expected_peer_device: str = "",
@@ -315,6 +318,9 @@ class Transport:
         self._on_switch_ack = on_switch_ack or (lambda header: None)
         self._on_peer_state = on_peer_state or (lambda header: None)
         self._on_peer_state_ack = on_peer_state_ack or (lambda header: None)
+        self._on_key = on_key or (lambda header: None)
+        self._on_key_state = on_key_state or (lambda header: None)
+        self._on_focus = on_focus or (lambda header: None)
         self._on_state = on_state or (lambda state, detail: None)
         self._on_auth_failed = on_auth_failed or (lambda ip, reason: None)
 
@@ -487,6 +493,13 @@ class Transport:
         self._stop.wait(min(seconds, RECONNECT_INTERVAL_S))
 
     def _make_link(self, sock: socket.socket, direction: str) -> Link:
+        # 键盘帧是几十字节的小包。不关 Nagle 的话，Nagle + 延迟 ACK 会凑出
+        # 40ms 级的周期性停顿 —— 这正是老 Synergy / Barrier 被骂"打字发黏"的原因。
+        # 剪贴板大包也走这条链路，一并受益。
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError as exc:      # 设不上不影响功能，只是可能多几十毫秒
+            log.debug("设置 TCP_NODELAY 失败：%s", exc)
         return Link(
             sock,
             key=self.key,
@@ -597,6 +610,15 @@ class Transport:
         if frame.type == P.T_STATE_ACK:
             self._on_peer_state_ack(frame.header)
             return
+        if frame.type == P.T_KEY:
+            self._on_key(frame.header)
+            return
+        if frame.type == P.T_KEYSTATE:
+            self._on_key_state(frame.header)
+            return
+        if frame.type == P.T_FOCUS:
+            self._on_focus(frame.header)
+            return
         log.debug("忽略未知帧 %s", frame)
 
     # ------------------------------------------------------------------ 发送
@@ -637,6 +659,43 @@ class Transport:
             link.send(P.T_SWITCH_ACK, header)
         except (OSError, LinkError) as exc:
             log.debug("SWITCH_ACK 发送失败（连接已断）：%s", exc)
+
+    # ------------------------------------------------------------------ 键盘跟随
+    # 这三个刻意**不抛异常、只返回 bool**：按键是每秒几十次的高频调用，
+    # 拿异常做流控既慢又会在日志里刷屏。调用方（捕获端）靠返回值决定要不要
+    # 继续吞键 —— 返回 False 就必须立刻放行，否则按键会掉进看不见的窗口。
+    def send_key(self, header: dict[str, Any]) -> bool:
+        link = self._link
+        if link is None or not link.alive or not link.ready or not link.authenticated:
+            return False
+        try:
+            link.send(P.T_KEY, header)
+            return True
+        except (OSError, LinkError) as exc:
+            log.debug("KEY 发送失败：%s", exc)
+            return False
+
+    def send_key_state(self, header: dict[str, Any]) -> bool:
+        link = self._link
+        if link is None or not link.alive or not link.ready:
+            return False
+        try:
+            link.send(P.T_KEYSTATE, header)
+            return True
+        except (OSError, LinkError) as exc:
+            log.debug("KEYSTATE 发送失败：%s", exc)
+            return False
+
+    def send_focus(self, header: dict[str, Any]) -> bool:
+        link = self._link
+        if link is None or not link.alive or not link.ready:
+            return False
+        try:
+            link.send(P.T_FOCUS, header)
+            return True
+        except (OSError, LinkError) as exc:
+            log.debug("FOCUS 发送失败：%s", exc)
+            return False
 
     def send_state(self, header: dict[str, Any]) -> None:
         """问对端「你现在能不能枚举到这块屏」。未连接 / 未认证时抛 `LinkError`。"""

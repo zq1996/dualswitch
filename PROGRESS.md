@@ -514,6 +514,107 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-06 15:45 **切屏页加「跟随画面」卡片**（键盘 / 鼠标两个开关，Mac 端已实现）。
+  版式真源 `design/redesign/INTERACTIONS-v2.md` §14；Windows 端照做版
+  `docs/UI-WINDOWS2-DESIGN.md` §5.4（含三件 Windows 独有责任）。
+  · 新增 `ui/mac2/follow_card.py`：`ToggleSwitch`（36×20 手绘，QSS 圆角会退化成直角）
+    + `FollowRow` + `FollowCard`；插在 hero 与「快速操作」之间（hero 是输入通道语义，
+    快速操作是导航行，都不合适）。
+  · `runner.py`：`_refresh_follow()` 只读状态，`_on_keyboard_follow()` /
+    `_on_mouse_follow()` 写盘 + 立即生效；开不起来时开关弹回并 toast 说明原因。
+  · `cli.py`：键盘注入端**总是**创建（开关随时可用），挂在 `engine.keyboard` 给界面拿；
+    `receiver.last_rtt_ms` 供状态行显示「往返 N ms」。
+  · **窗口 780×580 → 780×720**：加卡后切换页最小高度 642，580 只给 ~520，
+    `setFixedSize` 不滚动 ⇒ hero 的说明行直接盖住 18 号按钮（不报错、纯视觉错乱）。
+    守备用例 `test_switch_page_still_fits_the_window`。
+  · 图标库加 `keyboard` / `mouse`；顺带修 `tools/gen_iconlib.py` 名单里缺 `chevron-left`
+    （当初手改进 iconlib.py，一重新生成就会静默丢掉它）。
+  **验证**：全量 **454 passed / 24 skipped**；`tools/shots_v2.py` 出图无重叠；
+  `ui2` 离屏跑 10 秒零 traceback。
+
+- 2026-11-06 14:55 **修 `ui2` 一启动就崩（我引入的回归）+ 补两道守卫**。
+  `cli.py::_start_clip_engine` 里为键盘跟随写了 `log = logging.getLogger(__name__)`，
+  塞在 `if cfg.keyboard_follow.enabled:` 分支里。模块第 31 行本来就有 `log`，
+  这个赋值让**整个函数**的 `log` 变成局部变量；默认关闭时赋值不执行，后面
+  「剪贴板同步已挂载」那句 `log.info` 直接 `UnboundLocalError` —— 而且它炸在
+  `except` 里（那句 `log.error` 同样未绑定），把真正的启动错误一起盖掉。
+  pytest 全绿是因为没有用例跑 GUI 启动，只有真敲 `python -m dualswitch ui2` 才暴露。
+  · 修：删掉那行，用模块级 `log`。
+  · 守卫一 `tests/test_logger_scope.py`：AST 扫描全项目 —— 模块级定义了 `log`/`logger`
+    的文件，函数内不许再同名赋值（嵌套函数也算，故意过近似；显式 `global log` 放行）。
+  · 守卫二 `tests/test_cli_startup.py`：真调 `_start_clip_engine`，断言默认配置下
+    能拿到引擎（不是 None）、切屏钩子与对端代发挂上、键盘跟随关闭时不建接收器，
+    开启时三个回调确实接到了接收器。
+  **验证**：全量 **447 passed / 24 skipped**；`QT_QPA_PLATFORM=offscreen ... ui2`
+  跑满 12 秒零 traceback（被 timeout 杀掉，rc=124）。
+
+- 2026-11-06 14:40 **开发环境收口到仓库内 `.venv`**（commit `ba1330e`）。
+  以前项目依赖装在 `~/.workbuddy/binaries/python/envs/default` —— WorkBuddy 建的
+  **共享 venv**（`envs/` 下只有这一个，升级/清理会被重建，多项目互相污染）。
+  `.gitignore` 早就写了 `.venv/`，现在真的用起来。
+  · `pyproject`：`macos` extra 补 `pyobjc-framework-Cocoa`（以前漏了，按 extra 装完仍缺
+    AppKit，只能靠 build.sh 另补一次）。
+  · 新增 `tools/py.sh`：解释器解析**只此一处**（`$PYTHON`/`$DUALSWITCH_PY` → 仓库内
+    `.venv` → PATH），`build.sh` / `install.sh` / `logi-mouse.sh` 全部 source 它。
+  · `install.sh`：加 `--dry-run`、补可执行位（之前是 644，直接跑 permission denied）、
+    写明"解释器路径会写死进 launchd plist，别指向共享 venv"。
+  · `build.sh`：环境齐了就完全不跑 pip（离线可打包）；去掉 `--upgrade` —— 以前每打
+    一次包都会把 PySide6/pyobjc 悄悄升级，"测过的版本"和"打进包的版本"可能不是一个。
+  · 修 `make-signing-cert.sh` 的 `$NAME（`：macOS 自带 bash 3.2 会把全角括号吞进变量名，
+    报 `NAME?: unbound variable`（这条 MEMORY 里早就记过，这次又踩了一次）。
+  · 清掉硬编码的旧 venv site-packages 路径（`tools/make_v2_icons.py`、
+    `design/redesign/icons/make_icons.py`、`tools/clip_serve.py` 与测试的示例命令）。
+  **验证**：`.venv` 里 `check_env.py` 全绿、**440 passed / 24 skipped**；
+  `NO_CLEAN=1 ./packaging/macos/build.sh` 产出 93M，签名 `dualswitch Self Signed`，
+  `--selfcheck` 报「30 个界面模块可导入」；`install.sh --dry-run` 渲染出的 plist 里是
+  `.venv/bin/python -m dualswitch run`；`logi-mouse.sh probe` 解析到 `.venv`（随后才因
+  未连鼠标报错，属预期）。
+  **一个环境坑**：本机沙箱里 `pip install -e .` 在 editable wheel 阶段报 `EEXIST ... .tmp-*`
+  （单独调 `build_meta.build_editable` 也一样，换 TMPDIR / 退 setuptools 都不解决），
+  所以 `.venv` 用 `dualswitch-dev.pth` 指向 `src/`；所有脚本走 `python -m dualswitch`，
+  不依赖 console script。
+
+- 2026-11-06 13:55 **根治「换个解释器就红一片」**。
+  起因：`/usr/bin/python3`（实为 CLT 3.9.6，无 hidapi / pyobjc）跑全量红了 3 条，
+  还静默少跑 9 条（451 vs 460）。不是回归，是环境差异被当成了回归。
+  ① `mouse/logi_host.available()` 改成**一次报全部阻塞原因**（以前先判 hid 就短路，
+     槽位配错看不到，测试也被这条短路顺序绑架 —— 那 3 条红就是它）；
+  ② `tests/conftest.py`：Qt 平台与临时目录钉死（不用再手打环境变量）、
+     `DUALSWITCH_SIMULATE_MISSING=hid,Quartz` 在开发机上复现"没装"的环境、
+     报告头打印解释器与缺失的可选依赖；
+  ③ `tests/test_env_contract.py` 守卫：子进程模拟缺依赖，断言对应文件仍全绿；
+  ④ `tools/check_env.py`：一条命令看依赖矩阵，`--strict` 供提交前 / CI 用；
+  ⑤ `packaging/macos/build.sh` 先体检 PySide6 —— 默认 `python3` 走 PATH，
+     在装了 Homebrew 的机器上是 3.15（零依赖），会现装一套再打包。
+  验证：venv 3.13 **440 passed / 24 skipped**；`/usr/bin/python3` **435/20、0 红**；
+  模拟缺 hid+Quartz+AppKit **435/20、0 红**（与系统 3.9 结果一模一样，说明模拟是忠实的）。
+
+- 2026-11-06 13:40 **键盘跟随：Mac 注入端落地**（Windows 捕获端未做）。
+  新增 `keyboard/` 包（`keymap` 映射表 / `state` 按键状态机 / `inject_macos` Quartz 注入 /
+  `receiver` 收帧注入），`sync/protocol.py` 加 `T_KEY(0x40)/T_KEYSTATE(0x41)/T_FOCUS(0x42)`，
+  `transport.py` 加三个回调与发送方法 + **`TCP_NODELAY`**，`engine.py` 只搬运，
+  `config.py` 加 `keyboard_follow` 段（默认关），`app._after_screen_switch` 里通知释放，
+  `cli.py` 按开关建接收器。工具 `tools/key_feeder.py`：本地直喂 / 走链路 / 阶段 0 探测。
+  实现期两个真发现：① 这台机器的 pyobjc `Quartz` **没有** `AXIsProcessTrusted`，
+  查它会被兜底吞成「一切正常、就是打不出字」，改用 `CGPreflightPostEventAccess()`；
+  `IsSecureEventInputEnabled` 也不在 Quartz 里，得 ctypes 走 Carbon。② receiver 的 epoch
+  **只能跟对端走**，本端自增会让两端数出两套号、所有帧被判过期。
+  用例 `tests/test_keyboard.py` 31 例；全量 **430 passed / 24 skipped**。
+  （注意：`/usr/bin/python3` 没装 hidapi，会让 `test_mouse_logi_host` 里 3 例参数化失败；
+  带齐依赖的解释器是 `.workbuddy/binaries/python/envs/default/bin/python3`。）
+
+- 2026-11-06 12:05 **出键盘跟随方案（未实现）**：`docs/KEYBOARD-BRIDGE.md`。
+  结论：方向定 **Windows 捕获 → Mac 注入**（单向），理由是这个方向让「Windows UIPI」和
+  「macOS 安全输入」两条无解硬伤**直接不发生**，且 Mac 永远有画面、不必和无显示器休眠对抗。
+  键盘（洛斐 FLOW2）确认无软件切通道（非罗技无 HID++；QMK/VIA 仅限有线且无切主机指令）。
+  焦点挂在现成的 `_after_screen_switch()`（4 个成功分支）上，不新增握手。
+  另记两条实现级发现：`transport.py` 缺 `TCP_NODELAY`（老 Synergy 发黏的元凶）；
+  `hotkey/windows.py` 已占用 `WH_KEYBOARD_LL`，键盘桥不能再装第二个钩子，须改成唯一钩子 + 分发器。
+- 2026-11-01 18:55 **修 install_autostart_service.ps1 首跑失败**（用户回报 schtasks
+  「无效参数 - 'C:\...\boot.cmd\'」）。原因：PS 5.1 往原生程序传 `\"` 转义引号会被搅
+  （引号被吞、结尾多反斜杠）。改法：/TR 一律传裸路径（动作脚本固定在无空格的
+  %ProgramData%\DualSwitch\ 下），%ProgramData% 万一带空格则 FSO ShortPath 8.3 兜底。
+
 - 2026-11-01 17:45 **开机自启升级为「无需登录」版（任务计划程序）**。
   用户要求开机即启动、不输开机密码也生效。原 `install_autostart.ps1`（启动文件夹
   快捷方式）要登录后才启动，满足不了。新增
@@ -530,10 +631,6 @@ dualswitch/
   引擎日志在 systemprofile 的 AppData 下。装了这个就不要再装启动文件夹快捷方式（双实例）。
   注意：本机安全策略把 schtasks.exe 拉黑，脚本由用户在管理员 PowerShell 自行执行。
   脚本均 UTF-8 with BOM，PSParser 解析通过；打包 exe `run --help` 参数解析实测通过。
-- 2026-11-01 18:55 **修 install_autostart_service.ps1 首跑失败**（用户回报 schtasks
-  「无效参数 - 'C:\...\boot.cmd\'」）。原因：PS 5.1 往原生程序传 `\"` 转义引号会被搅
-  （引号被吞、结尾多反斜杠）。改法：/TR 一律传裸路径（动作脚本固定在无空格的
-  %ProgramData%\DualSwitch\ 下），%ProgramData% 万一带空格则 FSO ShortPath 8.3 兜底。
 
 - 2026-10-30 22:20 **清掉旧包 + 重新打包 + 桌面快捷方式**。
   删除：`dist\dualswitch`（134MB，10-24 16:54 的旧包）、`build\dualswitch`（20MB 中间产物）、

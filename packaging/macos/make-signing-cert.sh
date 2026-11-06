@@ -22,7 +22,7 @@ KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 PASS="dualswitch-local"
 
 if /usr/bin/security find-identity -v -p codesigning 2>/dev/null | grep -qF "$NAME"; then
-    echo "[ok] 证书已存在：$NAME（跳过创建）"
+    echo "[ok] 证书已存在：${NAME}（跳过创建）"
     exit 0
 fi
 

@@ -34,7 +34,7 @@ body{
 .win{
   width:780px;background:var(--card);border-radius:var(--r-win);
   box-shadow:var(--sh-win);overflow:hidden;border:1px solid var(--line);
-  display:flex;flex-direction:column;height:580px;position:relative;
+  display:flex;flex-direction:column;height:610px;position:relative;
 }
 .win-bar{height:40px;display:flex;align-items:center;padding:0 14px;flex-shrink:0;
   border-bottom:1px solid var(--line-soft);background:var(--card);position:relative}
@@ -119,22 +119,45 @@ body{
 .btn[disabled] svg{opacity:.55}
 .actions{display:flex;align-items:center;gap:8px}
 
-.hint{margin-top:9px;font-size:10.5px;color:var(--ink-3);line-height:1.6}
-.hero-note{margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft);
+/* 常驻操作提示 2026-11-06 删除 → 改成按钮的长悬停 tip（见 .tip 演示）
+   为什么不留：这段每帧占版面却只看一两次，还是窗口必须留高的主因之一。 */
+.hero-note{margin-top:12px;padding-top:10px;border-top:1px solid var(--line-soft);
   font-size:11px;display:flex;align-items:center;gap:6px;color:var(--ok)}
 .hero-note.dim{color:var(--ink-3)}
 .hero-note.bad{color:var(--danger)}
 .hero-note .mono{font-family:var(--mono);font-size:10.5px}
 
-/* 快速操作 */
-.secLabel{font-size:10px;font-weight:700;color:var(--ink-3);letter-spacing:.06em;margin:0 0 8px 2px}
-.rowsCard{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);overflow:hidden}
-.qrow{height:44px;display:flex;align-items:center;gap:10px;padding:0 13px;font-size:12.5px;
-  color:var(--ink-2);cursor:pointer;border-bottom:1px solid var(--line-soft)}
-.qrow:last-child{border-bottom:0}
-.qrow:hover{background:var(--card-2)}
-.qrow .lead{width:16px;display:flex;justify-content:center;color:var(--ink-3)}
-.qrow .tail{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+/* 长悬停 tip（1.2s 才弹）：卡片色 + 1px 描边 + 圆角，与页面同色系。
+   不用 QToolTip 的深色样式 —— 那是系统默认，和这套浅色界面不搭。 */
+.tip{position:absolute;z-index:9;max-width:300px;background:var(--card);
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px;
+  font-size:11px;line-height:1.5;color:var(--ink-2);white-space:pre-line;
+  box-shadow:0 8px 24px -8px rgba(16,24,40,.28)}
+
+/* 小节标题（跟随画面还在用；「快速操作」整节 2026-11-06 删除） */
+.secLabel{font-size:10.5px;font-weight:700;color:var(--ink-3);letter-spacing:.05em;margin:0 0 8px 2px}
+
+/* 跟随画面卡片（2026-11-06） */
+.followCard{background:var(--card);border:1px solid var(--line-soft);border-radius:var(--r-card);
+  padding:2px 14px 10px}
+.followRow{padding:10px 0 8px}
+.followTop{display:flex;align-items:flex-start;gap:10px}
+.followIc{width:22px;height:22px;flex-shrink:0;color:var(--accent);display:flex}
+.followTx{flex:1;min-width:0}
+.followTitle{font-size:12.5px;font-weight:550;color:var(--ink)}
+.followSub{font-size:10.5px;color:var(--ink-3);margin-top:1px}
+.followState{margin-top:6px;padding-left:32px;font-size:10.5px;color:var(--ok);
+  display:flex;align-items:center;gap:5px}
+.followState i{width:6px;height:6px;border-radius:3px;background:currentColor;display:block;flex-shrink:0}
+.followState.run{color:var(--run)}
+.followHair{height:1px;background:var(--line-soft)}
+/* 36×20 开关：手绘不用 QSS —— 轨道圆角正好是半高，QSS 超过一半会退化成直角 */
+.sw{width:36px;height:20px;border-radius:10px;background:var(--accent);position:relative;flex-shrink:0;
+  transition:.14s}
+.sw::after{content:"";position:absolute;top:2px;left:18px;width:16px;height:16px;border-radius:50%;
+  background:#fff;transition:.14s}
+.sw.off{background:var(--line)}
+.sw.off::after{left:2px}
 .keys{display:inline-flex;gap:3px}
 .key{min-width:18px;height:18px;padding:0 5px;border-radius:5px;background:var(--card-3);
   border:1px solid var(--line);display:inline-flex;align-items:center;justify-content:center;
@@ -193,21 +216,40 @@ body{
             </div>
           </div>
 
-          <div class="hint">「本机发送」直接把 DDC 命令发给显示器，画面在哪边都能切；行尾纸飞机是兜底——本机 DDC 不可用时让对端代发。</div>
           <div class="hero-note">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5l2.5 2.5L10 3.5"/></svg>
             上次 09:36 · 让对端切到 18 · 往返 <span class="mono">142 ms</span> · 已确认
           </div>
         </div>
 
-        <div class="secLabel">快速操作</div>
-        <div class="rowsCard">
-          <div class="qrow">
-            <span class="lead"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg></span>
-            打开剪贴板历史
-            <span class="tail"><span class="keys"><span class="key">⌘</span><span class="key">⇧</span><span class="key">V</span></span></span>
+        <div class="secLabel">跟随画面</div>
+        <div class="followCard">
+          <div class="followRow">
+            <div class="followTop">
+              <span class="followIc"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M18 12h.01M8 16h8"/></svg></span>
+              <div class="followTx">
+                <div class="followTitle">键盘跟随</div>
+                <div class="followSub">键盘接在 Windows 上，切到 Mac 时按键转发</div>
+              </div>
+              <span class="sw"></span>
+            </div>
+            <div class="followState run"><i></i>转发中 → Mac · 往返 6ms</div>
+          </div>
+          <div class="followHair"></div>
+          <div class="followRow">
+            <div class="followTop">
+              <span class="followIc"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="5"/><path d="M12 6v4"/></svg></span>
+              <div class="followTx">
+                <div class="followTitle">鼠标跟随</div>
+                <div class="followSub">罗技 Easy-Switch · 切屏时把鼠标推过去</div>
+              </div>
+              <span class="sw"></span>
+            </div>
+            <div class="followState"><i></i>跟随中 · 本机槽 2 ⇄ 对端槽 1</div>
           </div>
         </div>
+
+        <!-- 长悬停 tip 的演示放在第三块（这里不叠浮层，免得挡住真实版面） -->
       </div>
     </div>
   </div>
@@ -262,22 +304,75 @@ body{
             </div>
           </div>
 
-          <div class="hint">对端没连上时行尾小钮置灰，但「本机发送」照常可用——画面在哪边都能一步切回来。</div>
           <div class="hero-note dim">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="4.2"/><path d="M6 4v2.6"/></svg>
             上次 09:31 · 本机切到 17 · <span class="mono">63 ms</span> · 回读不可用
           </div>
         </div>
 
-        <div class="secLabel">快速操作</div>
-        <div class="rowsCard">
-          <div class="qrow">
-            <span class="lead"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg></span>
-            打开剪贴板历史
-            <span class="tail"><span class="keys"><span class="key">⌘</span><span class="key">⇧</span><span class="key">V</span></span></span>
+        <div class="secLabel">跟随画面</div>
+        <div class="followCard">
+          <div class="followRow">
+            <div class="followTop">
+              <span class="followIc"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M18 12h.01M8 16h8"/></svg></span>
+              <div class="followTx">
+                <div class="followTitle">键盘跟随</div>
+                <div class="followSub">键盘接在 Windows 上，切到 Mac 时按键转发</div>
+              </div>
+              <span class="sw off"></span>
+            </div>
+            <div class="followState" style="color:var(--warn)"><i></i>已暂停 · 按键留在 Windows</div>
+          </div>
+          <div class="followHair"></div>
+          <div class="followRow">
+            <div class="followTop">
+              <span class="followIc"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="5"/><path d="M12 6v4"/></svg></span>
+              <div class="followTx">
+                <div class="followTitle">鼠标跟随</div>
+                <div class="followSub">罗技 Easy-Switch · 切屏时把鼠标推过去</div>
+              </div>
+              <span class="sw"></span>
+            </div>
+            <div class="followState"><i></i>跟随中 · 本机槽 2 ⇄ 对端槽 1</div>
           </div>
         </div>
+
+        <!-- 对端离线时，兜底钮的 tip 末尾自动补一句「当前对端离线，此通道不可用」 -->
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 3. 长悬停 tip 的形态（1.2s 才弹） ══════════ -->
+<div class="stage">
+  <h3>③ 长悬停 tip · 鼠标停在按钮上 1.2 秒才弹（原来这两行是常驻在卡片底部的灰字）</h3>
+  <div style="display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap">
+    <div>
+      <div style="font-size:10.5px;color:var(--ink-3);margin:0 0 8px 2px">「本机发送 N」主按钮</div>
+      <div style="position:relative;width:330px">
+        <button class="btn local" style="width:150px">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          本机发送 18
+        </button>
+        <div class="tip" style="left:0;top:46px;position:relative;margin-top:8px">「本机发送」直接把 DDC 命令发给显示器：
+画面在哪一边都能切，不需要先判断当前输入。
+行尾纸飞机是兜底通道——本机 DDC 不可用时（驱动 / 权限 / 线材）让对端代发。</div>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:10.5px;color:var(--ink-3);margin:0 0 8px 2px">行尾「请对端发送 N」兜底钮（对端离线时多一句）</div>
+      <div style="position:relative;width:330px">
+        <button class="mini" disabled><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></button>
+        <div class="tip" style="left:0;top:36px;position:relative;margin-top:8px">请对端发送 18 · 兜底通道：
+本机 DDC 不可用时（驱动 / 权限 / 线材）让对端代发这条切屏命令。
+当前对端离线，此通道不可用。</div>
+      </div>
+    </div>
+    <div style="width:280px;font-size:11px;color:var(--ink-3);line-height:1.7;padding-top:24px">
+      <b style="color:var(--ink-2)">为什么不用系统 tooltip</b><br>
+      · Qt 的 QToolTip 按光标自己算坐标、<b>不做屏幕钳制</b>，按钮靠窗口右侧时提示框会溢出屏幕；<br>
+      · 样式被全局 QSS 锁成深色小字，与浅色界面不搭。<br>
+      → 自绘弹层：先钳进应用窗口、再钳进屏幕可用区；文案按 300px 折行。
     </div>
   </div>
 </div>
