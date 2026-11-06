@@ -807,9 +807,10 @@ def test_row_double_click_copies(app, cfg):
 # --------------------------------------------------------------------------- #
 def test_window_geometry_and_pages(app, cfg):
     win = MainWindow(cfg, "alt+space", "v0")
-    # 580 → 720（2026-11-06）：切换页加了「跟随画面」卡片，最小高度 642，
-    # 580 的窗口装不下会互相压住（见 test_switch_page_still_fits_the_window）。
-    assert (win.width(), win.height()) == (theme.WIN_W, theme.WIN_H) == (780, 720)
+    # 720 → 570（2026-11-06 晚）：切换页删掉「常驻操作提示」与「快速操作 · 剪贴板」
+    # 两节后最小高度降到 536，570 装得下且只留几十像素呼吸
+    # （见 test_switch_page_still_fits_the_window，那条在真实窗口里量）。
+    assert (win.width(), win.height()) == (theme.WIN_W, theme.WIN_H) == (780, 570)
     sp = SwitchPage(cfg, "alt+space", "")
     cp = ClipboardPage(FakeEngine([]))
     from dualswitch.ui.mac2.settings_page import SettingsPage
@@ -2014,8 +2015,10 @@ def test_pairing_peer_rows_have_final_text_on_first_frame(app):
 # --------------------------------------------------------------------------- #
 # 「跟随画面」卡片（2026-11-06）
 # --------------------------------------------------------------------------- #
-#: 窗口 chrome 实测：780×720 的窗口，页面实际拿到的高度约比 WIN_H 少 60。
-CHROME_H = 60
+#: 窗口 chrome：**标题栏在 frame 之外**，`setFixedSize(WIN_W, WIN_H)` 里的 WIN_H
+#: 就是页面拿到的高度（offscreen 与真实 cocoa 实测都是 570 = WIN_H）。
+#: 以前这里写 `CHROME_H = 60` 再拿 `WIN_H - 60` 估算，属于猜出来的数字 ——
+#: 猜错了会把「装不下」判成「装得下」，守卫就白设了。现在直接量真实窗口。
 
 
 def test_follow_rows_start_blank_with_state_line_hidden(app, cfg):
@@ -2083,12 +2086,158 @@ def test_disabled_switch_does_not_emit(app, cfg):
 
 
 def test_switch_page_still_fits_the_window(app, cfg):
-    """防回归：切换页加内容后最小高度不能超过窗口给得出的高度。
+    """防回归：切换页的内容必须真的装进窗口，不能靠推算。
 
-    2026-11-06 加「跟随画面」时页面最小高度变成 642，而 580 的窗口只给 ~520，
+    2026-11-06 加「跟随画面」时页面最小高度变成 642，而 580 的窗口装不下，
     结果是 hero 的说明文字直接压在 18 号通道的按钮上（不滚动、不报错、纯视觉错乱）。
+    同日晚删掉「常驻操作提示」与「快速操作 · 剪贴板」后降到 536，窗口收回到 570。
+
+    **不推算 chrome**：直接把页面放进真实 MainWindow，量它拿到的高度。
+    """
+    from dualswitch.ui.mac2.clipboard_page import ClipboardPage
+    from dualswitch.ui.mac2.settings_page import SettingsPage
+
+    class _Engine:
+        def records(self):
+            return []
+
+        def set_paused(self, paused):
+            pass
+
+    page = SwitchPage(cfg, "alt+space", "Q2790R3")
+    win = MainWindow(cfg, "alt+space", "v0")
+    win.attach_pages(page, ClipboardPage(_Engine()), SettingsPage(cfg, "/tmp/x.json"))
+    win.show_page(PAGE_SWITCH)
+    win.show()
+    app.processEvents()
+
+    # 用最坏情况的文案量：两个跟随状态行都填满（状态行不显示时页面反而更矮）
+    page.set_remote_available(True)
+    page.set_keyboard_follow(True, "转发中 → Mac · 往返 6ms", "run")
+    page.set_mouse_follow(True, "跟随中 · 本机槽 2 ⇄ 对端槽 1", "ok")
+    page.set_note("上次 请对端发送 18（Mac）· 142 ms", ok=True)
+    app.processEvents()
+
+    have = page.height()
+    need = page.minimumSizeHint().height()
+    assert need <= have, f"切换页需要 {need}px，窗口只给 {have}px：要么压缩内容，要么加高窗口"
+
+    # 最底一块（跟随画面）不能被裁掉：它得完整落在页面里
+    assert page.follow.geometry().bottom() <= have, "跟随画面卡片被窗口裁掉了"
+
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# 版面精简（2026-11-06 用户要求）
+# --------------------------------------------------------------------------- #
+def test_quick_actions_section_is_gone(app, cfg):
+    """「快速操作 · 剪贴板」整节删除：剪贴板在侧栏「核心」里已有入口，这里是重复导航。
+
+    删掉的东西：`secLabel`「快速操作」、`rowsCard` 卡片、`QuickRow` 行、
+    `SwitchPage.clipboardRequested` 信号、`set_clip_count()` 方法。
     """
     page = SwitchPage(cfg, "alt+space", "")
-    need = page.minimumSizeHint().height()
-    have = theme.WIN_H - CHROME_H
-    assert need <= have, f"切换页需要 {need}px，窗口只给 {have}px：要么压缩内容，要么加高窗口"
+    assert not hasattr(page, "row_clip"), "「快速操作 · 剪贴板」行应当已删除"
+    assert not hasattr(page, "clipboardRequested"), "对应信号应当已删除"
+    assert not hasattr(page, "set_clip_count"), "对应方法应当已删除"
+
+    # 页面上不再出现「快速操作」这行小节标题
+    from PySide6.QtWidgets import QLabel
+
+    texts = [w.text() for w in page.findChildren(QLabel) if w.text()]
+    assert "快速操作" not in texts
+
+
+def test_operation_hint_moved_into_button_hover_tip(app, cfg):
+    """原来的常驻操作提示改成按钮的长悬停 tip。
+
+    三条硬约束：
+    1) hero 里不再有常驻说明行（`hint` 属性 + 「本机发送」说明文字）；
+    2) 主按钮与兜底钮都挂上了 `HoverTip`，文案与原说明语义一致；
+    3) 弹出延时 = `theme.HOVER_TIP_MS`（1.2s，「长时间悬浮」而不是划过就弹）。
+    """
+    from dualswitch.ui.mac2.widgets import HoverTip
+
+    page = SwitchPage(cfg, "alt+space", "")
+    assert not hasattr(page.hero, "hint"), "hero 的常驻提示行应当已删除"
+
+    for row in page.hero.rows:
+        for btn, tip, keyword in (
+            (row.btn_local, row.tip_local, "本机发送"),
+            (row.btn_peer, row.tip_peer, "请对端发送"),
+        ):
+            assert isinstance(tip, HoverTip), f"{btn.objectName()} 没有挂长悬停 tip"
+            assert tip.delay_ms() == theme.HOVER_TIP_MS >= 1000, "tip 必须是「长悬停」才弹"
+            assert keyword in tip.text()
+            # 原文仍在 toolTip()：无障碍读屏、Qt 自带的兜底提示都靠它
+            assert btn.toolTip() == tip.text()
+        assert "DDC" in row.tip_local.text(), "主按钮 tip 要保留「直接发 DDC」这句"
+        assert "兜底" in row.tip_peer.text()
+
+
+def test_peer_tip_mentions_offline_state(app, cfg):
+    """兜底钮置灰时，tip 要补一句「当前对端离线」—— 别让人对着灰钮猜为什么点不动。"""
+    page = SwitchPage(cfg, "alt+space", "")
+    rows = page.hero.rows
+
+    page.set_remote_available(False)
+    for row in rows:
+        assert not row.btn_peer.isEnabled()
+        assert "对端离线" in row.tip_peer.text()
+
+    page.set_remote_available(True)
+    for row in rows:
+        assert row.btn_peer.isEnabled()
+        assert "对端离线" not in row.tip_peer.text()
+        assert "请对端发送" in row.tip_peer.text()
+
+
+def test_hover_tip_wraps_long_text_and_waits_for_the_delay(app, cfg):
+    """QToolTip 对纯文本**不自动换行**，且**不做屏幕钳制** —— 所以这两件事自己扛。
+
+    1) 折行：按像素宽度折，长文案必须变成多行；
+    2) 延时：进鼠标起计时，不是立刻弹（Qt 自带的 ToolTip 事件被吃掉）；
+    3) 钳制：贴屏幕右边缘的按钮，提示框必须整块落在可用区域内（实测 QToolTip
+       会直接溢出屏幕，截图里被切掉半截）。
+    """
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QPushButton
+
+    from dualswitch.ui.mac2.widgets import TipBubble, attach_hover_tip, tip_bubble
+
+    btn = QPushButton("x")
+    btn.resize(150, 38)
+    long = "「本机发送」直接把 DDC 命令发给显示器，画面在哪一边都能切，不需要先判断当前输入。"
+    tip = attach_hover_tip(btn, long, delay_ms=1200, width=200)
+
+    # 1) 折行（弹层是全局单例，测试也复用同一个，别再造第二个顶层窗）
+    bubble = tip_bubble()
+    bubble.set_text(long, 200)
+    assert len(bubble._lines) >= 3, "长文案必须折行"
+    fm = QFontMetrics(theme.qfont(11))
+    assert all(fm.horizontalAdvance(line) <= 210 for line in bubble._lines)
+    assert bubble.width() <= 200 + TipBubble.PAD_H * 2 + 4
+
+    # 2) 延时：进鼠标只起计时器；Qt 自带的 ToolTip 事件被吃掉
+    assert tip.eventFilter(btn, QEvent(QEvent.ToolTip)) is True
+    assert tip.eventFilter(btn, QEvent(QEvent.Enter)) is False
+    assert tip._timer.isActive() and tip._timer.interval() == 1200
+    tip._hide()
+    assert not tip._timer.isActive()
+
+    # 3) 屏幕钳制：按钮贴屏幕右下角时，提示框仍完整落在可用区域内
+    from PySide6.QtGui import QGuiApplication
+
+    avail = QGuiApplication.primaryScreen().availableGeometry()
+    btn.move(avail.right() - 152, avail.bottom() - 40)
+    btn.show()
+    app.processEvents()
+    bubble.set_text(long, 200)
+    bubble.place_near(btn)
+    geo = bubble.geometry()
+    assert avail.contains(geo), f"提示框 {geo} 溢出可用区域 {avail}"
+    bubble.hide()
+    btn.hide()
+

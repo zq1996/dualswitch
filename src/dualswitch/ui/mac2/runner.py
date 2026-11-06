@@ -152,7 +152,6 @@ class UiRunner2(QObject):
         self.pairing_page.pairedChanged.connect(self._on_paired_changed)
         self._last_page = PAGE_SWITCH
         self._pair_text = ""
-        self.switch_page.clipboardRequested.connect(lambda: self.show_page(PAGE_CLIP))
         self.switch_page.keyboardFollowToggled.connect(self._on_keyboard_follow)
         self.switch_page.mouseFollowToggled.connect(self._on_mouse_follow)
         self.switch_page.toastRequested.connect(self.toast.show_text)
@@ -442,11 +441,10 @@ class UiRunner2(QObject):
             return
         if self.window.on_clipboard_page():
             self.clipboard_page.refresh()
-        # 侧栏计数 / 切换页徽章无论在哪页都要跟
+        # 侧栏计数无论在哪页都要跟（切换页的「快速操作 · 剪贴板」行已删，
+        # 条数只在侧栏导航徽章上显示，2026-11-06）
         records = self.clip_feed.records() if self.clip_feed is not None else []
-        abnormal = sum(1 for r in records if r.state in ("fail", "local"))
         self.window.set_nav_count(len(records))
-        self.switch_page.set_clip_count(len(records), abnormal)
         self.settings_page.set_engine_records(records)
 
     def _on_clip_paused(self, paused: bool) -> None:

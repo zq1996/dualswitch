@@ -32,7 +32,7 @@
 
 | 项    | v2 规格                                     | 现状                      |
 | ---- | ----------------------------------------- | ----------------------- |
-| 尺寸   | **780×580** 宽窗口                           | 440×600（`EXTRA_H` 加 20） |
+| 尺寸   | **780×570** 宽窗口（§0–§9 写 580，§10.25 定稿 570）      | ✅ `theme.WIN_W/WIN_H` |
 | 导航   | **左侧栏 156px，可收起为 56px**：核心（切换/剪贴板）+ 系统（配对电脑/设置）+ 底部对端状态 / 热键 /「退出应用」 | 单列列表行翻页                 |
 | 标题栏  | 系统原生：红绿灯 + 居中「屏幕切换」；**无工具钮**（2026-10-21 删除）        | 无工具钮 ✅                    |
 | 底栏   | **无**（2026-10-22 删除）：30px 状态栏连带版本号一起去掉；对端状态回到侧栏 footer | — |
@@ -743,6 +743,73 @@ Finder 复制图片时粘贴板里同时有 `public.file-url` 和一张**文件�
 守卫：`tests/test_ui_mac2.py::test_switch_page_four_explicit_actions` /
 `test_switch_page_readout_is_labelled` / `test_keycaps_used_in_menu_and_settings`。
 
+### 10.25 切换页精简：说明改长悬停 tip、删「快速操作 · 剪贴板」、窗口收回 570（2026-11-06）
+
+用户看真机截图后的三条要求，**只动切换页**，其余页不动。
+
+#### ① 常驻操作提示 → 按钮的长悬停 tip
+
+原来 hero 底部有一行常驻灰字（`#hintLine`，两行 32px）：
+
+> 「本机发送」直接把 DDC 命令发给显示器，画面在哪边都能切；行尾纸飞机是兜底——
+> 本机 DDC 不可用时（驱动 / 权限 / 线材）让对端代发。
+
+**问题**：这段每帧都占版面，但用户看过一两次就不再读；它还是窗口必须留高的主因之一。
+
+**改法**：整段移进**按钮的长悬停 tip**，`#hintLine` 与 `hero.hint` 删除。
+
+| 项 | 规格 |
+|---|---|
+| 挂在哪 | 「本机发送 N」主按钮 + 行尾「请对端发送 N」兜底钮，**各自一份**文案 |
+| 弹出时机 | **长悬停 1.2s**（`theme.HOVER_TIP_MS`）。不是划过就弹 —— 用户明确「长时间悬浮在按钮上才给」 |
+| 折行 | 按 **300px**（`theme.HOVER_TIP_W`）折。QToolTip 对纯文本**不自动换行**，不折就是横贯屏幕的长条 |
+| 实现 | `ui/mac2/widgets.py::HoverTip` + `TipBubble`；**不用 QToolTip** |
+| 无障碍 | 原文同时写进 `setToolTip()`，`toolTip()` / 读屏 / 测试都能读到；Qt 自带的 `QEvent.ToolTip` 被 eventFilter 吃掉 |
+| 兜底钮文案 | 对端离线时自动补一句「当前对端离线，此通道不可用」（`ActionRow.peer_tip_text()`），别让人对着灰钮猜 |
+| 弹层位置 | 按钮下方居中；下方放不下翻上方；**先钳进应用窗口、再钳进屏幕可用区** |
+
+> **为什么不用 QToolTip（实测两个坑）**：①它按光标位置自己算坐标、**不做屏幕钳制** ——
+> 按钮在窗口右侧时提示框直接溢出屏幕（截图被右边缘切掉半截）；②样式被全局 QSS 的
+> `QToolTip` 规则锁死成深色小字，与浅色界面不搭。所以 `TipBubble` 自绘：无边框透明底 +
+> 圆角卡片 + `card`/`line`/`ink2` 令牌，坐标由 `place_near()` 主动钳制。
+
+#### ② 删「快速操作 · 剪贴板」
+
+剪贴板在侧栏「核心」里已有入口（还带条数徽章），切换页再放一行是**重复导航**，
+白占 74px（小节标题 16 + 卡片 46 + 两处间距）。
+
+连带删除：`secLabel`「快速操作」、`rowsCard`、`QuickRow` 类、`SwitchPage.clipboardRequested`
+信号、`SwitchPage.set_clip_count()` 方法、`runner` 里对应的接线与调用、
+`theme.qss()` 的 `#rowsCard` / `#quickRow` / `#rowTitle` / `#rowSub` / `#rowHint` / `#chev`。
+`#secLabel` 保留（「跟随画面」还在用）。
+
+> 条数只留在**侧栏导航徽章**上（`window.set_nav_count`），没有第二处。
+
+#### ③ 窗口 720 → 570
+
+| 项 | 前 | 后 |
+|---|---|---|
+| 页面最小高度（真实 cocoa） | 648 | **514** |
+| 页面最小高度（offscreen fallback 字体） | 648 | **536** |
+| 窗口 | 780×720 | **780×570** |
+
+省下来的：常驻提示 32 + 快速操作 74 ≈ 106，窗口从 720 收到 570（留 ~34px 呼吸）。
+
+**`WIN_H` 就是页面拿到的高度**（系统标题栏在 `frameGeometry` 之外，实测 frame 648 = 620 + 28 标题栏）。
+旧守卫用 `WIN_H - CHROME_H`（CHROME_H=60 是猜的）估算，猜错就会把「装不下」判成「装得下」；
+现在守卫 `test_switch_page_still_fits_the_window` **把页面放进真实 MainWindow 量它拿到的高度**，
+并额外断言最底一块（跟随画面）不被裁。
+
+#### 守卫
+
+```bash
+pytest -q tests/test_ui_mac2.py -k "fits_the_window or quick_actions or hover_tip or operation_hint or peer_tip"
+```
+
+`test_quick_actions_section_is_gone` / `test_operation_hint_moved_into_button_hover_tip` /
+`test_peer_tip_mentions_offline_state` / `test_hover_tip_wraps_long_text_and_waits_for_the_delay` /
+`test_switch_page_still_fits_the_window`。
+
 ---
 
 ## 11. 实现对照表（2026-10-21 定稿）
@@ -753,9 +820,10 @@ Finder 复制图片时粘贴板里同时有 `public.file-url` 和一张**文件�
 
 | 设计项 | 实现位置 | 备注 |
 |---|---|---|
-| 窗口 780×580、侧栏 156、无底栏 | `ui/mac2/window.py` | 系统标题栏（**不开 full-size content view**，否则拖不动） |
-| 侧栏导航（核心/系统 + 计数 + 收起） | `ui/mac2/window.py::NavButton` | 剪贴板条数；156/56px 收起；徽章缩到图标右上角 |
-| 切换页（hero、主按钮、设备卡、键帽） | `ui/mac2/switch_page.py` | hero 右上角主色柔光自绘 |
+| 窗口 780×570、侧栏 156、无底栏 | `ui/mac2/window.py` | 系统标题栏（**不开 full-size content view**，否则拖不动）。570 见 §10.25 |
+| 侧栏导航（核心/系统 + 计数 + 收起） | `ui/mac2/window.py::NavButton` | 剪贴板条数（**唯一显示处**）；156/56px 收起；徽章缩到图标右上角 |
+| 切换页（hero + 四条通道 + 跟随画面） | `ui/mac2/switch_page.py` | hero 右上角主色柔光自绘；「快速操作」已删（§10.25） |
+| 长悬停 tip（按钮上的操作说明） | `ui/mac2/widgets.py::HoverTip/TipBubble` | 1.2s 才弹、300px 折行、先钳窗口再钳屏幕（§10.25） |
 | 剪贴板页（工具栏 / chips / 行 / 空态） | `ui/mac2/clipboard_page.py` | 行 68px，缩略图 46，角标 22 |
 | 悬浮预览窗（气泡 + 箭头 + 文件卡） | `ui/mac2/preview.py` | 箭头必须是子控件（父级画会被卡片盖住） |
 | 设置页（三组 + 存储上限 + 清理） | `ui/mac2/settings_page.py` | 「清理」发 `clearRequested` → 剪贴板页清空确认 |
@@ -779,7 +847,7 @@ Finder 复制图片时粘贴板里同时有 `public.file-url` 和一张**文件�
 
 | 项 | 值 | 位置 |
 |---|---|---|
-| 窗口 | 780×580 | `theme.WIN_W/WIN_H` |
+| 窗口 | 780×570 | `theme.WIN_W/WIN_H`（§10.25 收的） |
 | 侧栏 / 内容 padding | 156 / 20·18 | `theme` |
 | 行高 / 缩略图 / 角标 | 68 / 46(r10) / 22(r6) | `theme.ROW_H/THUMB/BADGE` |
 | 预览窗上限 | 图 562×626（内容框 522×477）· 文 392 · 码 400 · 文件卡 380 | `theme.PV_IMG_MAX_W/H` |
@@ -1418,9 +1486,10 @@ engine.pairing_status()           # idle | showing | connecting | paired | faile
 
 ### 14.6 连带改动
 
-- **窗口 780×580 → 780×720**：加这张卡后切换页最小高度变成 642，580 的窗口只给 ~520 ——
+- **窗口 780×580 → 780×720**（当时）：加这张卡后切换页最小高度变成 642，580 的窗口装不下 ——
   `setFixedSize` 不滚动，结果是 hero 的说明文字直接盖在 18 号通道按钮上（不报错、纯视觉错乱）。
-  其余三页都 ≤ 384，多出来的是留白。守备用例 `test_switch_page_still_fits_the_window`。
+  **同日晚又随 §10.25 精简收回到 780×570**（删掉常驻提示与「快速操作」两节后，最小高度只剩 514）。
+  守备用例 `test_switch_page_still_fits_the_window`（现在在真实窗口里量，不再推算 chrome）。
 - **图标库加 `keyboard` / `mouse`**（Lucide）。顺带发现 `tools/gen_iconlib.py` 的名单里
   少了 `chevron-left`（当初是手改进 `iconlib.py` 的），**一重新生成就会静默丢掉它** —— 已补进名单。
 

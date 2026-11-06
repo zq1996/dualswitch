@@ -23,11 +23,15 @@ _C = _chrome()
 # --------------------------------------------------------------------------- #
 # 几何（INTERACTIONS §7 视觉规格速查）
 # --------------------------------------------------------------------------- #
-WIN_W, WIN_H = 780, 720          # 整窗（含系统标题栏覆盖区）
-# 580 → 720（2026-11-06）：切换页加了「跟随画面」卡片后，页面最小高度
-# 变成 642（窗口是 setFixedSize，放不下不会滚动，只会互相压住 —— 实测
-# hero 的说明文字直接盖在 18 号通道的按钮上）。其余三页都 ≤ 384，多出来的
-# 地方是留白，不影响。
+WIN_W, WIN_H = 780, 570          # 整窗（含系统标题栏覆盖区）
+# 720 → 570（2026-11-06 晚）：切换页去掉「常驻操作提示」（-32）与「快速操作 ·
+# 剪贴板」整节（-74）后，页面最小高度从 648 降到 ~514（真实 cocoa 实测，
+# offscreen fallback 字体下 ~536），窗口跟着收回到 570 —— 装得下且只留几十像素
+# 呼吸，不再是原来那 100 多像素的空洞。
+# 窗口是 setFixedSize（放不下不会滚动，只会互相压住），改这里必须同步
+# tests/test_ui_mac2.py::test_switch_page_still_fits_the_window（那条量的是
+# 「窗口里页面实际拿到的高度」，不靠推算 chrome）。
+# 其余三页 sizeHint 都 ≤ 384，多出来的地方是留白，不影响。
 TITLEBAR_H = 40                  # 设计稿 .win-bar 高度
 SIDEBAR_W = 156          # 窄侧栏：只够放下导航图标 + 文字 + 状态灯
 SIDEBAR_W_COLLAPSED = 56 # 收起态：只留图标（内容宽 36）
@@ -62,6 +66,12 @@ ACT_BTN = 25
 # 悬浮预览窗（Frset 参数，INTERACTIONS §3.4）
 PV_OPEN_DELAY_MS = 450           # 只悬停缩略图才计时
 PV_CLOSE_DELAY_MS = 220
+
+#: 长悬停提示（2026-11-06）：切换页按钮上的操作说明走这个，不再是常驻文字行。
+#: 1.2s 才弹 —— 用户要求「长时间悬浮才给」，鼠标划过不该冒出来；文案按 300px 折行
+#: （QToolTip 对纯文本不自动换行，不折就是一条横贯屏幕的长条）。
+HOVER_TIP_MS = 1200
+HOVER_TIP_W = 300
 #: 预览窗尺寸走 Frset 的「内容自报 + 硬钳制」模型（2026-10-23 逆向实测）：
 #:   窗口宽 = clamp(内容宽 + 水平 chrome, MIN_W, MAX_W)
 #:   窗口高 = clamp(内容高 + 垂直 chrome, MIN_H, MAX_H)
@@ -457,7 +467,7 @@ def qss(t: Tokens | None = None) -> str:
     #srcLine {{ color: {t.ink3}; font-size: 11.5px; }}
     #srcDotOk {{ background: {t.ok}; border-radius: 3px; }}
     #srcDotIdle {{ background: {t.ink3}; border-radius: 3px; }}
-    #hintLine {{ color: {t.ink3}; font-size: 10.5px; }}
+    /* 操作说明不再常驻（2026-11-06）：改成按钮的长悬停 tip，见 widgets.HoverTip */
     /* 四条通道：一行 = 一个目标 + 本机/对端两种发送方式 */
     #actRow {{
         background: {t.card}; border: 1px solid {t.line_soft};
@@ -543,18 +553,12 @@ def qss(t: Tokens | None = None) -> str:
     #devTagOff {{ background: {t.idle_bg}; color: {t.ink3};
         border-radius: {RADIUS_PILL_FULL}px; font-size: 10px; font-weight: 650; padding: 3px 8px; }}
 
-    /* ---------- 快速操作行 ---------- */
-    #rowsCard {{ background: {t.card}; border: 1px solid {t.line_soft};
-        border-radius: {RADIUS_CARD}px; }}
+    /* ---------- 小节标题 ---------- */
+    /* 「快速操作」整节 2026-11-06 删除（剪贴板在侧栏已有入口），
+       对应的 #rowsCard / #quickRow / #rowTitle / #rowSub / #rowHint / #chev 一并删掉；
+       只剩「跟随画面」等小节还在用 #secLabel。 */
     #secLabel {{ color: {t.ink3}; font-size: 10.5px; font-weight: 700;
         letter-spacing: 0.5px; }}
-    QPushButton#quickRow {{ background: transparent; border: 0; text-align: left;
-        border-radius: {RADIUS_CARD}px; }}
-    QPushButton#quickRow:hover {{ background: {t.card2}; }}
-    #rowTitle {{ color: {t.ink}; font-size: 12.5px; font-weight: 550; }}
-    #rowSub {{ color: {t.ink3}; font-size: 10.5px; }}
-    #rowHint {{ color: {t.ink3}; font-size: 10px; font-family: "{MONO_FAMILIES[0]}"; }}
-    #chev {{ color: {t.ink3}; font-size: 13px; }}
 
     /* ---------- 跟随画面卡片（2026-11-06） ---------- */
     #followCard {{ background: {t.card}; border: 1px solid {t.line_soft};
