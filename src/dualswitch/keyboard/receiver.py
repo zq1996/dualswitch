@@ -51,10 +51,6 @@ class KeyboardReceiver:
         #: **这是链路 RTT，不是端到端按键延迟** —— 后者要等捕获端把 `t` 时间戳
         #: 填上、两端时钟校过之后才算得准。
         self.last_rtt_ms: float | None = None
-        #: 对端在 T_KEYSTATE 里报的链路往返（ms）。界面拿它显示「往返 N ms」。
-        #: **这是链路 RTT，不是端到端按键延迟** —— 后者要等捕获端把 `t` 时间戳
-        #: 填上、两端时钟校过之后才算得准。
-        self.last_rtt_ms: float | None = None
         self.stats = {
             "keys": 0, "injected": 0, "dropped_stale": 0,
             "dropped_unmapped": 0, "dropped_disabled": 0,
@@ -65,6 +61,9 @@ class KeyboardReceiver:
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    def attach(self, engine) -> None:  # noqa: ARG002
+        """注入端不持有引擎（按键发送在捕获端）。留着只为两端接口一致。"""
 
     def available(self) -> tuple[bool, str]:
         return self._injector.available()
@@ -185,9 +184,6 @@ class KeyboardReceiver:
         只做**释放**方向。反向（对端说按着、本端没按）绝不补按下 ——
         补错了就是误输入，而少按一个键最多是"这次没打出来"。
         """
-        rtt = header.get("rtt")
-        if isinstance(rtt, (int, float)) and not isinstance(rtt, bool):
-            self.last_rtt_ms = float(rtt)
         rtt = header.get("rtt")
         if isinstance(rtt, (int, float)) and not isinstance(rtt, bool):
             self.last_rtt_ms = float(rtt)

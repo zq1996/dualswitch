@@ -575,3 +575,34 @@ def test_readback_confirmation_updates_owner(monkeypatch):
     ctl._readback(result)
     assert result.readback == "confirmed"
     assert ctl.source_state == "mac"
+
+
+# --------------------------------------------------------------------------- #
+# 键盘跟随：外部切换（对端发起 / 手按 OSD）也要把焦点交给键盘端点
+# --------------------------------------------------------------------------- #
+def test_read_host_change_notifies_the_keyboard_endpoint():
+    """`_after_screen_switch` 只覆盖本机发起的切换；直读发现的外部切换必须补一条。
+
+    漏了这条的现场表现：在 Mac 上把画面切回来，Windows 侧界面已经显示「画面在
+    Windows」，但键盘转发还停在「转发中 → Mac」——按什么键都打到对面去。
+    """
+    ctl, _ = new_controller(monitors=[])
+
+    class Rx:
+        def __init__(self):
+            self.targets = []
+
+        def on_focus(self, target):
+            self.targets.append(target)
+
+    rx = Rx()
+    ctl.set_keyboard(rx)
+    ctl._commit_read_host("mac")      # noqa: SLF001 - 直读结果就是从这个入口进来的
+    assert rx.targets == ["mac"]
+
+    # 同一个结论不重复通知（否则每轮直读都推一次 epoch）
+    ctl._commit_read_host("mac")      # noqa: SLF001
+    assert rx.targets == ["mac"]
+
+    ctl._commit_read_host("windows")  # noqa: SLF001
+    assert rx.targets == ["mac", "windows"]

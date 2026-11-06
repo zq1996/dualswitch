@@ -25,7 +25,13 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 # 几何（设计 §3.1）
 # --------------------------------------------------------------------------- #
-WIN_W, WIN_H = 780, 580          # 整窗（含自绘标题栏）
+WIN_W, WIN_H = 780, 550          # 整窗（含自绘标题栏 40）
+# 580 → 550（2026-11-06，跟 mac2 的切换页改版一起）。**这个数不是估的，也不是
+# 照抄 mac2 的 570**：Windows 的标题栏画在窗口**内部**（mac 的在 frame 之外），
+# 页面实际拿到的高度 = WIN_H - TITLEBAR_H = 510。切换页最坏文案下最小高度 482
+# （实测，见 tests/test_ui_win2.py::test_switch_page_still_fits_the_window，
+# 那条把页面放进真实 MainWindow 量），510 装得下且只留 ~28px 呼吸 —— 与 mac2
+# 「装得下、只留几十像素」的口径一致。直接抄 570 会让切换页多出 48px 空洞。
 TITLEBAR_H = 40                  # 设计稿 .win-bar 高度
 #: 侧栏宽度。2026-10-22 用户拍板「跟 mac2」：188 → 156，并且可以收到 56
 #: （§14.2 从「待拍板」变成「已拍板」，Windows 侧栏从此与 mac2 同宽同行为）。
@@ -61,6 +67,12 @@ ACT_BTN = 25
 # 悬浮预览窗（尺寸/时序与 mac2 完全一致，设计 §2「保持一致的」）
 PV_OPEN_DELAY_MS = 450           # 只悬停缩略图才计时
 PV_CLOSE_DELAY_MS = 220
+
+#: 长悬停提示（2026-11-06，跟 mac2）：切换页按钮上的操作说明走这个，
+#: 不再是常驻文字行。1.2s 才弹 —— 用户要求「长时间悬浮才给」；文案按 300px 折行
+#: （QToolTip 对纯文本不自动换行，不折就是一条横贯屏幕的长条）。
+HOVER_TIP_MS = 1200
+HOVER_TIP_W = 300
 PV_IMG_MAX_W, PV_IMG_MAX_H = 412, 330
 PV_TXT_MAX_W, PV_TXT_MAX_H = 392, 270
 #: 预览窗正文最多渲染多少字。**不是视觉截断**：正常长度完整显示，
@@ -517,7 +529,7 @@ def qss(t: Tokens | None = None) -> str:
     #srcLine {{ color: {t.ink3}; font-size: 11.5px; }}
     #srcDotOk {{ background: {t.ok}; border-radius: 3px; }}
     #srcDotIdle {{ background: {t.ink3}; border-radius: 3px; }}
-    #hintLine {{ color: {t.ink3}; font-size: 10.5px; }}
+    /* 操作说明不再常驻（2026-11-06）：改成按钮的长悬停 tip，见 widgets.HoverTip */
     /* 四条通道（INTERACTIONS §10.24）：一行 = 一个目标 + 本机发送(主) + 兜底小钮 */
     #actRow {{
         background: {t.card}; border: 1px solid {t.line_soft};
@@ -601,18 +613,29 @@ def qss(t: Tokens | None = None) -> str:
     #devTagOff {{ background: {t.idle_bg}; color: {t.ink3};
         border-radius: 10px; font-size: 11px; font-weight: 650; padding: 3px 8px; }}
 
-    /* ---------- 快速操作行 ---------- */
-    #rowsCard {{ background: {t.card}; border: 1px solid {t.line_soft};
-        border-radius: {RADIUS_CARD}px; }}
+    /* ---------- 小节标题 ---------- */
+    /* 「快速操作」整节 2026-11-06 删除（剪贴板在侧栏已有入口，还带条数徽章），
+       对应的 #rowsCard / #quickRow / #rowTitle / #rowSub / #rowHint / #chev 一并删掉；
+       只剩「跟随画面」这类小节还在用 #secLabel。 */
     #secLabel {{ color: {t.ink3}; font-size: 11px; font-weight: 700;
         letter-spacing: 0.5px; }}
-    QPushButton#quickRow {{ background: transparent; border: 0; text-align: left;
+
+    /* ---------- 跟随画面卡片（2026-11-06） ---------- */
+    #followCard {{ background: {t.card}; border: 1px solid {t.line_soft};
         border-radius: {RADIUS_CARD}px; }}
-    QPushButton#quickRow:hover {{ background: {t.card2}; }}
-    #rowTitle {{ color: {t.ink}; font-size: 13px; font-weight: 550; }}
-    #rowSub {{ color: {t.ink3}; font-size: 11px; }}
-    #rowHint {{ color: {t.ink3}; font-size: 11px; font-family: "{mono_family()}"; }}
-    #chev {{ color: {t.ink3}; font-size: 13px; }}
+    #followTitle {{ color: {t.ink}; font-size: 13px; font-weight: 550; }}
+    #followSub {{ color: {t.ink3}; font-size: 11px; }}
+    #followHair {{ background: {t.line_soft}; border: 0; }}
+    #followStateRun {{ color: {t.run}; font-size: 11px; }}
+    #followStateOk {{ color: {t.ok}; font-size: 11px; }}
+    #followStateIdle {{ color: {t.ink3}; font-size: 11px; }}
+    #followStateWarn {{ color: {t.warn}; font-size: 11px; }}
+    #followStateBad {{ color: {t.danger}; font-size: 11px; }}
+
+    /* ---------- 长悬停提示弹层（自绘，不用 QToolTip） ---------- */
+    /* QToolTip 在 Windows 上同样①不做屏幕钳制（按钮靠右时溢出屏幕）
+       ②被全局样式锁成系统深色小字。弹层本体自己画，见 widgets.TipBubble。 */
+    #tipBubble {{ background: transparent; }}
 
     /* ---------- 剪贴板页 ---------- */
     #searchBox {{

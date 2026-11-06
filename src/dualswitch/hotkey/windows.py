@@ -1,10 +1,15 @@
 """Windows 全局热键后端。
 
 两个实现：
-* RegisterHotkeyBackend —— V1 默认。RegisterHotKey(MOD_ALT, VK_SPACE)，
+* RegisterHotkeyBackend —— 默认。RegisterHotKey(MOD_ALT, VK_SPACE)，
   实现成本最低，但无法区分左右 Alt（需求文档 2.1 已声明的已知限制）。
 * LowLevelHookBackend —— 可选增强（需求文档 2.2）。低级键盘钩子监听 VK_RMENU，
   可严格只响应右 Alt + Space，并吞掉按键避免弹出窗口系统菜单。
+
+**2026-11-06：钩子本身搬到 `keyboard/hook_windows.py`。** 键盘跟随也要装
+`WH_KEYBOARD_LL`，而低级钩子是链式的（后装的先跑、各自吞），两个钩子一起工作
+吞键行为不可预测（`docs/KEYBOARD-BRIDGE.md` §8.6）。现在全进程只有一个钩子，
+本后端改成"向它注册一个匹配器"，对外行为（start/stop/describe/错误文案）不变。
 """
 
 from __future__ import annotations
@@ -18,6 +23,8 @@ from .base import Hotkey, HotkeyError, to_vk, to_win_modifiers
 
 if sys.platform != "win32":  # pragma: no cover - 平台守卫
     raise ImportError("dualswitch.hotkey.windows 只能在 Windows 上导入")
+
+from ..keyboard.hook_windows import KBDLLHOOKSTRUCT, key_down, shared_hook
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -34,8 +41,6 @@ WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
-HC_ACTION = 0
-WH_KEYBOARD_LL = 13
 
 VK_RMENU = 0xA5
 VK_LMENU = 0xA4
@@ -52,29 +57,7 @@ _user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.W
 _user32.PostThreadMessageW.restype = wintypes.BOOL
 _user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
 _user32.GetAsyncKeyState.restype = ctypes.c_short
-# 关键：不声明 restype 时 ctypes 默认 c_int，64 位下会把 HMODULE 截断，
-# 导致 SetWindowsHookExW 报 WinError 126 (ERROR_MOD_NOT_FOUND)。
-_kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
-_kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-
-_HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
-
-_user32.SetWindowsHookExW.argtypes = [ctypes.c_int, _HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
-_user32.SetWindowsHookExW.restype = wintypes.HHOOK
-_user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
-_user32.UnhookWindowsHookEx.restype = wintypes.BOOL
-_user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
-_user32.CallNextHookEx.restype = ctypes.c_ssize_t
-
-
-class _KBDLLHOOKSTRUCT(ctypes.Structure):
-    _fields_ = [
-        ("vkCode", wintypes.DWORD),
-        ("scanCode", wintypes.DWORD),
-        ("flags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.c_size_t),
-    ]
+_kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
 
 def _hint_for_error(code: int) -> str:
@@ -152,7 +135,11 @@ class RegisterHotkeyBackend:
 
 
 class LowLevelHookBackend:
-    """严格修饰键匹配的低级键盘钩子。"""
+    """严格修饰键匹配的低级键盘钩子。
+
+    **不自己装钩子**：向 `keyboard/hook_windows.py` 的进程唯一钩子注册一个匹配器
+    （2026-11-06）。这样键盘跟随打开时也只有一条链，不会出现"两个钩子抢着吞"。
+    """
 
     name = "hook"
 
@@ -161,32 +148,26 @@ class LowLevelHookBackend:
         self.callback = callback
         self.swallow = swallow
         self.error: str | None = None
-        self._thread: threading.Thread | None = None
-        self._tid: int | None = None
         self._hook = None
-        self._proc = None
-        self._ready = threading.Event()
         self._vk = 0
         self._swallow_keyup = False
+        self._started = False
 
     def describe(self) -> str:
         return self.hotkey.describe()
 
     # ------------------------------------------------------------ 修饰键判断
     def _mods_ok(self) -> bool:
-        def down(vk: int) -> bool:
-            return bool(_user32.GetAsyncKeyState(vk) & 0x8000)
-
         for mod in self.hotkey.modifiers:
-            if mod == "ralt" and not down(VK_RMENU):
+            if mod == "ralt" and not key_down(VK_RMENU):
                 return False
-            if mod == "alt" and not (down(VK_RMENU) or down(VK_LMENU)):
+            if mod == "alt" and not (key_down(VK_RMENU) or key_down(VK_LMENU)):
                 return False
-            if mod == "ctrl" and not (down(0xA2) or down(0xA3)):
+            if mod == "ctrl" and not (key_down(0xA2) or key_down(0xA3)):
                 return False
-            if mod == "shift" and not (down(0xA0) or down(0xA1)):
+            if mod == "shift" and not (key_down(0xA0) or key_down(0xA1)):
                 return False
-            if mod == "win" and not (down(0x5B) or down(0x5C)):
+            if mod == "win" and not (key_down(0x5B) or key_down(0x5C)):
                 return False
         return True
 
@@ -196,61 +177,44 @@ class LowLevelHookBackend:
             self._vk = to_vk(self.hotkey.key)
         except HotkeyError as exc:
             raise HotkeyError(str(exc)) from exc
-        self._thread = threading.Thread(target=self._run, name="hotkey-hook", daemon=True)
-        self._thread.start()
-        self._ready.wait(timeout)
-        if self.error:
-            raise HotkeyError(self.error)
-
-    def _run(self) -> None:
-        self._tid = _kernel32.GetCurrentThreadId()
-
-        def _proc(n_code, w_param, l_param):  # noqa: ANN001
-            if n_code == HC_ACTION:
-                kb = ctypes.cast(l_param, ctypes.POINTER(_KBDLLHOOKSTRUCT)).contents
-                vk = int(kb.vkCode)
-                msg = int(w_param)
-                if msg in (WM_KEYDOWN, WM_SYSKEYDOWN) and vk == self._vk and self._mods_ok():
-                    self._swallow_keyup = self.swallow
-                    try:
-                        self.callback()
-                    except Exception:
-                        pass
-                    if self.swallow:
-                        return 1
-                elif msg in (WM_KEYUP, WM_SYSKEYUP) and vk == self._vk and self._swallow_keyup:
-                    self._swallow_keyup = False
-                    if self.swallow:
-                        return 1
-            return _user32.CallNextHookEx(None, n_code, w_param, l_param)
-
-        self._proc = _HOOKPROC(_proc)
-        hmod = _kernel32.GetModuleHandleW(None)
-        self._hook = _user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._proc, hmod, 0)
-        if not self._hook:
-            self.error = f"安装键盘钩子失败 (WinError {ctypes.get_last_error()})，可能被安全软件拦截。"
-            self._ready.set()
+        if self._started:
             return
-        self._ready.set()
-
-        msg = wintypes.MSG()
+        hook = shared_hook()
         try:
-            while True:
-                ret = _user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
-                if ret <= 0:
-                    break
-                _user32.TranslateMessage(ctypes.byref(msg))
-                _user32.DispatchMessageW(ctypes.byref(msg))
-        finally:
-            if self._hook:
-                _user32.UnhookWindowsHookEx(self._hook)
-                self._hook = None
+            hook.acquire(self._on_event, name=f"hotkey:{self.hotkey.describe()}", timeout=timeout)
+        except OSError as exc:
+            self.error = str(exc)
+            raise HotkeyError(self.error) from exc
+        self._hook = hook
+        self._started = True
+
+    def _on_event(self, vk: int, down: bool, kb: KBDLLHOOKSTRUCT) -> bool:  # noqa: ARG002
+        if down:
+            if vk == self._vk and self._mods_ok():
+                self._swallow_keyup = self.swallow
+                try:
+                    self.callback()
+                except Exception:  # noqa: BLE001 - 回调异常不能杀死钩子
+                    pass
+                return bool(self.swallow)
+            return False
+        # 抬起：只有按下时吞过才吞，否则会把普通按键的抬起吃掉
+        if vk == self._vk and self._swallow_keyup:
+            self._swallow_keyup = False
+            return bool(self.swallow)
+        return False
 
     def stop(self) -> None:
-        if self._tid:
-            _user32.PostThreadMessageW(self._tid, WM_QUIT, 0, 0)
-        if self._thread:
-            self._thread.join(timeout=1.5)
+        hook = self._hook
+        self._hook = None
+        self._started = False
+        self._swallow_keyup = False
+        if hook is not None:
+            try:
+                hook.release(self._on_event)
+            except Exception:  # noqa: BLE001 - 停不下来也不能连累退出
+                pass
+
 
 
 def probe_available(hotkey: Hotkey, hotkey_id: int = 0xB0FF) -> tuple[bool, str]:

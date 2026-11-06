@@ -69,6 +69,9 @@ foreach ($shim in "theme", "widgets", "window", "settings", "statusitem", "clipb
     --hidden-import "PIL.ImageDraw" `
     --hidden-import "hid" `
     --hidden-import "dualswitch.ui.win" `
+    --hidden-import "dualswitch.ui.win2" `
+    --hidden-import "dualswitch.keyboard.capture_windows" `
+    --hidden-import "dualswitch.keyboard.hook_windows" `
     @shimArgs `
     --distpath "$root\dist" `
     --workpath "$root\build" `

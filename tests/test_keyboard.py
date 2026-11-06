@@ -404,5 +404,61 @@ def test_engine_swallows_receiver_errors():
     assert engine.keyboard_stats["received"] == 1
 
 
+# --------------------------------------------------------------------------- #
+# Windows 捕获端的键位表（数据是共享的，所以在两端都跑）
+# --------------------------------------------------------------------------- #
+def test_windows_vk_table_covers_every_letter_digit_and_modifier():
+    """捕获端拿到的只有 vkCode，翻不回 usage 就等于那个键消失。
+
+    字母/数字/修饰键是"少了立刻能感觉到"的部分，逐个钉住。
+    """
+    from dualswitch.keyboard.keymap import usage_for_vk
+
+    for i in range(26):                       # A–Z：VK 0x41–0x5A ↔ usage 0x04–0x1D
+        assert usage_for_vk(0x41 + i) == 0x04 + i
+    for i in range(9):                        # 1–9
+        assert usage_for_vk(0x31 + i) == 0x1E + i
+    assert usage_for_vk(0x30) == 0x27         # 0
+    # 修饰键必须区分左右：Windows 的 LL 钩子给的就是左右不同的 VK
+    assert usage_for_vk(0xA2) == HID_LCTRL
+    assert usage_for_vk(0xA3) == 0xE4
+    assert usage_for_vk(0xA0) == HID_LSHIFT
+    assert usage_for_vk(0xA1) == 0xE5
+    assert usage_for_vk(0xA4) == HID_LALT
+    assert usage_for_vk(0xA5) == HID_RALT
+    assert usage_for_vk(0x5B) == HID_LGUI
+    assert usage_for_vk(0x5C) == 0xE7
+
+
+def test_windows_vk_table_round_trips_every_vk():
+    """VK → usage → VK 必须回到同一个键码（反向表不许把键改到别处）。
+
+    两个**有意合并**的别名不参与反向等价，单独在下面钉住：
+    `0x31/0x32` 都是反斜杠位置、`0x28/0x58` 都是回车。
+    """
+    from dualswitch.keyboard.keymap import USAGE_TO_WIN_VK, VK_TO_USAGE
+
+    for vk, usage in VK_TO_USAGE.items():
+        assert USAGE_TO_WIN_VK[usage] == vk, f"VK 0x{vk:02X} 翻成了 usage 0x{usage:02X} 又翻丢"
+
+
+def test_windows_vk_table_collapses_known_aliases():
+    """别名合并是刻意的：注入端对这两组键的行为完全一致，不必区分。"""
+    from dualswitch.keyboard.keymap import usage_for_vk
+
+    assert usage_for_vk(0xDC) == 0x31, "Non-US #~ 按反斜杠位置处理（与 mac 侧一致）"
+    assert usage_for_vk(0x0D) == 0x28, "小键盘回车识别成主回车"
+
+
+def test_windows_vk_table_shares_the_vk_names_with_the_hotkey_parser():
+    """热键解析器（`to_vk`）与捕获端的表必须是同一套 VK，否则白名单会失配。"""
+    from dualswitch.hotkey.base import to_vk
+    from dualswitch.keyboard.keymap import USAGE_TO_WIN_VK, usage_for_vk
+
+    assert usage_for_vk(to_vk("k")) == 0x0E
+    assert usage_for_vk(to_vk("space")) == 0x2C
+    assert USAGE_TO_WIN_VK[0x0E] == to_vk("k")
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))

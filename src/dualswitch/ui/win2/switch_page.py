@@ -1,4 +1,4 @@
-"""切换页：显示器信息 + 四条显式通道（17/18 × 本机/对端）+ 快速操作。
+"""切换页：显示器信息 + 四条显式通道（17/18 × 本机/对端）+ 跟随画面。
 
 与 mac2 同构（INTERACTIONS-v2 §10.24，2026-10-24 与 Mac 端对齐）：
 
@@ -16,6 +16,14 @@ AOC 这类屏输入切走后两端照样枚举得到，任何「按归属推方�
   · 「本机发送」= 主操作，定宽 150px（内容 ~85px，不许 stretch 拉满）；
   · 「请对端发送」= 兜底，行尾 28×28 图标钮（send 纸飞机），tooltip/accessibleName
     带文案；本机 DDC 不可用时（驱动/权限/线材）才用。
+
+**2026-11-06 版面精简（跟 mac2 同步）**：
+* 原来常驻在 hero 里、占两行的「操作提示」整段移进按钮的长悬停 tip
+  （`widgets.HoverTip`，1.2s 才弹）—— 说明文字不该每次都占版面；
+* 「快速操作 · 剪贴板」整节删除：剪贴板在侧栏「核心」里已有入口（还带条数徽章），
+  这里再放一行是重复导航；
+* 新增「跟随画面」卡片（`follow_card.FollowCard`）：键盘转发 / 鼠标跟随两个开关，
+  插在 hero 与页面底部之间 —— hero 是「输入通道」语义，跟随是外设副作用，不混。
 
 Windows 口径差异：药丸是自绘 `widgets.Pill`（19px 高 QSS 圆角会被 Qt 丢掉）、
 字体走 Segoe/雅黑字阶。
@@ -36,7 +44,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import icons, theme
-from .widgets import Pill, label
+from .follow_card import FollowCard
+from .widgets import Pill, attach_hover_tip, label
 
 PORT = {"windows": "HDMI", "mac": "USB-C"}
 TITLE = {"windows": "Windows", "mac": "Mac"}
@@ -60,6 +69,10 @@ class ActionRow(QFrame):
     - **兜底降级为行尾 28×28 小图标钮**（方案 A）：本机发送已实测始终可达
       （SCREEN-OWNERSHIP §1.4），「请对端发送」只剩兜底用途。
     - 主按钮 + 小钮**靠右成簇**（间距 8px），两行按钮列左右对齐。
+
+    两个按钮的说明都走**长悬停 tip**（1.2s 才弹，2026-11-06 跟 mac2）：原来那段
+    「本机发送直接把 DDC 命令发给显示器…」是常驻在卡片底部的两行灰字，占版面
+    又不常读；悬停看一次就够。
     """
 
     localClicked = Signal(int)
@@ -74,6 +87,14 @@ class ActionRow(QFrame):
     BTN_H = 38
     MINI = 28            # 兜底小钮边长
     MINI_GAP = 8         # 主按钮与小钮间距
+
+    #: 主按钮的长悬停说明（= 原 hero 常驻提示行的前半段）
+    TIP_LOCAL = (
+        "「本机发送」直接把 DDC 命令发给显示器：\n"
+        "画面在哪一边都能切，不需要先判断当前输入。\n"
+        "行尾纸飞机是兜底通道——本机 DDC 不可用时（驱动 / 权限 / 线材）"
+        "让对端代发。"
+    )
 
     def __init__(self, host: str, value: int, is_local: bool, parent=None):
         super().__init__(parent)
@@ -117,7 +138,10 @@ class ActionRow(QFrame):
         self.btn_local.setCursor(Qt.PointingHandCursor)
         self.btn_local.setFocusPolicy(Qt.NoFocus)
         self.btn_local.setIcon(QIcon(icons.svg_pixmap("monitor", 15, "#FFFFFF", 2.0)))
+        self.btn_local.setAccessibleName(f"本机发送 {self.value}")
         self.btn_local.clicked.connect(lambda: self.localClicked.emit(self.value))
+        # 长悬停说明（2026-11-06）：原 hero 底部那两行常驻灰字搬到这里
+        self.tip_local = attach_hover_tip(self.btn_local, self.TIP_LOCAL)
 
         self.btn_peer = QPushButton()
         self.btn_peer.setObjectName("miniBtn")
@@ -125,9 +149,9 @@ class ActionRow(QFrame):
         self.btn_peer.setCursor(Qt.PointingHandCursor)
         self.btn_peer.setFocusPolicy(Qt.NoFocus)
         self.btn_peer.setIcon(QIcon(icons.svg_pixmap("send", 13, t.ink2, 2.0)))
-        self.btn_peer.setToolTip(f"请对端发送 {self.value} · 兜底通道（本机 DDC 不可用时让对端代发）")
         self.btn_peer.setAccessibleName(f"请对端发送 {self.value}")
         self.btn_peer.clicked.connect(lambda: self.peerClicked.emit(self.value))
+        self.tip_peer = attach_hover_tip(self.btn_peer, self.peer_tip_text())
 
         lay.addStretch(1)
         cluster = QHBoxLayout()          # 按钮簇独立布局：间距 MINI_GAP，不受外层 10px 影响
@@ -135,6 +159,20 @@ class ActionRow(QFrame):
         cluster.addWidget(self.btn_local, 0, Qt.AlignVCenter)
         cluster.addWidget(self.btn_peer, 0, Qt.AlignVCenter)
         lay.addLayout(cluster)
+
+    def peer_tip_text(self) -> str:
+        """兜底小钮的说明。对端离线时补一句「当前不可用」，别让人对着灰钮猜。"""
+        text = (
+            f"请对端发送 {self.value} · 兜底通道：\n"
+            "本机 DDC 不可用时（驱动 / 权限 / 线材）让对端代发这条切屏命令。"
+        )
+        if not self.btn_peer.isEnabled():
+            text += "\n当前对端离线，此通道不可用。"
+        return text
+
+    def set_peer_available(self, available: bool) -> None:
+        self.btn_peer.setEnabled(bool(available))
+        self.tip_peer.set_text(self.peer_tip_text())
 
 
 # --------------------------------------------------------------------------- #
@@ -212,14 +250,8 @@ class SwitchCard(QFrame):
             acts.addWidget(row)
         lay.addLayout(acts)
 
-        lay.addSpacing(9)
-        self.hint = label(
-            "「本机发送」直接把 DDC 命令发给显示器，画面在哪边都能切；"
-            "行尾纸飞机是兜底——本机 DDC 不可用时（驱动 / 权限 / 线材）让对端代发。",
-            "hintLine",
-        )
-        self.hint.setWordWrap(True)
-        lay.addWidget(self.hint)
+        # 原来这里有一段常驻「操作提示」两行灰字（占 ~32px）；2026-11-06 跟 mac2
+        # 改成按钮的长悬停 tip，见 ActionRow.TIP_LOCAL。
 
         # ---- 上次动作 ----
         note_row = QHBoxLayout()
@@ -310,7 +342,8 @@ class SwitchCard(QFrame):
     def _apply_enabled(self) -> None:
         for row in self.rows:
             row.btn_local.setEnabled(not self._busy)
-            row.btn_peer.setEnabled(not self._busy and self._remote_ok)
+            # 兜底钮的可用性 = 不忙 且 对端在线；tip 文案随状态补一句（见 peer_tip_text）
+            row.set_peer_available(not self._busy and self._remote_ok)
 
     @staticmethod
     def _polish(*widgets) -> None:  # noqa: ANN002
@@ -319,58 +352,13 @@ class SwitchCard(QFrame):
             w.style().polish(w)
 
 
-# --------------------------------------------------------------------------- #
-# 快速操作行
-# --------------------------------------------------------------------------- #
-class QuickRow(QPushButton):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("quickRow")
-        self.setFixedHeight(theme.TOOL_ROW_H)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFocusPolicy(Qt.NoFocus)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 0, 14, 0)
-        lay.setSpacing(11)
-        icon = QLabel()
-        icon.setFixedSize(20, 20)
-        icon.setPixmap(icons.svg_pixmap("clipboard", 20, theme.tokens().accent, 1.9))
-        icon.setAttribute(Qt.WA_TransparentForMouseEvents)
-        lay.addWidget(icon)
-        col = QVBoxLayout()
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(2)
-        self.title = label("剪贴板", "rowTitle")
-        self.sub = label("跨端同步文字与图片 · 来源系统可见", "rowSub")
-        for w in (self.title, self.sub):
-            w.setAttribute(Qt.WA_TransparentForMouseEvents)
-        col.addWidget(self.title)
-        col.addWidget(self.sub)
-        lay.addLayout(col, 1)
-        self.hint = label("0 条", "rowHint")
-        self.hint.setAttribute(Qt.WA_TransparentForMouseEvents)
-        lay.addWidget(self.hint)
-        chev = QLabel()
-        chev.setFixedSize(14, 14)
-        chev.setPixmap(icons.svg_pixmap("chevron-right", 14, theme.tokens().ink3, 2.0))
-        chev.setAttribute(Qt.WA_TransparentForMouseEvents)
-        lay.addWidget(chev)
-
-    def set_count(self, count: int, abnormal: int = 0) -> None:
-        text = f"{count} 条"
-        if abnormal:
-            text = f"{count} 条 · {abnormal} 异常"
-        self.hint.setText(text)
-
-
-# --------------------------------------------------------------------------- #
-# 页面
-# --------------------------------------------------------------------------- #
 class SwitchPage(QWidget):
     localRequested = Signal(int)
     peerRequested = Signal(int)
-    clipboardRequested = Signal()
     toastRequested = Signal(str)
+    #: 跟随开关（2026-11-06）：状态由链路同步，这里只把用户操作抛出去
+    keyboardFollowToggled = Signal(bool)
+    mouseFollowToggled = Signal(bool)
 
     def __init__(self, cfg, hotkey_label: str = "", monitor_name: str = "", parent=None):
         super().__init__(parent)
@@ -388,17 +376,16 @@ class SwitchPage(QWidget):
         self.hero.peerRequested.connect(self.peerRequested)
         lay.addWidget(self.hero)
 
-        lay.addWidget(label("快速操作", "secLabel"))
-        rows = QFrame()
-        rows.setObjectName("rowsCard")
-        rows_lay = QVBoxLayout(rows)
-        rows_lay.setContentsMargins(0, 0, 0, 0)
-        rows_lay.setSpacing(0)
-        self.row_clip = QuickRow()
-        self.row_clip.clicked.connect(self.clipboardRequested)
-        rows_lay.addWidget(self.row_clip)
-        lay.addWidget(rows)
+        # 「跟随画面」：键盘 / 鼠标这两个外设是切屏的副作用，不属于 hero 的
+        # 「输入通道」语义，所以单开一节。
+        lay.addWidget(label("跟随画面", "secLabel"))
+        self.follow = FollowCard()
+        self.follow.keyboardToggled.connect(self.keyboardFollowToggled)
+        self.follow.mouseToggled.connect(self.mouseFollowToggled)
+        lay.addWidget(self.follow)
 
+        # 2026-11-06 删除「快速操作 · 剪贴板」：剪贴板在侧栏「核心」里已有入口，
+        # 这里再放一行是重复导航，还白占 74px（标题 16 + 卡片 46 + 两处间距）。
         lay.addStretch(1)
 
     # ------------------------------------------------------------------ 状态
@@ -420,5 +407,14 @@ class SwitchPage(QWidget):
     def set_note(self, text: str, ok: bool = True, bad: bool = False) -> None:
         self.hero.set_note(text, ok=ok, bad=bad)
 
-    def set_clip_count(self, count: int, abnormal: int = 0) -> None:
-        self.row_clip.set_count(count, abnormal)
+    # ------------------------------------------------------------------ 跟随
+    def set_keyboard_follow(self, on: bool, text: str, tone: str = "idle") -> None:
+        self.follow.keyboard.set_checked(on)
+        self.follow.keyboard.set_usable(True)
+        self.follow.keyboard.set_state(text, tone)
+
+    def set_mouse_follow(self, on: bool, text: str, tone: str = "idle",
+                         usable: bool = True) -> None:
+        self.follow.mouse.set_checked(on)
+        self.follow.mouse.set_usable(usable)
+        self.follow.mouse.set_state(text, tone)

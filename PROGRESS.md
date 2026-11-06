@@ -1,6 +1,11 @@
 # 项目进度（可中断续跑）
 
-> 最后更新：2026-10-20 09:40
+> 最后更新：2026-11-06 17:30
+>
+> 👉 **2026-11-06 17:30（键盘跟随两端都通了）**：Windows 捕获端（唯一 LL 钩子 + 吞键闸门）
+> 落地，macOS 注入端由 mac 侧先做（`2aa325f`）；切换页两端都有「跟随画面」卡片。
+> 细节见 §8 第一条；方案与验收命令见 [`docs/KEYBOARD-BRIDGE.md`](docs/KEYBOARD-BRIDGE.md) §18。
+> **剩阶段 3 真机联调**（连续切 20 次 / 打字 10 分钟 / 拔网线自愈 / `Fn+W` 挪走键盘）。
 >
 > 👉 **2026-10-20 09:40（界面代码两端物理拆开 · 冲突面归零）**：`src/dualswitch/ui/` 现在分成
 > **两棵互不引用的树**：`ui/mac/`（macOS 整套界面）与 `ui/win/`（Windows 整套界面），各含
@@ -513,6 +518,41 @@ dualswitch/
 ---
 
 ## 8. 变更日志
+
+- 2026-11-06 17:30 **Windows 捕获端落地 + 切换页跟 mac2 改版**（合并 `2f3d525` 后补齐 Windows 那一半）。
+  **键盘跟随至此两端都通了**：Windows 吞键转发（本轮）、macOS 注入（`2aa325f`）。
+  · `keyboard/hook_windows.py`：**进程唯一**的 `WH_KEYBOARD_LL` + 分发器，引用计数
+    `acquire/release`。`hotkey/windows.py::LowLevelHookBackend` 从"自己装钩子"改成
+    "向它注册匹配器"，对外行为不变 —— 两个钩子一起工作会让吞键顺序不可预测（§8.6）。
+    坑：`self._on_event` 每次取值都是新的 bound method，`release()` 用 `is` 永远不相等
+    （钩子静默泄漏），必须 `==`。
+  · `keyboard/capture_windows.py`：闸门四条（转发中 / 300ms 内有成功发送 / 不在白名单 /
+    非注入事件）、epoch 由本端推进、`T_KEYSTATE` 心跳（兼 CapsLock 对齐与按下位图）、
+    切屏与关闭时全量抬键、往返借 `T_STATE` 请求回执量（不新增协议帧）。
+    **钩子回调里不做 I/O**：只入队（上限 256），发送在 worker 线程；队列满就不吞。
+  · `keymap.py` 补 `USAGE_TO_WIN_VK / VK_TO_USAGE / usage_for_vk()`（协议只有 usage）。
+  · `keyboard.create_endpoint()`：按平台返回捕获端 / 注入端，`cli.py` 不写平台分支；
+    `app._commit_read_host()` 补一条 —— **外部切换**（对端发起 / 手按 OSD）也要通知键盘
+    端点，否则画面回来了键盘还往对面打。
+  · 与设计稿的两处偏差：Raw Input 互证、`SetThreadExecutionState` 保活都没做，
+    理由写在 `docs/KEYBOARD-BRIDGE.md` §14 阶段 2（都不解决闸门真正关心的两个条件）。
+  · `tools/key_tap_probe.py`：逐键打印 usage / 是否注入 / 闸门四条件，`--swallow` 才真吞。
+
+  **win2 切换页（跟 mac2 `18b1e3b` + `2f3d525` 同构）**：
+  · 新增「跟随画面」卡片（`ui/win2/follow_card.py`）：键盘转发 / 鼠标跟随两个开关 +
+    实时状态行。文案按 Windows 视角写（`已暂停 · 按键留在本机`、`本机槽 1 ⇄ 对端槽 2`），
+    槽位没配就**隐藏**开关（不是置灰）。
+  · 常驻「操作提示」两行灰字 → 两个按钮的**长悬停 tip**（`widgets.HoverTip/TipBubble`，
+    1.2s 才弹、300px 折行、自绘弹层；QToolTip 在 Windows 上同样不做屏幕钳制）。
+  · 删「快速操作 · 剪贴板」整节（侧栏已有入口 + 条数徽章），连带 `QuickRow` /
+    `clipboardRequested` / `set_clip_count` / 6 条 QSS。
+  · 窗口 580 → **550**：Windows 标题栏画在窗口内部，页面只拿 `WIN_H−40−2`；
+    最坏文案下切换页最小高度 482（实测），550 装得下且留 ~26px 呼吸。**没照抄 mac2 的 570**
+    —— 那会多出 48px 空洞。守备用例把页面放进真实 MainWindow 量，不推算常量。
+  **验证**：全量 **586 passed / 12 skipped**（基线 554/12，+32 例）；
+  离屏 `ui2` 跑满 12 秒零 traceback；`windows` 平台抓图逐页核验（跟随卡片三态 + tip 弹层）。
+  **未做**：真机联调（连续切 20 次 / 打字 10 分钟 / 拔网线自愈 / `Fn+W` 挪走键盘），
+  这四条要两台机器都在场。
 
 - 2026-11-06 15:45 **切屏页加「跟随画面」卡片**（键盘 / 鼠标两个开关，Mac 端已实现）。
   版式真源 `design/redesign/INTERACTIONS-v2.md` §14；Windows 端照做版

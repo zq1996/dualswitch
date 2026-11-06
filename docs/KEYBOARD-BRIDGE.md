@@ -538,12 +538,20 @@ Windows 端照做版：`docs/UI-WINDOWS2-DESIGN.md` §5.4。
 
 ### 阶段 2：Windows 捕获端（设备可用时）
 
-**状态：未实现。** 这是剩下工作量的大头，也是所有"吞键安全"逻辑所在。
+**状态：已实现（2026-11-06）。** 落地位置见 §18。所有"吞键安全"逻辑都在这里。
 
 - `keyboard/hook_windows.py`：抽出唯一钩子 + 分发器，`hotkey/windows.py` 改为注册匹配器
-- `keyboard/capture_windows.py`：路由、闸门、Raw Input 互证、`SetThreadExecutionState` 保活
+- `keyboard/capture_windows.py`：路由、闸门、心跳、全量释放、往返采样
 - **验收**：`tools/key_tap_probe.py` 打印每个键、是否吞掉、闸门四条件的状态；
   拔网线 → 立刻停止吞键（这条必须看着日志验）；`hotkey` 相关测试全绿。
+
+> **两处与设计稿的偏差（实现期决定，都有理由）**：
+> 1. **Raw Input 互证没做**。它的作用是"钩子漏掉的键由 Raw Input 补看"，用来判断
+>    闸门是否该开；但闸门真正的判据是"链路活着 + 画面在对面"，Raw Input 补不出这两条
+>    信息，反而多一条常驻的注册链路。V1 不做，等真出现"钩子漏键"的现场再加。
+> 2. **`SetThreadExecutionState` 保活没做**。捕获端不阻止休眠 —— 画面在 Mac 时
+>    Windows 本来就该睡（这正是本方案比"反向桥"省事的地方：Mac 永远有画面）。
+>    真需要防休眠时应该由用户在电源设置里配，不该由键盘桥偷偷改全局状态。
 
 ### 阶段 3：联调
 
@@ -634,8 +642,58 @@ python3 tools/key_feeder.py --keys "0xE2:1 0x06:1 0x06:0 0xE2:0"
 
 | 项 | 归属 |
 |---|---|
-| Windows 捕获端（钩子 + 吞键闸门 + Raw Input 互证 + 保活） | 阶段 2 |
-| `T_KEYSTATE` 的**发送**侧（心跳） | 随捕获端一起，接收侧已能处理 |
-| 界面状态行 / 开关 | 阶段 4 |
+| ~~Windows 捕获端~~ | **已做（2026-11-06）**，见 §18 |
+| ~~`T_KEYSTATE` 的发送侧~~ | **已做**（捕获端 worker 空闲时发，兼 RTT 采样） |
+| ~~界面状态行 / 开关~~ | **已做**（两端切换页「跟随画面」卡片） |
 | 媒体键、侧边触控条 | 阶段 4（§7.4） |
 | 阶段 0 的五条结论回填 §16 | 跑一次 `--probe` 即可 |
+| **真机联调**（连续切 20 次 / 打字 10 分钟 / 拔网线自愈） | 阶段 3，待做 |
+
+## 18. 实现状态（Windows 捕获端，2026-11-06）
+
+### 18.1 文件清单
+
+| 文件 | 说明 |
+|---|---|
+| `src/dualswitch/keyboard/hook_windows.py` | `KeyboardHook`：**进程唯一**的 `WH_KEYBOARD_LL` + 分发器，引用计数式 `acquire/release` |
+| `src/dualswitch/keyboard/capture_windows.py` | `KeyboardCapture`：闸门、epoch、发送队列、心跳、全量释放、RTT 采样 |
+| `src/dualswitch/keyboard/keymap.py` | 新增 `USAGE_TO_WIN_VK` / `VK_TO_USAGE` / `usage_for_vk()`（协议里只有 usage，捕获端必须先翻回 usage） |
+| `src/dualswitch/hotkey/windows.py` | `LowLevelHookBackend` 改为向共享钩子注册匹配器（不再自己装钩子） |
+| `src/dualswitch/keyboard/__init__.py` | `create_endpoint(cfg, …)`：按平台返回捕获端 / 注入端，`cli.py` 不写平台分支 |
+| `src/dualswitch/cli.py` | 端点总是创建；`attach(engine)` 接上发送通道与 RTT 探测；`_on_keyboard_release` 落盘 |
+| `src/dualswitch/app.py` | `_commit_read_host()` 里补一条：**外部切换**（对端发起 / 手按 OSD）也通知键盘端点 |
+| `src/dualswitch/ui/win2/runner.py` | `_refresh_follow()` + 两个开关 handler（关 = 立刻停吞 + 抬键） |
+| `tools/key_tap_probe.py` | 阶段 2 验收：逐键打印闸门四条件与吞/放行 |
+| `tests/test_keyboard_windows.py` | 17 例：闸门、白名单、epoch、抬键、心跳、钩子共用 |
+
+### 18.2 实现期发现/决定的三件事
+
+1. **钩子回调里不能做 I/O。** 第一版直接在回调里 `engine.send_key()`，被自己否掉了：
+   `WH_KEYBOARD_LL` 的回调在系统输入链上同步执行，一次阻塞的 `sendall` 就能让整台机器
+   打字卡顿。改成"回调只入队（`queue.Queue`，上限 256）+ worker 线程发送"，
+   队列满就不吞（宁可漏几个键，也不能把输入链堵住）。
+2. **闸门的"链路活着"用"最近 300ms 有成功发送"代替"收到对端心跳"。** 设计稿写的是
+   后者，但注入端不发心跳帧（它只收），捕获端根本收不到。改成自证：worker 每 100ms
+   发一次 `T_KEYSTATE`，成功就刷新时间戳 —— 发送成功本身就说明链路还在。
+   失败则闸门在 300ms 内自动关闭，不需要对端通知。
+3. **`hotkey_backend=hook` 与键盘桥共用钩子这件事，必须用"引用计数"而不是"谁先装谁赢"。**
+   热键重建（`_rebuild_hotkey`）会 `stop()` 再 `start()`，如果桥的钩子跟着被摘掉，
+   用户改个热键就把键盘转发弄哑了 —— 现在是最后一个 `release()` 才真正摘钩子。
+   另有一个坑：`self._on_event` 每次取值都是新的 bound method 对象，
+   `release()` 里用 `is` 比较永远不相等（钩子静默泄漏），必须用 `==`。
+
+### 18.3 怎么验（Windows）
+
+```bash
+# ① 只看不吞：逐键打印 usage / 是否注入 / 闸门四条件
+python tools/key_tap_probe.py
+
+# ② 真吞键（画面必须在 Mac，否则闸门不开）：Ctrl+Alt+Shift+K 解除
+python tools/key_tap_probe.py --swallow
+
+# ③ 单元用例（不需要真键盘，闸门逻辑用假钩子 + 假引擎）
+pytest -q tests/test_keyboard_windows.py
+```
+
+**真机联调（阶段 3）仍未做**：连续切 20 次、打字 10 分钟、拔网线再插回、
+按 `Fn+W` 把键盘挪走后不报错 —— 这四条要在两台机器都在场时验。

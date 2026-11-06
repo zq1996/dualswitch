@@ -283,6 +283,11 @@ class UiRunner2(QObject):
         self.toast = Toast(self.window)
         self.confirm = ConfirmOverlay(self.window)
 
+        # 键盘端点由 cli 建好挂在引擎上（`engine.keyboard`）：Windows 是**捕获端**
+        # （吞键 + 发 T_KEY），macOS 是注入端。界面的「键盘转发」开关直接改它 + 落盘。
+        self.keyboard = getattr(clip_engine, "keyboard", None)
+        self._remote_ok = False
+
         self._busy = False
         self._hotkey_suspended = False
         self._quitting = False
@@ -300,7 +305,8 @@ class UiRunner2(QObject):
         self.pairing_page.toastRequested.connect(self.toast.show_text)
         self.pairing_page.pairedChanged.connect(self._on_paired_changed)
         self.pairing_page.confirmRequested.connect(self._ask_confirm)
-        self.switch_page.clipboardRequested.connect(lambda: self.show_page(PAGE_CLIP))
+        self.switch_page.keyboardFollowToggled.connect(self._on_keyboard_follow)
+        self.switch_page.mouseFollowToggled.connect(self._on_mouse_follow)
         self.switch_page.toastRequested.connect(self.toast.show_text)
         self.clipboard_page.toastRequested.connect(self.toast.show_text)
         self.clipboard_page.pausedChanged.connect(self._on_clip_paused)
@@ -684,11 +690,10 @@ class UiRunner2(QObject):
             return
         if self.window.on_clipboard_page():
             self.clipboard_page.refresh()
-        # 侧栏计数 / 切换页徽章无论在哪页都要跟
+        # 侧栏计数无论在哪页都要跟（切换页的「快速操作 · 剪贴板」行已删，
+        # 条数只在侧栏导航徽章上显示，2026-11-06 跟 mac2）
         records = self.clip_feed.records() if self.clip_feed is not None else []
-        abnormal = sum(1 for r in records if r.state in ("fail", "local"))
         self.window.set_nav_count(len(records))
-        self.switch_page.set_clip_count(len(records), abnormal)
         self.settings_page.set_engine_records(records)
 
     def _on_clip_paused(self, paused: bool) -> None:
@@ -736,7 +741,9 @@ class UiRunner2(QObject):
         changed = False
         self._refresh_hotkey_ui()
         remote_ok = self._remote_ready()
+        self._remote_ok = remote_ok
         self.switch_page.set_remote_available(remote_ok)
+        self._refresh_follow(remote_ok)
         source = self.controller.source_state
         if source != self._seen_source:
             self._seen_source = source
@@ -774,6 +781,101 @@ class UiRunner2(QObject):
         if source is None:
             source = self.controller.source_state
         self.switch_page.set_owner(source if source in ("windows", "mac") else None)
+
+    # ------------------------------------------------------------------ 跟随画面
+    def _refresh_follow(self, remote_ok: bool) -> None:
+        """把两端外设的现状写进「跟随画面」卡片。**只读，不改任何状态。**"""
+        page = self.switch_page
+        cfg = self.cfg
+
+        # ---- 键盘（Windows 是吞键端，所以说法与 mac2 相反）----
+        kf = getattr(cfg, "keyboard_follow", None)
+        if self.keyboard is None or kf is None:
+            page.set_keyboard_follow(False, "同步引擎未启动，无法转发按键", "idle")
+        elif not bool(kf.enabled):
+            page.set_keyboard_follow(False, "已暂停 · 按键留在本机", "warn")
+        elif not remote_ok:
+            page.set_keyboard_follow(True, "链路断开 · 已自动回到本机", "idle")
+        else:
+            rtt = getattr(self.keyboard, "last_rtt_ms", None)
+            text = "转发中 → Mac" + (f" · 往返 {rtt:.0f}ms" if rtt else "")
+            page.set_keyboard_follow(True, text, "run")
+
+        # ---- 鼠标 ----
+        ms = getattr(cfg, "mouse_switch", None)
+        local_slot = int(getattr(ms, "local_slot", 0) or 0) if ms is not None else 0
+        peer_slot = int(getattr(ms, "peer_slot", 0) or 0) if ms is not None else 0
+        usable = (1 <= local_slot <= 3) and (1 <= peer_slot <= 3)
+        if not usable:
+            # 槽位没配时开关打开也不会有任何效果（MouseSwitcher 先校验槽位），
+            # 所以直接不给开关，别让人点了以为生效。
+            page.set_mouse_follow(
+                False, "槽位未配置 · 在 config.json 填 mouse_switch", "idle", usable=False
+            )
+        elif bool(getattr(ms, "enabled", False)):
+            page.set_mouse_follow(
+                True, f"跟随中 · 本机槽 {local_slot} ⇄ 对端槽 {peer_slot}", "ok"
+            )
+        else:
+            page.set_mouse_follow(False, "已关闭", "idle")
+
+    def _save_later(self) -> bool:
+        try:
+            save_config(self.cfg, self.cfg_file)
+            return True
+        except Exception as exc:  # noqa: BLE001 - 落盘失败不该崩界面
+            log.warning("保存配置失败：%s", exc)
+            self.toast.show_text("配置保存失败，本次只在内存生效")
+            return False
+
+    def _on_keyboard_follow(self, on: bool) -> None:
+        """键盘转发开关。**关掉 = 立刻停止吞键**（不只是停止发送）。
+
+        这是 Windows 端独有的责任（`docs/UI-WINDOWS2-DESIGN.md` §5.4）：
+        本端是吞键的那一端，只停发不停吞，按键既不去 Mac 也不去本机 —— 直接消失。
+        具体的"先抬键再停吞"在 `KeyboardCapture.set_enabled` 里做。
+        """
+        kf = getattr(self.cfg, "keyboard_follow", None)
+        rx = self.keyboard
+        if kf is None or rx is None:
+            self.toast.show_text("同步引擎未启动，改不了键盘转发")
+            self._refresh_follow(self._remote_ok)
+            return
+        if on:
+            ok, why = rx.available()
+            if not ok:
+                # 打不开就说清楚，别让开关停在「开」但实际不吞不转
+                self.toast.show_text(f"键盘转发不可用：{why}")
+                self._refresh_follow(self._remote_ok)
+                return
+            # 首次打开：装钩子（幂等），并把焦点对齐到当前画面归属，
+            # 否则要等用户再切一次屏才真正开始转发
+            try:
+                if hasattr(rx, "start"):
+                    rx.start()
+                src = self.controller.source_state
+                if src in ("windows", "mac") and hasattr(rx, "on_focus"):
+                    rx.on_focus(src)
+            except Exception as exc:  # noqa: BLE001 - 装不上就弹回去
+                log.error("键盘捕获启动失败：%s", exc)
+                self.toast.show_text(f"键盘转发启动失败：{exc}")
+                self._refresh_follow(self._remote_ok)
+                return
+        kf.enabled = bool(on)
+        # 先落盘再改运行态：落盘失败也要让本次生效，但用户得知道
+        self._save_later()
+        rx.set_enabled(bool(on))
+        log.info("键盘转发 → %s", "开" if on else "关（按键留在本机）")
+        self._refresh_follow(self._remote_ok)
+
+    def _on_mouse_follow(self, on: bool) -> None:
+        ms = getattr(self.cfg, "mouse_switch", None)
+        if ms is None:
+            return
+        ms.enabled = bool(on)
+        self._save_later()
+        log.info("鼠标跟随 → %s", "开" if on else "关")
+        self._refresh_follow(self._remote_ok)
 
     def _remote_ready(self) -> bool:
         probe = self.controller.remote_ready
@@ -1039,6 +1141,13 @@ class UiRunner2(QObject):
                 self.clip_feed.close()
         except Exception:  # noqa: BLE001
             log.debug("停止剪贴板采集失败", exc_info=True)
+        try:
+            if self.keyboard is not None and hasattr(self.keyboard, "stop"):
+                # 捕获端退出前必须摘钩子：进程退出虽然也会带走钩子，但"先放手
+                # 再退出"能保证最后那几毫秒的按键不会被吞进黑洞
+                self.keyboard.stop()
+        except Exception:  # noqa: BLE001
+            log.debug("停止键盘捕获失败", exc_info=True)
         try:
             self.controller.stop()
         finally:

@@ -139,7 +139,9 @@ def _file_rec(rid="fd", name="安装包.exe", path=None, png=None):
 # --------------------------------------------------------------------------- #
 def test_window_is_frameless_with_two_caption_buttons(app, cfg):
     win = MainWindow(cfg, "Alt+Space", "v0")
-    assert (win.width(), win.height()) == (theme.WIN_W, theme.WIN_H) == (780, 580)
+    # 580 → 550（2026-11-06）：切换页删掉常驻提示行与「快速操作」、加了「跟随画面」，
+    # 高度按页面实测重新收口（见 test_switch_page_still_fits_the_window）。
+    assert (win.width(), win.height()) == (theme.WIN_W, theme.WIN_H) == (780, 550)
     assert win.windowFlags() & Qt.FramelessWindowHint
     assert win.titlebar.height() == theme.TITLEBAR_H == 40
     # 右上角只有最小化 / 关闭（设计明确不放剪贴板、齿轮）
@@ -1337,3 +1339,197 @@ def test_settings_buttons_are_never_narrower_than_their_hint(app, cfg):
     page.close()
 
 
+
+
+# --------------------------------------------------------------------------- #
+# 切换页改版（2026-11-06，跟 mac2）：跟随画面 / 长悬停 tip / 删快速操作
+# --------------------------------------------------------------------------- #
+def test_follow_rows_start_blank_with_state_line_hidden(app, cfg):
+    """首帧还没拿到状态时，状态行整行隐藏 —— 否则界面上是一个孤零零的灰点。"""
+    page = SwitchPage(cfg, "Alt+Space", "")
+    for row in (page.follow.keyboard, page.follow.mouse):
+        assert row.switch.isChecked() is False
+        assert row._dot.isHidden() is True
+        assert row.state.isHidden() is True
+
+
+def test_set_keyboard_follow_updates_switch_text_and_tone(app, cfg):
+    page = SwitchPage(cfg, "Alt+Space", "")
+    page.set_keyboard_follow(True, "转发中 → Mac · 往返 6ms", "run")
+    row = page.follow.keyboard
+    assert row.switch.isChecked() is True
+    assert row.state.text() == "转发中 → Mac · 往返 6ms"
+    assert row.state.objectName() == "followStateRun"
+    assert row._dot.isHidden() is False
+
+
+def test_paused_state_uses_warn_tone_and_windows_wording(app, cfg):
+    """Windows 是吞键端，关掉之后说法是「按键留在本机」（mac2 是「留在 Windows」）。"""
+    page = SwitchPage(cfg, "Alt+Space", "")
+    page.set_keyboard_follow(False, "已暂停 · 按键留在本机", "warn")
+    assert page.follow.keyboard.state.objectName() == "followStateWarn"
+    assert page.follow.keyboard.switch.isChecked() is False
+    assert "本机" in page.follow.keyboard.state.text()
+
+
+def test_mouse_row_hides_the_switch_when_slots_are_unconfigured(app, cfg):
+    """槽位没配时打开开关也不会有任何效果，所以不给开关 —— 置灰会被当成「待会儿能开」。"""
+    page = SwitchPage(cfg, "Alt+Space", "")
+    page.set_mouse_follow(False, "槽位未配置 · 在 config.json 填 mouse_switch",
+                          "idle", usable=False)
+    row = page.follow.mouse
+    assert row.switch.isHidden() is True
+    assert "槽位未配置" in row.state.text()
+
+    page.set_mouse_follow(True, "跟随中 · 本机槽 1 ⇄ 对端槽 2", "ok", usable=True)
+    assert row.switch.isHidden() is False
+    assert row.switch.isChecked() is True
+
+
+def test_clicking_the_follow_switch_emits_through_the_page(app, cfg):
+    page = SwitchPage(cfg, "Alt+Space", "")
+    seen: list[bool] = []
+    page.keyboardFollowToggled.connect(seen.append)
+    page.mouseFollowToggled.connect(seen.append)
+
+    page.set_keyboard_follow(False, "", "idle")
+    QTest.mouseClick(page.follow.keyboard.switch, Qt.LeftButton)
+    assert seen == [True]
+    assert page.follow.keyboard.switch.isChecked() is True
+
+    QTest.mouseClick(page.follow.mouse.switch, Qt.LeftButton)
+    assert seen == [True, True]
+
+
+def test_disabled_follow_switch_does_not_emit(app, cfg):
+    page = SwitchPage(cfg, "Alt+Space", "")
+    seen: list[bool] = []
+    page.keyboardFollowToggled.connect(seen.append)
+    page.follow.keyboard.switch.setEnabled(False)
+    QTest.mouseClick(page.follow.keyboard.switch, Qt.LeftButton)
+    assert seen == []
+
+
+def test_switch_page_still_fits_the_window(app, cfg):
+    """防回归：切换页的内容必须真的装进窗口，不能靠推算常量。
+
+    2026-11-06 加「跟随画面」时 mac2 的页面最小高度变成 642，580 的窗口装不下，
+    结果是 hero 的说明文字直接压在 18 号通道的按钮上（不滚动、不报错、纯视觉错乱）。
+    Windows 这边标题栏画在窗口**内部**，页面拿到的高度 = WIN_H - TITLEBAR_H ——
+    所以更不能拿 WIN_H 去推算，直接把页面放进真实 MainWindow 量。
+    """
+    class _Engine:
+        def records(self):
+            return []
+
+        def set_paused(self, paused):
+            pass
+
+    page = SwitchPage(cfg, "Alt+Space", "Q2790R3")
+    win = MainWindow(cfg, "Alt+Space", "v0")
+    win.attach_pages(
+        page, ClipboardPage(_Engine()), SettingsPage(cfg, os.path.join(HOME, "cfg-fit.json")),
+        PairingPage(None),
+    )
+    win.show_page(PAGE_SWITCH)
+    win.show()
+    app.processEvents()
+
+    # 用最坏情况的文案量：两个跟随状态行都填满（状态行隐藏时页面反而更矮）
+    page.set_remote_available(True)
+    page.set_keyboard_follow(True, "转发中 → Mac · 往返 6ms", "run")
+    page.set_mouse_follow(True, "跟随中 · 本机槽 1 ⇄ 对端槽 2", "ok")
+    page.set_note("上次 请对端发送 18（Mac）· 142 ms", ok=True)
+    app.processEvents()
+
+    have = page.height()
+    need = page.minimumSizeHint().height()
+    # 页面高度 ≈ WIN_H − 标题栏 − 根容器上下各 1px 边框（#root 有 1px 描边）。
+    # 这里只锁「量级对得上」，真正的守卫是下面 need <= have —— 硬写 508 又会变成
+    # 一个猜出来的常量（mac2 那条守卫就是栽在 CHROME_H=60 上）。
+    assert theme.WIN_H - theme.TITLEBAR_H - 4 <= have <= theme.WIN_H - theme.TITLEBAR_H
+    assert need <= have, f"切换页需要 {need}px，窗口只给 {have}px：要么压缩内容，要么加高窗口"
+
+    # 最底一块（跟随画面）不能被裁掉：它得完整落在页面里
+    assert page.follow.geometry().bottom() <= have, "跟随画面卡片被窗口裁掉了"
+    win.close()
+
+
+def test_quick_actions_section_is_gone(app, cfg):
+    """「快速操作 · 剪贴板」整节删除：剪贴板在侧栏「核心」里已有入口，这里是重复导航。"""
+    page = SwitchPage(cfg, "Alt+Space", "")
+    assert not hasattr(page, "row_clip"), "「快速操作 · 剪贴板」行应当已删除"
+    assert not hasattr(page, "clipboardRequested"), "对应信号应当已删除"
+    assert not hasattr(page, "set_clip_count"), "对应方法应当已删除"
+
+    texts = [w.text() for w in page.findChildren(QLabel) if w.text()]
+    assert "快速操作" not in texts
+
+
+def test_operation_hint_moved_into_button_hover_tip(app, cfg):
+    """原来的常驻操作提示改成按钮的长悬停 tip。
+
+    三条硬约束：① hero 里不再有常驻说明行；② 主按钮与兜底钮都挂了 `HoverTip`
+    且文案语义不变；③ 延时 = `theme.HOVER_TIP_MS`（1.2s，"长时间悬浮"才弹）。
+    """
+    from dualswitch.ui.win2.widgets import HoverTip
+
+    page = SwitchPage(cfg, "Alt+Space", "")
+    assert not hasattr(page.hero, "hint"), "hero 的常驻提示行应当已删除"
+
+    for row in page.hero.rows:
+        for btn, tip, keyword in (
+            (row.btn_local, row.tip_local, "本机发送"),
+            (row.btn_peer, row.tip_peer, "请对端发送"),
+        ):
+            assert isinstance(tip, HoverTip), f"{btn.objectName()} 没有挂长悬停 tip"
+            assert tip.delay_ms() == theme.HOVER_TIP_MS >= 1000, "tip 必须是「长悬停」才弹"
+            assert keyword in tip.text()
+            # 原文仍在 toolTip()：无障碍读屏、Qt 自带的兜底提示都靠它
+            assert btn.toolTip() == tip.text()
+        assert "DDC" in row.tip_local.text(), "主按钮 tip 要保留「直接发 DDC」这句"
+        assert "兜底" in row.tip_peer.text()
+
+
+def test_peer_tip_mentions_offline_state(app, cfg):
+    """兜底钮置灰时，tip 要补一句「当前对端离线」—— 别让人对着灰钮猜为什么点不动。"""
+    page = SwitchPage(cfg, "Alt+Space", "")
+    rows = page.hero.rows
+
+    page.set_remote_available(False)
+    for row in rows:
+        assert not row.btn_peer.isEnabled()
+        assert "对端离线" in row.tip_peer.text()
+
+    page.set_remote_available(True)
+    for row in rows:
+        assert row.btn_peer.isEnabled()
+        assert "对端离线" not in row.tip_peer.text()
+        assert "请对端发送" in row.tip_peer.text()
+
+
+def test_hover_tip_wraps_long_text_and_waits_for_the_delay(app, cfg):
+    """QToolTip 对纯文本**不自动换行**，且**不做屏幕钳制** —— 这两件事自己扛。"""
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QPushButton
+
+    from dualswitch.ui.win2.widgets import TipBubble, attach_hover_tip, tip_bubble
+
+    btn = QPushButton("x")
+    btn.resize(150, 38)
+    long = (
+        "「本机发送」直接把 DDC 命令发给显示器，画面在哪一边都能切，"
+        "不需要先判断当前输入。行尾纸飞机是兜底通道。"
+    )
+    tip = attach_hover_tip(btn, long)
+    assert tip.delay_ms() == theme.HOVER_TIP_MS == 1200
+    assert btn.toolTip() == long
+
+    bubble = tip_bubble()
+    bubble.set_text(long, theme.HOVER_TIP_W)
+    assert isinstance(bubble, TipBubble)
+    assert len(bubble._lines) > 1, "长文案必须折行，否则会横贯屏幕"
+    fm = QFontMetrics(bubble._font)
+    assert max(fm.horizontalAdvance(line) for line in bubble._lines) <= theme.HOVER_TIP_W + 1
+    assert bubble.width() <= theme.HOVER_TIP_W + bubble.PAD_H * 2 + 2
+    bubble.hide()

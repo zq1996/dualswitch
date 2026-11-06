@@ -297,6 +297,11 @@ class SwitchController:
             self._current_source = host
         if changed:
             log.info("显示器直报当前输入 → 画面在 %s（DDC 直读 0x60）", host)
+            # 外部切换也要让键盘端点跟上（2026-11-06）：`_after_screen_switch` 只覆盖
+            # 「本机发起的切换」，而从对端切过来 / 手按显示器 OSD 都不经过它。
+            # 不补这一下，画面已经到 Mac 了而 Windows 还在把按键留在本机（反之亦然）。
+            # 两端各自维护 target 时这条就是唯一对齐点，所以它不能省。
+            self._notify_keyboard(host)
 
     def refresh_owner_now(self, min_gap: float = 1.0) -> None:
         """按需直读一次归属（界面回前台 / 切到切换页时由 runner 调，放后台线程）。

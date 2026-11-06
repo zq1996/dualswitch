@@ -600,6 +600,26 @@ def cmd_clip(args) -> int:
 # --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
+def _on_keyboard_release(cfg, cfg_file) -> None:  # noqa: ANN001
+    """紧急停止组合（默认 Ctrl+Alt+Shift+K）命中：关掉转发并落盘。
+
+    捕获端已经把吞键停了（`_trigger_release` 先 `set_enabled(False)` 再回调），
+    这里只负责让**配置**也变成关闭 —— 否则界面还显示"转发中"，重启又会自动开。
+    落盘失败不影响本次生效，但必须留痕。
+    """
+    kf = getattr(cfg, "keyboard_follow", None)
+    if kf is None:
+        return
+    kf.enabled = False
+    try:
+        from . import config as config_mod
+
+        config_mod.save(cfg, cfg_file)
+        log.warning("键盘跟随已被紧急组合关闭（按键已交还本机）")
+    except Exception as exc:  # noqa: BLE001 - 落盘失败也要让本次生效
+        log.error("紧急停止后保存配置失败（本次仍已生效）：%s", exc)
+
+
 def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
     """把剪贴板引擎挂到切屏链路上。失败只降级，绝不影响切屏。
 
@@ -628,27 +648,27 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
 
         config_mod.ensure_device_id_persisted(cfg, cfg_file)
 
-        # 键盘跟随（默认关）：Mac 这一侧是**注入端** —— 收 Windows 转发来的
-        # T_KEY，注入到本机。捕获端还没实现，所以这里只有接收的一半。
-        # 键盘注入端**总是**建：切换页上有开关，随时可以打开。
-        # 关着时只是 `set_enabled(False)` 不注入，帧照收 —— 界面要靠它显示
-        # 「链路断开 / 往返多少毫秒」这类状态，没对象就没法显示。
-        from .keyboard import KeyboardReceiver
+        # 键盘跟随（默认关）：**键盘挂在哪台，哪台就是捕获端**。
+        #   · Windows：装 `WH_KEYBOARD_LL`，画面在 Mac 时吞键 + 发 T_KEY；
+        #   · macOS：收 T_KEY 注入本机（不吞键，也吞不了 —— 安全输入那条硬伤）。
+        # 两端都由 `keyboard.create_endpoint()` 建，这里不写平台分支。
+        # **端点总是建**（哪怕开关关着）：界面要靠它显示状态、读往返延迟，
+        # 没对象就没法显示。捕获端在关着时不装钩子（见 `KeyboardCapture.start`）。
+        from .keyboard import create_endpoint
 
         kf = cfg.keyboard_follow
-        key_receiver = KeyboardReceiver(
-            mod_map=kf.mod_map,
-            dedupe_repeat=(kf.repeat_mode == "dedupe"),
-            align_caps=kf.align_caps,
-            enabled=bool(kf.enabled),
+        key_endpoint = create_endpoint(
+            cfg,
+            on_release=lambda: _on_keyboard_release(cfg, cfg_file),
+            rtt_probe=None,      # 引擎还没建，建好后回填
         )
         if kf.enabled:
-            ok, why = key_receiver.available()
+            ok, why = key_endpoint.available()
             if ok:
-                log.info("键盘跟随已启用：%s", key_receiver.describe())
+                log.info("键盘跟随已启用：%s", key_endpoint.describe())
             else:
-                # 不可用是正常状态（没装 pyobjc / 没授权），但要让人看得见
-                log.warning("键盘跟随已启用但注入不可用：%s", why)
+                # 不可用是正常状态（没装 pyobjc / 没授权 / 钩子被拦），但要看得见
+                log.warning("键盘跟随已启用但不可用：%s", why)
 
         engine = SyncEngine(
             cfg.clipboard,
@@ -657,19 +677,34 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
             vcp_code=cfg.vcp_code,
             save_config=lambda: config_mod.save(cfg, cfg_file),
             version=__version__,
-            on_key=key_receiver.handle_key,
-            on_key_state=key_receiver.handle_state,
-            on_focus=key_receiver.handle_focus,
+            on_key=key_endpoint.handle_key,
+            on_key_state=key_endpoint.handle_state,
+            on_focus=key_endpoint.handle_focus,
         )
-        # 注入端挂到引擎上：界面（UiRunner2）通过 `engine.keyboard` 拿它做开关。
-        engine.keyboard = key_receiver
+        # 端点挂到引擎上：界面（UiRunner2）通过 `engine.keyboard` 拿它做开关。
+        # `attach` 顺便接上往返探测（借 T_STATE 请求/回执，不新增协议帧）。
+        engine.keyboard = key_endpoint
+        if hasattr(key_endpoint, "attach"):
+            key_endpoint.attach(engine)
         engine.start()
+        if kf.enabled and hasattr(key_endpoint, "start"):
+            # 捕获端要装钩子（注入端没有 start，注入随帧发生）
+            try:
+                key_endpoint.start()
+                # 冷启动时画面可能已经在 Mac（上一次切过去没切回来）：首帧就把焦点
+                # 对齐，否则要等用户手动切一次才生效。归属 unknown 就不猜。
+                src = controller.source_state
+                if src in ("windows", "mac"):
+                    key_endpoint.on_focus(src)
+            except Exception as exc:  # noqa: BLE001 - 钩子装不上只降级
+                log.error("键盘捕获启动失败（切屏不受影响）：%s", exc)
         controller.add_before_switch(lambda source, target: engine.push_now(f"switch:{source}"))
         # 本机打不到这块屏时（画面在对面 / 没接线），交给对端代发
         controller.remote_switch = engine.request_switch
         controller.remote_ready = lambda: engine.switch_ready
-        # 键盘跟随：切屏成功后把"还按着的键"全抬起来，避免修饰键卡死
-        controller.set_keyboard(key_receiver)
+        # 键盘跟随：切屏成功后把"还按着的键"全抬起来，避免修饰键卡死；
+        # 捕获端还要借此推进 epoch（谁决定按键去向，谁定 epoch）
+        controller.set_keyboard(key_endpoint)
 
         # 画面归属联合判定（T_STATE 0x32）：两台各报「我看不看得到这块屏」，
         # 单机判不了的两种情况（冷启动屏在对端 / 拔线）都能唯一定下来。
