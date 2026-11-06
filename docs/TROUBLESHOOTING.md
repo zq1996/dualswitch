@@ -380,3 +380,73 @@ sh logi-mouse.sh probe      # macOS
 ```
 
 能打出「主机数=3 当前槽位=N」说明设备侧正常，问题在应用配置或依赖。
+
+---
+
+## 12. 跑测试 / 打包出现「莫名其妙的红」（2026-11-06，根治）
+
+**先看解释器，再看代码。** 这个项目有三类可选依赖（`hid` / `pyobjc` / `pystray`），
+缺了它们产品本来就该安静降级；但历史上有的用例把"这台机器正好装了"写成了假设，
+于是换个解释器就红一片，看着和回归一模一样。
+
+### 12.1 一条命令体检
+
+```bash
+python3 tools/check_env.py          # 看这个解释器缺什么、缺了会影响哪块
+python3 tools/check_env.py --strict # CI / 提交前：缺平台必需依赖直接失败
+```
+
+### 12.2 现状（2026-11-06 实测这台机器）
+
+| 解释器 | 版本 | hid | pyobjc | 结果 |
+|---|---|---|---|---|
+| `~/.workbuddy/binaries/python/envs/default/bin/python3` | 3.13.12 | ✓ | ✓ | **全量 460 例全绿，用这个** |
+| `/usr/bin/python3`（实为 CLT 3.9.6） | 3.9.6 | ✗ | ✗ | 曾红 3 例 + 静默少跑 9 例 |
+| `/opt/homebrew/bin/python3` | 3.15.0 | ✗ | ✗ | 同上 |
+
+`/usr/bin/python3` 和 Homebrew 那个都**不是**本项目的运行环境。`.workbuddy/binaries/...`
+是 WorkBuddy 自带 Python 运行时建的 venv（`envs/` 下只有 `default` 一个，全机器共享），
+项目依赖装在那里。
+
+### 12.3 要不要换成仓库内 `.venv`
+
+值得（`.venv/` 已在 `.gitignore` 里），理由：`envs/default` 是 WorkBuddy 的资产，
+升级/清理时可能被重建或删掉，而且全机器共享一个 venv，多项目会互相污染。
+建法（用已验证的 3.13 底座）：
+
+```bash
+~/.workbuddy/binaries/python/versions/3.13.12/bin/python3 -m venv .venv
+.venv/bin/pip install -e ".[dev,mouse,macos,gui]"
+.venv/bin/python tools/check_env.py          # 必须全绿
+.venv/bin/python -m pytest
+PYTHON="$PWD/.venv/bin/python" ./packaging/macos/build.sh
+```
+
+换之前记一下现在那条命令（`~/.workbuddy/.../python3 -m dualswitch ui2`），换完要同步改。
+
+### 12.4 规则（写进 tests/conftest.py，也有守卫用例）
+
+| 缺失类型 | 该怎样 |
+|---|---|
+| 硬依赖（PySide6、pytest） | 让它红 —— 那是装错了环境，不该被跳过掩盖 |
+| 可选依赖（hid / Quartz / AppKit / pystray） | 跳过或断言"降级行为"，**不许失败** |
+
+想在开发机上复现「没装」的环境（不用真的卸依赖）：
+
+```bash
+DUALSWITCH_SIMULATE_MISSING=hid,Quartz,AppKit pytest
+```
+
+守卫用例在 `tests/test_env_contract.py`：它会在子进程里模拟缺依赖，断言对应文件仍然全绿。
+以后谁再写出"依赖这台机器装了 hid"的断言，那条用例会直接指出文件名。
+
+### 12.5 打包的同一个坑
+
+`packaging/macos/build.sh` 默认用 PATH 里的 `python3`（Homebrew 3.15，没装项目依赖），
+于是它会现装一套 —— 打出来的包用一个谁也没验证过的解释器。
+现在脚本会**先体检 PySide6**，缺了直接报错并打印实际解析到的解释器路径。
+打包含显式指定：
+
+```bash
+PYTHON=/path/to/python3 ./packaging/macos/build.sh
+```

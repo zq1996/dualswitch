@@ -19,6 +19,29 @@ PYTHON="${PYTHON:-python3}"
 APP="dist/dualswitch.app"
 ICNS="design/icon/screen-switch.icns"
 
+# 打包解释器必须和「跑应用 / 跑测试」那个是同一个。
+#
+# 默认 python3 走 PATH：装了 Homebrew 的机器上它是 /opt/homebrew/bin/python3（本项目
+# 实测 3.15，没装任何项目依赖），于是下面的 pip install 会往它里面现装一套，
+# 打出来的包用一个谁也没验证过的解释器 —— 10-30 那次 `hid.cp313-win_amd64.pyd`
+# 没进包的教训就是「打包环境 ≠ 运行环境」。
+#
+# 先体检再动手，把"缺依赖"报在这里，别让它变成 PyInstaller 深处一句看不懂的 ImportError。
+if ! "$PYTHON" -c "import PySide6" >/dev/null 2>&1; then
+    RESOLVED="$("$PYTHON" -c 'import sys; print(sys.executable)' 2>/dev/null || echo "$PYTHON")"
+    cat >&2 <<EOF
+✗ 打包解释器缺 PySide6：$RESOLVED
+
+  打包请显式指定装了项目依赖的那个解释器：
+    PYTHON=/path/to/python3 ./packaging/macos/build.sh
+
+  先体检再打包：
+    python3 tools/check_env.py
+EOF
+    exit 1
+fi
+echo "打包解释器: $("$PYTHON" -c 'import sys; print(sys.executable, sys.version.split()[0])')"
+
 # PyInstaller 默认把构建缓存写到 ~/Library/Application Support/pyinstaller。受限环境
 # （只读 / 沙箱拦删）写不进去会直接失败，换到仓库内的 build/.pyinstaller-cache。
 export PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$ROOT/build/.pyinstaller-cache}"

@@ -38,5 +38,8 @@ where = ["src"]
 "dualswitch.ui" = ["assets/*.png"]
 
 [tool.pytest.ini_options]
+# 跑测试只要一句 `pytest`：临时目录和 Qt 平台都钉死在这里 / conftest。
+# 以前每次要手打 `QT_QPA_PLATFORM=offscreen ... --basetemp=.pytest-tmp`，
+# 少一个就报一堆与代码无关的错（见 tests/conftest.py 顶部注释）。
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --basetemp=.pytest-tmp"

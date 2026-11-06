@@ -514,6 +514,21 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-06 13:55 **根治「换个解释器就红一片」**。
+  起因：`/usr/bin/python3`（实为 CLT 3.9.6，无 hidapi / pyobjc）跑全量红了 3 条，
+  还静默少跑 9 条（451 vs 460）。不是回归，是环境差异被当成了回归。
+  ① `mouse/logi_host.available()` 改成**一次报全部阻塞原因**（以前先判 hid 就短路，
+     槽位配错看不到，测试也被这条短路顺序绑架 —— 那 3 条红就是它）；
+  ② `tests/conftest.py`：Qt 平台与临时目录钉死（不用再手打环境变量）、
+     `DUALSWITCH_SIMULATE_MISSING=hid,Quartz` 在开发机上复现"没装"的环境、
+     报告头打印解释器与缺失的可选依赖；
+  ③ `tests/test_env_contract.py` 守卫：子进程模拟缺依赖，断言对应文件仍全绿；
+  ④ `tools/check_env.py`：一条命令看依赖矩阵，`--strict` 供提交前 / CI 用；
+  ⑤ `packaging/macos/build.sh` 先体检 PySide6 —— 默认 `python3` 走 PATH，
+     在装了 Homebrew 的机器上是 3.15（零依赖），会现装一套再打包。
+  验证：venv 3.13 **440 passed / 24 skipped**；`/usr/bin/python3` **435/20、0 红**；
+  模拟缺 hid+Quartz+AppKit **435/20、0 红**（与系统 3.9 结果一模一样，说明模拟是忠实的）。
+
 - 2026-11-06 13:40 **键盘跟随：Mac 注入端落地**（Windows 捕获端未做）。
   新增 `keyboard/` 包（`keymap` 映射表 / `state` 按键状态机 / `inject_macos` Quartz 注入 /
   `receiver` 收帧注入），`sync/protocol.py` 加 `T_KEY(0x40)/T_KEYSTATE(0x41)/T_FOCUS(0x42)`，
