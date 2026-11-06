@@ -23,7 +23,11 @@ _C = _chrome()
 # --------------------------------------------------------------------------- #
 # 几何（INTERACTIONS §7 视觉规格速查）
 # --------------------------------------------------------------------------- #
-WIN_W, WIN_H = 780, 580          # 整窗（含系统标题栏覆盖区）
+WIN_W, WIN_H = 780, 720          # 整窗（含系统标题栏覆盖区）
+# 580 → 720（2026-11-06）：切换页加了「跟随画面」卡片后，页面最小高度
+# 变成 642（窗口是 setFixedSize，放不下不会滚动，只会互相压住 —— 实测
+# hero 的说明文字直接盖在 18 号通道的按钮上）。其余三页都 ≤ 384，多出来的
+# 地方是留白，不影响。
 TITLEBAR_H = 40                  # 设计稿 .win-bar 高度
 SIDEBAR_W = 156          # 窄侧栏：只够放下导航图标 + 文字 + 状态灯
 SIDEBAR_W_COLLAPSED = 56 # 收起态：只留图标（内容宽 36）
@@ -551,6 +555,18 @@ def qss(t: Tokens | None = None) -> str:
     #rowSub {{ color: {t.ink3}; font-size: 10.5px; }}
     #rowHint {{ color: {t.ink3}; font-size: 10px; font-family: "{MONO_FAMILIES[0]}"; }}
     #chev {{ color: {t.ink3}; font-size: 13px; }}
+
+    /* ---------- 跟随画面卡片（2026-11-06） ---------- */
+    #followCard {{ background: {t.card}; border: 1px solid {t.line_soft};
+        border-radius: {RADIUS_CARD}px; }}
+    #followTitle {{ color: {t.ink}; font-size: 12.5px; font-weight: 550; }}
+    #followSub {{ color: {t.ink3}; font-size: 10.5px; }}
+    #followHair {{ background: {t.line_soft}; border: 0; }}
+    #followStateRun {{ color: {t.run}; font-size: 10.5px; }}
+    #followStateOk {{ color: {t.ok}; font-size: 10.5px; }}
+    #followStateIdle {{ color: {t.ink3}; font-size: 10.5px; }}
+    #followStateWarn {{ color: {t.warn}; font-size: 10.5px; }}
+    #followStateBad {{ color: {t.danger}; font-size: 10.5px; }}
 
     /* ---------- 剪贴板页 ---------- */
     #searchBox {{

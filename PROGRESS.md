@@ -514,6 +514,24 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-06 15:45 **切屏页加「跟随画面」卡片**（键盘 / 鼠标两个开关，Mac 端已实现）。
+  版式真源 `design/redesign/INTERACTIONS-v2.md` §14；Windows 端照做版
+  `docs/UI-WINDOWS2-DESIGN.md` §5.4（含三件 Windows 独有责任）。
+  · 新增 `ui/mac2/follow_card.py`：`ToggleSwitch`（36×20 手绘，QSS 圆角会退化成直角）
+    + `FollowRow` + `FollowCard`；插在 hero 与「快速操作」之间（hero 是输入通道语义，
+    快速操作是导航行，都不合适）。
+  · `runner.py`：`_refresh_follow()` 只读状态，`_on_keyboard_follow()` /
+    `_on_mouse_follow()` 写盘 + 立即生效；开不起来时开关弹回并 toast 说明原因。
+  · `cli.py`：键盘注入端**总是**创建（开关随时可用），挂在 `engine.keyboard` 给界面拿；
+    `receiver.last_rtt_ms` 供状态行显示「往返 N ms」。
+  · **窗口 780×580 → 780×720**：加卡后切换页最小高度 642，580 只给 ~520，
+    `setFixedSize` 不滚动 ⇒ hero 的说明行直接盖住 18 号按钮（不报错、纯视觉错乱）。
+    守备用例 `test_switch_page_still_fits_the_window`。
+  · 图标库加 `keyboard` / `mouse`；顺带修 `tools/gen_iconlib.py` 名单里缺 `chevron-left`
+    （当初手改进 iconlib.py，一重新生成就会静默丢掉它）。
+  **验证**：全量 **454 passed / 24 skipped**；`tools/shots_v2.py` 出图无重叠；
+  `ui2` 离屏跑 10 秒零 traceback。
+
 - 2026-11-06 14:55 **修 `ui2` 一启动就崩（我引入的回归）+ 补两道守卫**。
   `cli.py::_start_clip_engine` 里为键盘跟随写了 `log = logging.getLogger(__name__)`，
   塞在 `if cfg.keyboard_follow.enabled:` 分支里。模块第 31 行本来就有 `log`，

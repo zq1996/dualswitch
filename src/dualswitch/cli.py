@@ -630,20 +630,19 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
 
         # 键盘跟随（默认关）：Mac 这一侧是**注入端** —— 收 Windows 转发来的
         # T_KEY，注入到本机。捕获端还没实现，所以这里只有接收的一半。
-        key_receiver = None
-        if cfg.keyboard_follow.enabled:
-            from .keyboard import KeyboardReceiver
+        # 键盘注入端**总是**建：切换页上有开关，随时可以打开。
+        # 关着时只是 `set_enabled(False)` 不注入，帧照收 —— 界面要靠它显示
+        # 「链路断开 / 往返多少毫秒」这类状态，没对象就没法显示。
+        from .keyboard import KeyboardReceiver
 
-            # 这里**不要**再 `log = logging.getLogger(...)`：本模块第 31 行已经有
-            # 模块级的 `log`，函数内再赋值会把它变成局部变量，于是紧跟着的
-            # "剪贴板同步已挂载" 那行 log.info 直接 UnboundLocalError —— 而且是在
-            # except 里再炸一次，把真正的启动错误也埋掉（2026-11-06 真踩）。
-            kf = cfg.keyboard_follow
-            key_receiver = KeyboardReceiver(
-                mod_map=kf.mod_map,
-                dedupe_repeat=(kf.repeat_mode == "dedupe"),
-                align_caps=kf.align_caps,
-            )
+        kf = cfg.keyboard_follow
+        key_receiver = KeyboardReceiver(
+            mod_map=kf.mod_map,
+            dedupe_repeat=(kf.repeat_mode == "dedupe"),
+            align_caps=kf.align_caps,
+            enabled=bool(kf.enabled),
+        )
+        if kf.enabled:
             ok, why = key_receiver.available()
             if ok:
                 log.info("键盘跟随已启用：%s", key_receiver.describe())
@@ -658,10 +657,12 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
             vcp_code=cfg.vcp_code,
             save_config=lambda: config_mod.save(cfg, cfg_file),
             version=__version__,
-            on_key=key_receiver.handle_key if key_receiver else None,
-            on_key_state=key_receiver.handle_state if key_receiver else None,
-            on_focus=key_receiver.handle_focus if key_receiver else None,
+            on_key=key_receiver.handle_key,
+            on_key_state=key_receiver.handle_state,
+            on_focus=key_receiver.handle_focus,
         )
+        # 注入端挂到引擎上：界面（UiRunner2）通过 `engine.keyboard` 拿它做开关。
+        engine.keyboard = key_receiver
         engine.start()
         controller.add_before_switch(lambda source, target: engine.push_now(f"switch:{source}"))
         # 本机打不到这块屏时（画面在对面 / 没接线），交给对端代发

@@ -56,7 +56,11 @@ def test_engine_starts_with_clipboard_disabled(cfg):
         assert engine is not None, "引擎没起来 —— 这条路径会把失败吞成一行日志"
         assert controller.before_switch, "切屏前钩子没挂上"
         assert controller.remote_switch is not None, "对端代发没挂上"
-        assert controller.keyboard is None, "键盘跟随默认关闭，不该建接收器"
+        # 注入端**总是**建（界面上有开关，随时能开），但默认必须是「不注入」状态
+        receiver = controller.keyboard
+        assert receiver is not None, "没建注入端：界面既开不了开关也显示不了状态"
+        assert receiver.enabled is False, "默认关闭时不能注入"
+        assert engine.keyboard is receiver, "界面要通过 engine.keyboard 拿到它"
     finally:
         if engine is not None:
             engine.stop()

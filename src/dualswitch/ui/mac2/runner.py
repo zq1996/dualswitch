@@ -131,6 +131,11 @@ class UiRunner2(QObject):
 
         self.toast = Toast(self.window)
 
+        # 键盘注入端由 cli 建好挂在引擎上（`engine.keyboard`）。它的 enabled 是
+        # 运行期开关，界面上的「键盘跟随」直接改它 + 落盘。
+        self.keyboard = getattr(clip_engine, "keyboard", None)
+        self._remote_ok = False
+
         self._busy = False
         self._hotkey_suspended = False
         self._quitting = False
@@ -148,6 +153,8 @@ class UiRunner2(QObject):
         self._last_page = PAGE_SWITCH
         self._pair_text = ""
         self.switch_page.clipboardRequested.connect(lambda: self.show_page(PAGE_CLIP))
+        self.switch_page.keyboardFollowToggled.connect(self._on_keyboard_follow)
+        self.switch_page.mouseFollowToggled.connect(self._on_mouse_follow)
         self.switch_page.toastRequested.connect(self.toast.show_text)
         self.clipboard_page.toastRequested.connect(self.toast.show_text)
         self.clipboard_page.pausedChanged.connect(self._on_clip_paused)
@@ -505,7 +512,9 @@ class UiRunner2(QObject):
         changed = False
         self._refresh_hotkey_ui()
         remote_ok = self._remote_ready()
+        self._remote_ok = remote_ok
         self.switch_page.set_remote_available(remote_ok)
+        self._refresh_follow(remote_ok)
         source = self.controller.source_state
         if source != self._seen_source:
             self._seen_source = source
@@ -526,6 +535,84 @@ class UiRunner2(QObject):
             self._apply_result(result)
         if changed:
             self._refresh_menu()
+
+    # ------------------------------------------------------------------ 跟随
+    def _refresh_follow(self, remote_ok: bool) -> None:
+        """把两端外设的现状写进「跟随画面」卡片。**只读，不改任何状态。**"""
+        page = self.switch_page
+        cfg = self.cfg
+
+        # ---- 键盘 ----
+        kf = getattr(cfg, "keyboard_follow", None)
+        if self.keyboard is None or kf is None:
+            page.set_keyboard_follow(False, "同步引擎未启动，无法接收按键", "idle")
+        elif not bool(kf.enabled):
+            page.set_keyboard_follow(False, "已暂停 · 按键留在 Windows", "warn")
+        elif not remote_ok:
+            page.set_keyboard_follow(
+                True, "链路断开 · 已自动回到 Windows 本机", "idle"
+            )
+        else:
+            rtt = getattr(self.keyboard, "last_rtt_ms", None)
+            text = "转发中 → Mac" + (f" · 往返 {rtt:.0f}ms" if rtt else "")
+            page.set_keyboard_follow(True, text, "run")
+
+        # ---- 鼠标 ----
+        ms = getattr(cfg, "mouse_switch", None)
+        local_slot = int(getattr(ms, "local_slot", 0) or 0) if ms is not None else 0
+        peer_slot = int(getattr(ms, "peer_slot", 0) or 0) if ms is not None else 0
+        usable = (1 <= local_slot <= 3) and (1 <= peer_slot <= 3)
+        if not usable:
+            # 槽位没配时开关打开也不会有任何效果（MouseSwitcher 先校验槽位），
+            # 所以直接不给开关，别让人点了以为生效。
+            page.set_mouse_follow(
+                False, "槽位未配置 · 在 config.json 填 mouse_switch", "idle", usable=False
+            )
+        elif bool(getattr(ms, "enabled", False)):
+            page.set_mouse_follow(
+                True, f"跟随中 · 本机槽 {local_slot} ⇄ 对端槽 {peer_slot}", "ok"
+            )
+        else:
+            page.set_mouse_follow(False, "已关闭", "idle")
+
+    def _save_later(self) -> bool:
+        try:
+            save_config(self.cfg, self.cfg_file)
+            return True
+        except Exception as exc:  # noqa: BLE001 - 落盘失败不该崩界面
+            log.warning("保存配置失败：%s", exc)
+            self.toast.show_text("配置保存失败，本次只在内存生效")
+            return False
+
+    def _on_keyboard_follow(self, on: bool) -> None:
+        kf = getattr(self.cfg, "keyboard_follow", None)
+        rx = self.keyboard
+        if kf is None or rx is None:
+            self.toast.show_text("同步引擎未启动，改不了键盘跟随")
+            self._refresh_follow(self._remote_ok)
+            return
+        if on:
+            ok, why = rx.available()
+            if not ok:
+                # 打不开就说清楚，别让开关停在「开」但实际不注入
+                self.toast.show_text(f"键盘注入不可用：{why}")
+                self._refresh_follow(self._remote_ok)
+                return
+        kf.enabled = bool(on)
+        # 先落盘再改运行态：落盘失败也要让本次生效，但用户得知道
+        self._save_later()
+        rx.set_enabled(bool(on))
+        log.info("键盘跟随 → %s", "开" if on else "关（按键留在 Windows）")
+        self._refresh_follow(self._remote_ok)
+
+    def _on_mouse_follow(self, on: bool) -> None:
+        ms = getattr(self.cfg, "mouse_switch", None)
+        if ms is None:
+            return
+        ms.enabled = bool(on)
+        self._save_later()
+        log.info("鼠标跟随 → %s", "开" if on else "关")
+        self._refresh_follow(self._remote_ok)
 
     def _remote_ready(self) -> bool:
         probe = self.controller.remote_ready

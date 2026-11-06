@@ -807,7 +807,9 @@ def test_row_double_click_copies(app, cfg):
 # --------------------------------------------------------------------------- #
 def test_window_geometry_and_pages(app, cfg):
     win = MainWindow(cfg, "alt+space", "v0")
-    assert (win.width(), win.height()) == (theme.WIN_W, theme.WIN_H) == (780, 580)
+    # 580 → 720（2026-11-06）：切换页加了「跟随画面」卡片，最小高度 642，
+    # 580 的窗口装不下会互相压住（见 test_switch_page_still_fits_the_window）。
+    assert (win.width(), win.height()) == (theme.WIN_W, theme.WIN_H) == (780, 720)
     sp = SwitchPage(cfg, "alt+space", "")
     cp = ClipboardPage(FakeEngine([]))
     from dualswitch.ui.mac2.settings_page import SettingsPage
@@ -2007,3 +2009,86 @@ def test_pairing_peer_rows_have_final_text_on_first_frame(app):
 
     assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "替换配对"
     assert page._peer_rows["windows-77aa0011"]["btn"].text() == "配对"
+
+
+# --------------------------------------------------------------------------- #
+# 「跟随画面」卡片（2026-11-06）
+# --------------------------------------------------------------------------- #
+#: 窗口 chrome 实测：780×720 的窗口，页面实际拿到的高度约比 WIN_H 少 60。
+CHROME_H = 60
+
+
+def test_follow_rows_start_blank_with_state_line_hidden(app, cfg):
+    """首帧还没拿到状态时，状态行整行隐藏 —— 否则界面上是一个孤零零的灰点。"""
+    page = SwitchPage(cfg, "alt+space", "")
+    for row in (page.follow.keyboard, page.follow.mouse):
+        assert row.switch.isChecked() is False
+        assert row._dot.isHidden() is True
+        assert row.state.isHidden() is True
+
+
+def test_set_keyboard_follow_updates_switch_text_and_tone(app, cfg):
+    page = SwitchPage(cfg, "alt+space", "")
+    page.set_keyboard_follow(True, "转发中 → Mac · 往返 6ms", "run")
+    row = page.follow.keyboard
+    assert row.switch.isChecked() is True
+    assert row.state.text() == "转发中 → Mac · 往返 6ms"
+    assert row.state.objectName() == "followStateRun"
+    assert row._dot.isHidden() is False
+
+
+def test_paused_state_uses_warn_tone(app, cfg):
+    page = SwitchPage(cfg, "alt+space", "")
+    page.set_keyboard_follow(False, "已暂停 · 按键留在 Windows", "warn")
+    assert page.follow.keyboard.state.objectName() == "followStateWarn"
+    assert page.follow.keyboard.switch.isChecked() is False
+
+
+def test_mouse_row_hides_the_switch_when_slots_are_unconfigured(app, cfg):
+    """槽位没配时打开开关也不会有任何效果，所以不给开关 —— 置灰的开关会被当成「待会儿能开」。"""
+    page = SwitchPage(cfg, "alt+space", "")
+    page.set_mouse_follow(False, "槽位未配置 · 在 config.json 填 mouse_switch",
+                          "idle", usable=False)
+    row = page.follow.mouse
+    assert row.switch.isHidden() is True
+    assert "槽位未配置" in row.state.text()
+
+    page.set_mouse_follow(True, "跟随中 · 本机槽 2 ⇄ 对端槽 1", "ok", usable=True)
+    assert row.switch.isHidden() is False
+    assert row.switch.isChecked() is True
+
+
+def test_clicking_the_switch_emits_through_the_page(app, cfg):
+    page = SwitchPage(cfg, "alt+space", "")
+    seen: list[bool] = []
+    page.keyboardFollowToggled.connect(seen.append)
+    page.mouseFollowToggled.connect(seen.append)
+
+    page.set_keyboard_follow(False, "", "idle")
+    QTest.mouseClick(page.follow.keyboard.switch, Qt.LeftButton)
+    assert seen == [True]
+    assert page.follow.keyboard.switch.isChecked() is True
+
+    QTest.mouseClick(page.follow.mouse.switch, Qt.LeftButton)
+    assert seen == [True, True]
+
+
+def test_disabled_switch_does_not_emit(app, cfg):
+    page = SwitchPage(cfg, "alt+space", "")
+    seen: list[bool] = []
+    page.keyboardFollowToggled.connect(seen.append)
+    page.follow.keyboard.switch.setEnabled(False)
+    QTest.mouseClick(page.follow.keyboard.switch, Qt.LeftButton)
+    assert seen == []
+
+
+def test_switch_page_still_fits_the_window(app, cfg):
+    """防回归：切换页加内容后最小高度不能超过窗口给得出的高度。
+
+    2026-11-06 加「跟随画面」时页面最小高度变成 642，而 580 的窗口只给 ~520，
+    结果是 hero 的说明文字直接压在 18 号通道的按钮上（不滚动、不报错、纯视觉错乱）。
+    """
+    page = SwitchPage(cfg, "alt+space", "")
+    need = page.minimumSizeHint().height()
+    have = theme.WIN_H - CHROME_H
+    assert need <= have, f"切换页需要 {need}px，窗口只给 {have}px：要么压缩内容，要么加高窗口"

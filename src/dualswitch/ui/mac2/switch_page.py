@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import icons, theme
+from .follow_card import FollowCard
 from .widgets import label
 
 PORT = {"windows": "HDMI", "mac": "USB-C"}
@@ -370,6 +371,9 @@ class SwitchPage(QWidget):
     peerRequested = Signal(int)
     clipboardRequested = Signal()
     toastRequested = Signal(str)
+    #: 跟随开关（2026-11-06）：状态由链路同步，这里只把用户操作抛出去
+    keyboardFollowToggled = Signal(bool)
+    mouseFollowToggled = Signal(bool)
 
     def __init__(self, cfg, hotkey_label: str = "", monitor_name: str = "", parent=None):
         super().__init__(parent)
@@ -386,6 +390,14 @@ class SwitchPage(QWidget):
         self.hero.localRequested.connect(self.localRequested)
         self.hero.peerRequested.connect(self.peerRequested)
         lay.addWidget(self.hero)
+
+        # 「跟随画面」：键盘 / 鼠标这两个外设是切屏的副作用，不属于 hero 的
+        # 「输入通道」语义，所以单开一节；也不能塞进「快速操作」，那里是导航行。
+        lay.addWidget(label("跟随画面", "secLabel"))
+        self.follow = FollowCard()
+        self.follow.keyboardToggled.connect(self.keyboardFollowToggled)
+        self.follow.mouseToggled.connect(self.mouseFollowToggled)
+        lay.addWidget(self.follow)
 
         lay.addWidget(label("快速操作", "secLabel"))
         rows = QFrame()
@@ -421,3 +433,15 @@ class SwitchPage(QWidget):
 
     def set_clip_count(self, count: int, abnormal: int = 0) -> None:
         self.row_clip.set_count(count, abnormal)
+
+    # ------------------------------------------------------------------ 跟随
+    def set_keyboard_follow(self, on: bool, text: str, tone: str = "idle") -> None:
+        self.follow.keyboard.set_checked(on)
+        self.follow.keyboard.set_usable(True)
+        self.follow.keyboard.set_state(text, tone)
+
+    def set_mouse_follow(self, on: bool, text: str, tone: str = "idle",
+                         usable: bool = True) -> None:
+        self.follow.mouse.set_checked(on)
+        self.follow.mouse.set_usable(usable)
+        self.follow.mouse.set_state(text, tone)

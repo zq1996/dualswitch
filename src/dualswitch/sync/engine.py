@@ -120,6 +120,12 @@ class SyncEngine:
         self._on_key_state = on_key_state
         self._on_focus = on_focus
         self.keyboard_stats = {"sent": 0, "received": 0}
+        #: 注入端（`keyboard.KeyboardReceiver`）。cli 起完引擎后挂上来；界面通过它
+        #: 做「键盘跟随」开关、读链路往返延迟。不挂 = 界面拿不到这个能力。
+        self.keyboard = None
+        #: 注入端（`keyboard.KeyboardReceiver`）。cli 起完引擎后挂上来；界面通过它
+        #: 做「键盘跟随」开关、读链路往返延迟。不挂 = 界面拿不到这个能力。
+        self.keyboard = None
         self._switch_waiters: dict[str, tuple[threading.Event, dict[str, Any]]] = {}
         self._switch_seen: dict[str, tuple[float, dict[str, Any]]] = {}
         self.switch_stats = {"requested": 0, "served": 0, "failed": 0}

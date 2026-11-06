@@ -23,11 +23,13 @@ LUCIDE = [
     "arrow-left-right", "clipboard", "settings", "search", "pause", "play",
     "trash-2", "copy", "image", "file-text", "link-2", "folder-open", "x",
     "external-link", "check", "monitor", "app-window", "power", "download",
-    "chevron-right", "eye", "scan-eye", "folder", "type", "code",
+    "chevron-left", "chevron-right", "eye", "scan-eye", "folder", "type", "code",
     # 文件卡片 / 文件缩略图（按扩展名分派：普通 / 图片 / 压缩包）
     "file", "file-image", "file-archive", "file-down", "hard-drive",
     # 切换页兜底小钮（请对端代发）
     "send",
+    # 切换页「跟随画面」卡片（键盘 / 鼠标，2026-11-06）
+    "keyboard", "mouse",
 ]
 
 FILLED = {
