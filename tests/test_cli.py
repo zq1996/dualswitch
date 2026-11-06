@@ -93,3 +93,36 @@ def test_logging_falls_back_when_default_log_unwritable(tmp_path, monkeypatch):
         for handler in list(root.handlers):
             root.removeHandler(handler)
             handler.close()
+
+
+def test_cli_flags_are_never_persisted(tmp_path):
+    """`--dry-run` / `--log-level` / `--no-tray` 只作用于本次运行，不许写回配置文件。
+
+    2026-11-06 真实事故：调试时用 `--dry-run` 起界面，界面上点了个开关（会落盘），
+    于是 `dry_run: true` 被写进用户的 config.json —— 之后正常双击启动也还在演练模式，
+    界面写着「[演练] 未真正发送指令」，用户以为程序坏了。
+    """
+    import argparse
+
+    from dualswitch.cli import _load_config
+    from dualswitch.config import Config, load, save
+
+    path = tmp_path / "config.json"
+    base = Config()
+    base.dry_run = False
+    base.tray = True
+    base.log_level = "INFO"
+    save(base, path)
+
+    args = argparse.Namespace(config=str(path), dry_run=True, log_level="DEBUG", no_tray=True)
+    cfg, cfg_file = _load_config(args)
+    # 本次运行确实被覆盖了
+    assert cfg.dry_run is True
+    assert cfg.log_level == "DEBUG"
+    assert cfg.tray is False
+
+    save(cfg, cfg_file)          # 模拟"界面里点了个开关"触发的落盘
+    again = load(path)
+    assert again.dry_run is False, "CLI 的 --dry-run 被写进配置文件了"
+    assert again.log_level == "INFO"
+    assert again.tray is True

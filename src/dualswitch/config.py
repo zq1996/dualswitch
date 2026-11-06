@@ -598,9 +598,21 @@ def load(path: str | os.PathLike[str] | None = None, *, strict: bool = True) -> 
 
 
 def save(cfg: Config, path: str | os.PathLike[str] | None = None) -> Path:
+    """落盘。
+
+    **命令行临时覆盖不写回文件**（2026-11-06 踩过）：`--dry-run` / `--log-level` /
+    `--no-tray` 只改运行中的对象。以前它们会被下一次"界面里点个开关"顺手写进
+    config.json —— 用户下次正常启动时程序还在演练模式，界面上写着「[演练] 未真正
+    发送指令」，看着像坏了。`cli._load_config()` 把盘上的原值记进
+    `cfg._cli_overrides`，这里按原值写回。
+    """
     target = Path(path).expanduser() if path else config_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(cfg.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    data = cfg.to_dict()
+    for key, original in (getattr(cfg, "_cli_overrides", None) or {}).items():
+        if key in data:
+            data[key] = original
+    target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return target
 
 

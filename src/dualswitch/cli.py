@@ -41,12 +41,20 @@ def _load_config(args, *, create: bool = False) -> tuple[Config, Path]:
         if created:
             print(f"已生成默认配置文件：{path}")
     cfg = config_mod.load(path, strict=False)
+    # 命令行覆盖只作用于**本次运行**：把盘上的原值记下来，`save()` 按原值写回。
+    # 不这么做的话，界面上随便点个开关（会落盘）就把 `dry_run: true` 永久写进
+    # config.json —— 下次正常启动还在演练模式，用户以为坏了（2026-11-06 真实事故）。
+    overrides: dict[str, object] = {}
     if getattr(args, "dry_run", False):
+        overrides.setdefault("dry_run", cfg.dry_run)
         cfg.dry_run = True
     if getattr(args, "log_level", None):
+        overrides.setdefault("log_level", cfg.log_level)
         cfg.log_level = args.log_level
     if getattr(args, "no_tray", False):
+        overrides.setdefault("tray", cfg.tray)
         cfg.tray = False
+    cfg._cli_overrides = overrides
     return cfg, path
 
 
