@@ -519,6 +519,45 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-06 21:30 **切换页彻底不要悬停浮窗**（用户第二次报：「又出现一个黑浮窗，
+  点下面的按钮没反应」）。上一条把自绘 `TipBubble` 换成原生 `setToolTip()` 是**错的方向**：
+  原生 tooltip 也是独立顶层窗，而且**不带 `WS_EX_TRANSPARENT`**。
+  · 实测（`tools/tooltip_hittest.py`，只做命中测试不注入鼠标）：Qt 的 tooltip 窗口
+    exstyle = `0x88` = `WS_EX_TOOLWINDOW | WS_EX_TOPMOST`，**没有 0x20**；
+    3 行提示弹在按钮下方 4px，正好压在下一行「本机发送 18」/纸飞机上 ——
+    点它下面的按钮 = 点浮窗，点击被吃掉。这就是用户说的「点按钮没反应」。
+  · 删除：`ActionRow.TIP_LOCAL`、`peer_tip_text()`、两处 `setToolTip()`；
+    `set_peer_available()` 只 `setEnabled`。语义改由按钮文字 + `accessibleName` 承担。
+  · 守卫：`test_ui_win2.py::test_switch_buttons_never_pop_a_hover_bubble`
+    断言两个按钮 `toolTip() == ""`、win2 无 `HoverTip`/`TipBubble`、
+    `ActionRow` 无 `TIP_LOCAL`/`peer_tip_text`；另把
+    `test_switch_page_four_explicit_actions` 里「文案进 tooltip」的断言改掉。
+  · 教训写进 `docs/UI-WINDOWS2-DESIGN.md` §5.5：**Windows 上任何悬停浮层都会挡点击**，
+    要解释就写常驻文字，别再引入顶层窗。
+  · 全量 **601 tests / 0 failed / 12 skipped**。
+
+- 2026-11-06 21:05 **Windows 端删掉自绘的悬停提示浮层**（用户报「四个角是黑的」）。
+  ⚠️ 本条的后半段（改用原生 `setToolTip()`）当天就被上一条推翻 —— 原生提示同样是浮窗。
+  截图证据：`TipBubble` 是无边框顶层窗（`Qt.ToolTip | FramelessWindowHint`），
+  `paintEvent` 只在圆角矩形内画底，**圆角外的像素没有底色**，Windows 上就露出黑角；
+  同一张图里弹层还盖住了下面的「18 USB-C」通道行。用户判定「没啥用」→ 直接去掉。
+  · 删除：`ui/win2/widgets.py` 的 `TipBubble` / `HoverTip` / `tip_bubble()` /
+    `attach_hover_tip()`（约 250 行）、`ui/win2/theme.py` 的 `HOVER_TIP_MS/W` 与
+    `#tipBubble` QSS 段、`switch_page.ActionRow.tip_local/tip_peer` 属性。
+  · 改为：`btn_local.setToolTip(TIP_LOCAL)` / `btn_peer.setToolTip(peer_tip_text())`，
+    `set_peer_available()` 里同步刷新。文案自带 `\n`，原生 tooltip 不自动折行也不怕。
+  · 外观：走全局 `QToolTip` 规则（`ink` 深底 + `card` 浅字 + 6px 圆角）。
+    **真机截图核过**（`tools/tooltip_probe.py` 强制 `QToolTip.showText` + `grabWindow(0)`）：
+    四角干净无黑块，多行完整、不溢出屏幕 —— Qt 的 `QTipLabel` 自带
+    `WA_TranslucentBackground`，这就是自绘那版缺的一行。
+  · mac2 不动（macOS 上没这个现象，`HoverTip` 仍在用）；两端自此分叉，
+    守卫 `test_ui_win2.py::test_operation_hint_lives_in_native_tooltip` 断言
+    win2 模块里不再出现这四个名字，防止从 mac2 抄回来
+    （该用例已被三改替换成 `test_switch_buttons_never_pop_a_hover_bubble`）。
+  · 测试：删 2 个弹层用例（折行/点穿），改 2 个（tooltip 文案、离线态），全量
+    **588 passed / 12 skipped**（另有 1 个 `test_clipboard_windows` 真机剪贴板用例
+    因剪贴板被占失败，与本次改动无关）。
+
 - 2026-11-06 19:55 **修用户报的「启动后页面点击都不好用」**（我自己引入的回归）。
   真凶是切换页的长悬停提示弹层 `TipBubble`：它是**独立顶层窗口**，而
   `WA_TransparentForMouseEvents` **只对子控件生效**，顶层窗口照样把落在它矩形里的

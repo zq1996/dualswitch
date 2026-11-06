@@ -310,12 +310,12 @@ MONO_FAMILIES = ["Cascadia Mono", "Consolas", "Courier New"]
 ```
 
 > **2026-11-06 精简（INTERACTIONS §10.25，mac2 已改，Windows 照做）**：
-> 1. hero 底部那行常驻「操作提示」**删除** → 改成「本机发送」/「请对端发送」两个按钮的
->    **长悬停 tip**（1.2s 才弹）；
+> 1. hero 底部那行常驻「操作提示」**删除**；mac2 改成按钮的长悬停 tip，
+>    Windows 端**连悬停浮窗也没有**（浮层会压住下一行按钮吃掉点击，见 §5.5.1）；
 > 2. 「快速操作 · 剪贴板」整节**删除**（剪贴板在侧栏已有入口，条数只在侧栏徽章显示）；
 > 3. 窗口跟着收回（mac2 **570** / Windows **550**，原来 720 是为了装下那两节）。
 >
-> 实现细节见 §5.5，Windows 端照抄即可。
+> 实现细节见 §5.5。
 
 几何硬约束（mac2/`ActionRow` 同一套常量，测试双向锁）：
 
@@ -411,22 +411,33 @@ MONO_FAMILIES = ["Cascadia Mono", "Consolas", "Courier New"]
 真源：`design/redesign/INTERACTIONS-v2.md` §10.25。mac2 的参考实现：
 `ui/mac2/widgets.py::HoverTip/TipBubble`、`ui/mac2/switch_page.py::ActionRow`。
 
-### 5.5.1 操作提示 → 长悬停 tip
+> **Windows 分叉（2026-11-06，用户三次拍板）**：Windows 端**没有任何悬停浮窗**。
+>
+> 演进过程值得记下来，别再走回头路：
+> 1. 常驻两行灰字（占版面）→ 删；
+> 2. 自绘长悬停 `TipBubble`（mac2 那套）→ 无边框顶层窗圆角外补不上底色，
+>    **四个角是黑的**（用户截图）→ 删；
+> 3. 原生 `setToolTip()` → **也是浮窗**：Qt 的 tooltip 窗口只有
+>    `WS_EX_TOOLWINDOW | WS_EX_TOPMOST`，**不带 `WS_EX_TRANSPARENT`**
+>    （`tools/tooltip_hittest.py` 实测 exstyle=0x88），3 行提示弹在按钮下方正好压在
+>    下一行按钮上，点它下面的按钮 = 点浮窗 → 用户报「点按钮没反应」→ 删。
+>
+> 现状：`ui/win2/widgets.py` 无 `TipBubble`/`HoverTip`，`theme` 无 `HOVER_TIP_*`，
+> `ActionRow` 不挂 toolTip，`TIP_LOCAL`/`peer_tip_text()` 已删除。
+> 守卫：`test_ui_win2.py::test_switch_buttons_never_pop_a_hover_bubble`。
+> mac2 保持自绘长悬停 tip（macOS 上无此现象）。
 
-| 项 | 规格 |
+### 5.5.1 操作说明：Windows 端没有
+
+| 项 | Windows 规格 |
 |---|---|
-| 触发 | 鼠标停在按钮上 **1.2s** 才弹（`HOVER_TIP_MS`）。**不是** Qt 默认的 ~700ms，也不是划过就弹 |
-| 文案分两份 | 「本机发送 N」一份、「请对端发送 N」一份，与原提示行同义（都提 DDC + 兜底） |
-| 折行 | 按 **300px** 折（`HOVER_TIP_W`）。纯文本 tooltip **不会自动换行**，不折就是横贯屏幕的长条 |
-| 无障碍 | 原文同时 `setToolTip()`；Qt 自带的 `QEvent.ToolTip` 在 eventFilter 里 `return True` 吃掉 |
-| 离线态 | 兜底钮置灰时 tip 末尾补「当前对端离线，此通道不可用」；状态一变就刷新文案 |
-| 弹层 | 按钮下方居中 → 下方放不下翻上方 → **先钳进应用窗口、再钳进屏幕可用区** |
+| 常驻说明 | 无（页面高度只剩 ~26px 呼吸，塞不回去） |
+| 悬停说明 | **无**。任何浮层都会压住相邻按钮并吃掉点击（见上方演进） |
+| 语义来源 | 按钮文字本身（「本机发送 17」）+ `accessibleName`（读屏可读） |
+| 离线态 | 兜底钮置灰 + 顶上药丸写「对端离线」，不做 tooltip 解释 |
 
-> **别用 QToolTip**（mac2 实测两个坑）：①它按光标自己算坐标、**不做屏幕钳制**，
-> 按钮在窗口右侧时提示框直接溢出屏幕；②样式被全局 QSS 的 `QToolTip` 规则锁成深色小字，
-> 和浅色界面不搭。mac2 的做法是自绘 `TipBubble`（无边框透明底 + 圆角卡片 +
-> `card`/`line`/`ink2` 令牌）。Windows 端可以直接照抄这个类，Windows 的 `QToolTip`
-> 同样不做屏幕钳制。
+> 如果以后确实需要解释「纸飞机是干嘛的」，**只能放常驻文字**（改版面高度），
+> 不许再引入任何顶层浮窗 —— Windows 上它一定挡点击。
 
 ### 5.5.2 删除「快速操作 · 剪贴板」
 

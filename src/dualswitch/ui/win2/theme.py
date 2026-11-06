@@ -68,11 +68,9 @@ ACT_BTN = 25
 PV_OPEN_DELAY_MS = 450           # 只悬停缩略图才计时
 PV_CLOSE_DELAY_MS = 220
 
-#: 长悬停提示（2026-11-06，跟 mac2）：切换页按钮上的操作说明走这个，
-#: 不再是常驻文字行。1.2s 才弹 —— 用户要求「长时间悬浮才给」；文案按 300px 折行
-#: （QToolTip 对纯文本不自动换行，不折就是一条横贯屏幕的长条）。
-HOVER_TIP_MS = 1200
-HOVER_TIP_W = 300
+#: 切换页按钮上的操作说明**已经彻底没有**（2026-11-06 三改）：自绘弹层四角发黑，
+#: 原生 `setToolTip()` 的 tooltip 窗口又不带 `WS_EX_TRANSPARENT`、会压住下一行按钮
+#: 吃掉点击（`tools/tooltip_hittest.py` 实测 exstyle=0x88）。见 switch_page.ActionRow。
 PV_IMG_MAX_W, PV_IMG_MAX_H = 412, 330
 PV_TXT_MAX_W, PV_TXT_MAX_H = 392, 270
 #: 预览窗正文最多渲染多少字。**不是视觉截断**：正常长度完整显示，
@@ -529,7 +527,7 @@ def qss(t: Tokens | None = None) -> str:
     #srcLine {{ color: {t.ink3}; font-size: 11.5px; }}
     #srcDotOk {{ background: {t.ok}; border-radius: 3px; }}
     #srcDotIdle {{ background: {t.ink3}; border-radius: 3px; }}
-    /* 操作说明不再常驻（2026-11-06）：改成按钮的长悬停 tip，见 widgets.HoverTip */
+    /* 操作说明不再常驻（2026-11-06）：切换页连悬停浮窗也删了，见 switch_page.ActionRow */
     /* 四条通道（INTERACTIONS §10.24）：一行 = 一个目标 + 本机发送(主) + 兜底小钮 */
     #actRow {{
         background: {t.card}; border: 1px solid {t.line_soft};
@@ -631,11 +629,6 @@ def qss(t: Tokens | None = None) -> str:
     #followStateIdle {{ color: {t.ink3}; font-size: 11px; }}
     #followStateWarn {{ color: {t.warn}; font-size: 11px; }}
     #followStateBad {{ color: {t.danger}; font-size: 11px; }}
-
-    /* ---------- 长悬停提示弹层（自绘，不用 QToolTip） ---------- */
-    /* QToolTip 在 Windows 上同样①不做屏幕钳制（按钮靠右时溢出屏幕）
-       ②被全局样式锁成系统深色小字。弹层本体自己画，见 widgets.TipBubble。 */
-    #tipBubble {{ background: transparent; }}
 
     /* ---------- 剪贴板页 ---------- */
     #searchBox {{

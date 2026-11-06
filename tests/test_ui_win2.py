@@ -230,10 +230,11 @@ def test_switch_page_four_explicit_actions(app, cfg):
     rows = page.hero.rows
     assert [(r.host, r.value) for r in rows] == [("windows", 17), ("mac", 18)]
     assert [r.btn_local.text() for r in rows] == ["本机发送 17", "本机发送 18"]
-    # 「请对端发送」是兜底，降级为行尾小图标钮：文案进 tooltip + accessibleName
+    # 「请对端发送」是兜底，降级为行尾小图标钮：文案进 accessibleName
+    # （**不进 tooltip**：2026-11-06 三改，悬停浮窗会压住下一行按钮吃掉点击）
     assert [r.btn_peer.accessibleName() for r in rows] == ["请对端发送 17", "请对端发送 18"]
     assert all(not r.btn_peer.text() for r in rows)
-    assert all("兜底" in r.btn_peer.toolTip() for r in rows)
+    assert all(r.btn_peer.toolTip() == "" for r in rows)
 
     # 画面归属未检测 → 四个按钮照样可用（不再按归属禁用）
     page.set_owner(None)
@@ -1342,7 +1343,7 @@ def test_settings_buttons_are_never_narrower_than_their_hint(app, cfg):
 
 
 # --------------------------------------------------------------------------- #
-# 切换页改版（2026-11-06，跟 mac2）：跟随画面 / 长悬停 tip / 删快速操作
+# 切换页改版（2026-11-06，跟 mac2）：跟随画面 / 按钮 tooltip / 删快速操作
 # --------------------------------------------------------------------------- #
 def test_follow_rows_start_blank_with_state_line_hidden(app, cfg):
     """首帧还没拿到状态时，状态行整行隐藏 —— 否则界面上是一个孤零零的灰点。"""
@@ -1466,106 +1467,49 @@ def test_quick_actions_section_is_gone(app, cfg):
     assert "快速操作" not in texts
 
 
-def test_operation_hint_moved_into_button_hover_tip(app, cfg):
-    """原来的常驻操作提示改成按钮的长悬停 tip。
+def test_switch_buttons_never_pop_a_hover_bubble(app, cfg):
+    """切换页两个按钮**一个悬停浮窗都不许有**（2026-11-06 三改，用户两次拍板）。
 
-    三条硬约束：① hero 里不再有常驻说明行；② 主按钮与兜底钮都挂了 `HoverTip`
-    且文案语义不变；③ 延时 = `theme.HOVER_TIP_MS`（1.2s，"长时间悬浮"才弹）。
+    演进：常驻灰字 → 自绘 `TipBubble`（四角发黑）→ 原生 `setToolTip()`（用户：
+    「又出现一个黑浮窗，点下面的按钮没反应」）→ 全删。
+
+    原生 tooltip 也是**独立顶层窗**，且不带 `WS_EX_TRANSPARENT`
+    （`tools/tooltip_hittest.py` 实测 exstyle=0x88 = TOOLWINDOW|TOPMOST）：
+    3 行提示弹在按钮下方，正好压在下一行按钮上，点它 = 点浮窗，点击被吃掉。
+    所以这里锁死「不挂 tooltip」，而不是锁文案。
+
+    三条约束：① hero 里没有常驻说明行；② 两个按钮 `toolTip()` 为空；
+    ③ win2 模块里不存在任何自绘弹层类（防止从 mac2 抄回来）。
     """
-    from dualswitch.ui.win2.widgets import HoverTip
+    import dualswitch.ui.win2.widgets as w2widgets
 
     page = SwitchPage(cfg, "Alt+Space", "")
     assert not hasattr(page.hero, "hint"), "hero 的常驻提示行应当已删除"
 
     for row in page.hero.rows:
-        for btn, tip, keyword in (
-            (row.btn_local, row.tip_local, "本机发送"),
-            (row.btn_peer, row.tip_peer, "请对端发送"),
-        ):
-            assert isinstance(tip, HoverTip), f"{btn.objectName()} 没有挂长悬停 tip"
-            assert tip.delay_ms() == theme.HOVER_TIP_MS >= 1000, "tip 必须是「长悬停」才弹"
-            assert keyword in tip.text()
-            # 原文仍在 toolTip()：无障碍读屏、Qt 自带的兜底提示都靠它
-            assert btn.toolTip() == tip.text()
-        assert "DDC" in row.tip_local.text(), "主按钮 tip 要保留「直接发 DDC」这句"
-        assert "兜底" in row.tip_peer.text()
+        assert row.btn_local.toolTip() == "", "主按钮不许挂 tooltip（会弹浮窗挡按钮）"
+        assert row.btn_peer.toolTip() == "", "兜底钮不许挂 tooltip（会弹浮窗挡按钮）"
+        # 语义仍在：读屏走 accessibleName，不靠浮窗
+        assert "本机发送" in row.btn_local.accessibleName()
+        assert "请对端发送" in row.btn_peer.accessibleName()
+
+    for name in ("HoverTip", "TipBubble", "tip_bubble", "attach_hover_tip"):
+        assert not hasattr(w2widgets, name), f"Windows 端不该再有自绘提示弹层：{name}"
+    assert not hasattr(type(page.hero.rows[0]), "TIP_LOCAL"), "TIP_LOCAL 应当已删除"
+    assert not hasattr(page.hero.rows[0], "peer_tip_text"), "peer_tip_text 应当已删除"
 
 
-def test_peer_tip_mentions_offline_state(app, cfg):
-    """兜底钮置灰时，tip 要补一句「当前对端离线」—— 别让人对着灰钮猜为什么点不动。"""
+def test_peer_button_greys_out_when_peer_offline(app, cfg):
+    """对端离线 → 兜底钮置灰（不靠 tooltip 解释，顶上药丸已经写着「对端离线」）。"""
     page = SwitchPage(cfg, "Alt+Space", "")
     rows = page.hero.rows
 
     page.set_remote_available(False)
     for row in rows:
         assert not row.btn_peer.isEnabled()
-        assert "对端离线" in row.tip_peer.text()
+        assert row.btn_peer.toolTip() == ""
 
     page.set_remote_available(True)
     for row in rows:
         assert row.btn_peer.isEnabled()
-        assert "对端离线" not in row.tip_peer.text()
-        assert "请对端发送" in row.tip_peer.text()
-
-
-def test_hover_tip_wraps_long_text_and_waits_for_the_delay(app, cfg):
-    """QToolTip 对纯文本**不自动换行**，且**不做屏幕钳制** —— 这两件事自己扛。"""
-    from PySide6.QtGui import QFontMetrics
-    from PySide6.QtWidgets import QPushButton
-
-    from dualswitch.ui.win2.widgets import TipBubble, attach_hover_tip, tip_bubble
-
-    btn = QPushButton("x")
-    btn.resize(150, 38)
-    long = (
-        "「本机发送」直接把 DDC 命令发给显示器，画面在哪一边都能切，"
-        "不需要先判断当前输入。行尾纸飞机是兜底通道。"
-    )
-    tip = attach_hover_tip(btn, long)
-    assert tip.delay_ms() == theme.HOVER_TIP_MS == 1200
-    assert btn.toolTip() == long
-
-    bubble = tip_bubble()
-    bubble.set_text(long, theme.HOVER_TIP_W)
-    assert isinstance(bubble, TipBubble)
-    assert len(bubble._lines) > 1, "长文案必须折行，否则会横贯屏幕"
-    fm = QFontMetrics(bubble._font)
-    assert max(fm.horizontalAdvance(line) for line in bubble._lines) <= theme.HOVER_TIP_W + 1
-    assert bubble.width() <= theme.HOVER_TIP_W + bubble.PAD_H * 2 + 2
-    bubble.hide()
-
-
-def test_hover_tip_bubble_is_click_through_and_self_closing(app, cfg):
-    """长悬停弹层是**独立顶层窗**：必须点得穿，且不能卡在屏幕上。
-
-    2026-11-06 用户报「启动后点哪儿都没反应」，实测就是这个弹层：
-    `WA_TransparentForMouseEvents` **只对子控件生效**，顶层窗口照样把落在它矩形里的
-    点击收走；而它当时只靠 `QEvent.Leave` 收，鼠标一旦落在弹层上（或窗口在光标下
-    出现），Leave 就再也来不了，弹层永久挂在界面上 —— 它盖住的按钮全部点不动。
-
-    三条守卫：① 顶层窗必须带 `WindowTransparentForInput`（= WS_EX_TRANSPARENT）；
-    ② 保留 `WA_TransparentForMouseEvents`（子控件语义）；③ 看门狗在鼠标离开后收起。
-    """
-    from PySide6.QtWidgets import QPushButton
-
-    from dualswitch.ui.win2.widgets import attach_hover_tip, tip_bubble
-
-    btn = QPushButton("x")
-    btn.resize(150, 38)
-    btn.show()
-    tip = attach_hover_tip(btn, "长文案" * 40)
-    QTest.qWait(20)
-
-    bubble = tip_bubble()
-    assert bubble.windowFlags() & Qt.WindowTransparentForInput, "弹层会吃掉它下面的点击"
-    assert bubble.testAttribute(Qt.WA_TransparentForMouseEvents)
-
-    # 看门狗：按钮没了 / 鼠标不在按钮上时，150ms 内必须收起来（不依赖 Leave）。
-    # 这里用 hide() 而不是移动鼠标：offscreen 下 `underMouse()` 不可靠。
-    bubble.set_text("测试提示", theme.HOVER_TIP_W)
-    bubble.show()
-    tip._bubble = bubble          # noqa: SLF001 - 模拟"已弹出"
-    tip._watch.start()            # noqa: SLF001
-    btn.hide()
-    QTest.qWait(400)
-    assert not bubble.isVisible(), "按钮都不在了，弹层还挂着"
+        assert row.btn_peer.toolTip() == ""

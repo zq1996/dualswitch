@@ -18,12 +18,19 @@ AOC 这类屏输入切走后两端照样枚举得到，任何「按归属推方�
     带文案；本机 DDC 不可用时（驱动/权限/线材）才用。
 
 **2026-11-06 版面精简（跟 mac2 同步）**：
-* 原来常驻在 hero 里、占两行的「操作提示」整段移进按钮的长悬停 tip
-  （`widgets.HoverTip`，1.2s 才弹）—— 说明文字不该每次都占版面；
+* 原来常驻在 hero 里、占两行的「操作提示」整段删除 —— 说明文字不该每次都占版面；
 * 「快速操作 · 剪贴板」整节删除：剪贴板在侧栏「核心」里已有入口（还带条数徽章），
   这里再放一行是重复导航；
 * 新增「跟随画面」卡片（`follow_card.FollowCard`）：键盘转发 / 鼠标跟随两个开关，
   插在 hero 与页面底部之间 —— hero 是「输入通道」语义，跟随是外设副作用，不混。
+
+**2026-11-06 二改/三改：Windows 端不要任何悬停浮窗**。二改先把自绘的
+`widgets.TipBubble`（四角发黑）换成原生 `setToolTip()`；三改发现**原生提示也是浮窗**：
+Qt 的 tooltip 窗口只有 `WS_EX_TOOLWINDOW | WS_EX_TOPMOST`，不带 `WS_EX_TRANSPARENT`
+（`tools/tooltip_hittest.py` 实测 exstyle=0x88），3 行提示弹在按钮下方正好压在下一行
+按钮上，点它下面的按钮 = 点浮窗 → 用户报的「点按钮没反应」。现在两个按钮**一个
+toolTip 都不挂**，`ActionRow.TIP_LOCAL` / `peer_tip_text()` 一并删除。
+mac2 保留自绘长悬停 tip（macOS 上没这个现象）。
 
 Windows 口径差异：药丸是自绘 `widgets.Pill`（19px 高 QSS 圆角会被 Qt 丢掉）、
 字体走 Segoe/雅黑字阶。
@@ -45,7 +52,7 @@ from PySide6.QtWidgets import (
 
 from . import icons, theme
 from .follow_card import FollowCard
-from .widgets import Pill, attach_hover_tip, label
+from .widgets import Pill, label
 
 PORT = {"windows": "HDMI", "mac": "USB-C"}
 TITLE = {"windows": "Windows", "mac": "Mac"}
@@ -70,9 +77,14 @@ class ActionRow(QFrame):
       （SCREEN-OWNERSHIP §1.4），「请对端发送」只剩兜底用途。
     - 主按钮 + 小钮**靠右成簇**（间距 8px），两行按钮列左右对齐。
 
-    两个按钮的说明都走**长悬停 tip**（1.2s 才弹，2026-11-06 跟 mac2）：原来那段
-    「本机发送直接把 DDC 命令发给显示器…」是常驻在卡片底部的两行灰字，占版面
-    又不常读；悬停看一次就够。
+    两个按钮**不挂任何悬停提示**（2026-11-06 三改，用户两次拍板）：原来那段
+    「本机发送直接把 DDC 命令发给显示器…」是常驻在卡片底部的两行灰字，占版面；
+    先改成自绘长悬停浮层（四角发黑），再改成原生 `setToolTip()` —— **原生提示
+    一样是浮窗**：Qt 的 tooltip 窗口只有 `WS_EX_TOOLWINDOW | WS_EX_TOPMOST`，
+    **不带 `WS_EX_TRANSPARENT`**（`tools/tooltip_hittest.py` 实测 exstyle=0x88），
+    3 行提示弹在按钮下方正好压在下一行按钮上，点它下面的按钮等于点浮窗 ——
+    用户报的「点按钮没反应」就是它。所以彻底删掉：视觉上不再有任何浮层。
+    语义靠按钮文字本身（「本机发送 17」）+ `accessibleName`（读屏可读）。
     """
 
     localClicked = Signal(int)
@@ -87,14 +99,6 @@ class ActionRow(QFrame):
     BTN_H = 38
     MINI = 28            # 兜底小钮边长
     MINI_GAP = 8         # 主按钮与小钮间距
-
-    #: 主按钮的长悬停说明（= 原 hero 常驻提示行的前半段）
-    TIP_LOCAL = (
-        "「本机发送」直接把 DDC 命令发给显示器：\n"
-        "画面在哪一边都能切，不需要先判断当前输入。\n"
-        "行尾纸飞机是兜底通道——本机 DDC 不可用时（驱动 / 权限 / 线材）"
-        "让对端代发。"
-    )
 
     def __init__(self, host: str, value: int, is_local: bool, parent=None):
         super().__init__(parent)
@@ -140,8 +144,8 @@ class ActionRow(QFrame):
         self.btn_local.setIcon(QIcon(icons.svg_pixmap("monitor", 15, "#FFFFFF", 2.0)))
         self.btn_local.setAccessibleName(f"本机发送 {self.value}")
         self.btn_local.clicked.connect(lambda: self.localClicked.emit(self.value))
-        # 长悬停说明（2026-11-06）：原 hero 底部那两行常驻灰字搬到这里
-        self.tip_local = attach_hover_tip(self.btn_local, self.TIP_LOCAL)
+        # **不设 toolTip**（2026-11-06 三改）：原生提示也是浮窗，会压住下一行按钮
+        # 并吃掉点击。见类文档。
 
         self.btn_peer = QPushButton()
         self.btn_peer.setObjectName("miniBtn")
@@ -151,7 +155,6 @@ class ActionRow(QFrame):
         self.btn_peer.setIcon(QIcon(icons.svg_pixmap("send", 13, t.ink2, 2.0)))
         self.btn_peer.setAccessibleName(f"请对端发送 {self.value}")
         self.btn_peer.clicked.connect(lambda: self.peerClicked.emit(self.value))
-        self.tip_peer = attach_hover_tip(self.btn_peer, self.peer_tip_text())
 
         lay.addStretch(1)
         cluster = QHBoxLayout()          # 按钮簇独立布局：间距 MINI_GAP，不受外层 10px 影响
@@ -160,19 +163,11 @@ class ActionRow(QFrame):
         cluster.addWidget(self.btn_peer, 0, Qt.AlignVCenter)
         lay.addLayout(cluster)
 
-    def peer_tip_text(self) -> str:
-        """兜底小钮的说明。对端离线时补一句「当前不可用」，别让人对着灰钮猜。"""
-        text = (
-            f"请对端发送 {self.value} · 兜底通道：\n"
-            "本机 DDC 不可用时（驱动 / 权限 / 线材）让对端代发这条切屏命令。"
-        )
-        if not self.btn_peer.isEnabled():
-            text += "\n当前对端离线，此通道不可用。"
-        return text
-
     def set_peer_available(self, available: bool) -> None:
+        """对端离线 → 兜底通道置灰。**不补 tooltip 解释**（2026-11-06 三改）：
+        顶上药丸已经写着「对端离线」，悬停浮窗只会挡住下面的按钮。
+        """
         self.btn_peer.setEnabled(bool(available))
-        self.tip_peer.set_text(self.peer_tip_text())
 
 
 # --------------------------------------------------------------------------- #
@@ -250,8 +245,8 @@ class SwitchCard(QFrame):
             acts.addWidget(row)
         lay.addLayout(acts)
 
-        # 原来这里有一段常驻「操作提示」两行灰字（占 ~32px）；2026-11-06 跟 mac2
-        # 改成按钮的长悬停 tip，见 ActionRow.TIP_LOCAL。
+        # 原来这里有一段常驻「操作提示」两行灰字（占 ~32px）；2026-11-06 删除，
+        # 说明文字不再有任何归宿（悬停浮窗也一并去掉，见 ActionRow 类文档）。
 
         # ---- 上次动作 ----
         note_row = QHBoxLayout()
@@ -342,7 +337,7 @@ class SwitchCard(QFrame):
     def _apply_enabled(self) -> None:
         for row in self.rows:
             row.btn_local.setEnabled(not self._busy)
-            # 兜底钮的可用性 = 不忙 且 对端在线；tip 文案随状态补一句（见 peer_tip_text）
+            # 兜底钮的可用性 = 不忙 且 对端在线（离线时置灰，不做 tooltip 解释）
             row.set_peer_available(not self._busy and self._remote_ok)
 
     @staticmethod
