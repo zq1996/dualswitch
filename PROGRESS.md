@@ -514,6 +514,32 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-06 14:40 **开发环境收口到仓库内 `.venv`**（commit `ba1330e`）。
+  以前项目依赖装在 `~/.workbuddy/binaries/python/envs/default` —— WorkBuddy 建的
+  **共享 venv**（`envs/` 下只有这一个，升级/清理会被重建，多项目互相污染）。
+  `.gitignore` 早就写了 `.venv/`，现在真的用起来。
+  · `pyproject`：`macos` extra 补 `pyobjc-framework-Cocoa`（以前漏了，按 extra 装完仍缺
+    AppKit，只能靠 build.sh 另补一次）。
+  · 新增 `tools/py.sh`：解释器解析**只此一处**（`$PYTHON`/`$DUALSWITCH_PY` → 仓库内
+    `.venv` → PATH），`build.sh` / `install.sh` / `logi-mouse.sh` 全部 source 它。
+  · `install.sh`：加 `--dry-run`、补可执行位（之前是 644，直接跑 permission denied）、
+    写明"解释器路径会写死进 launchd plist，别指向共享 venv"。
+  · `build.sh`：环境齐了就完全不跑 pip（离线可打包）；去掉 `--upgrade` —— 以前每打
+    一次包都会把 PySide6/pyobjc 悄悄升级，"测过的版本"和"打进包的版本"可能不是一个。
+  · 修 `make-signing-cert.sh` 的 `$NAME（`：macOS 自带 bash 3.2 会把全角括号吞进变量名，
+    报 `NAME?: unbound variable`（这条 MEMORY 里早就记过，这次又踩了一次）。
+  · 清掉硬编码的旧 venv site-packages 路径（`tools/make_v2_icons.py`、
+    `design/redesign/icons/make_icons.py`、`tools/clip_serve.py` 与测试的示例命令）。
+  **验证**：`.venv` 里 `check_env.py` 全绿、**440 passed / 24 skipped**；
+  `NO_CLEAN=1 ./packaging/macos/build.sh` 产出 93M，签名 `dualswitch Self Signed`，
+  `--selfcheck` 报「30 个界面模块可导入」；`install.sh --dry-run` 渲染出的 plist 里是
+  `.venv/bin/python -m dualswitch run`；`logi-mouse.sh probe` 解析到 `.venv`（随后才因
+  未连鼠标报错，属预期）。
+  **一个环境坑**：本机沙箱里 `pip install -e .` 在 editable wheel 阶段报 `EEXIST ... .tmp-*`
+  （单独调 `build_meta.build_editable` 也一样，换 TMPDIR / 退 setuptools 都不解决），
+  所以 `.venv` 用 `dualswitch-dev.pth` 指向 `src/`；所有脚本走 `python -m dualswitch`，
+  不依赖 console script。
+
 - 2026-11-06 13:55 **根治「换个解释器就红一片」**。
   起因：`/usr/bin/python3`（实为 CLT 3.9.6，无 hidapi / pyobjc）跑全量红了 3 条，
   还静默少跑 9 条（451 vs 460）。不是回归，是环境差异被当成了回归。
