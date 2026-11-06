@@ -514,6 +514,22 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-06 14:55 **修 `ui2` 一启动就崩（我引入的回归）+ 补两道守卫**。
+  `cli.py::_start_clip_engine` 里为键盘跟随写了 `log = logging.getLogger(__name__)`，
+  塞在 `if cfg.keyboard_follow.enabled:` 分支里。模块第 31 行本来就有 `log`，
+  这个赋值让**整个函数**的 `log` 变成局部变量；默认关闭时赋值不执行，后面
+  「剪贴板同步已挂载」那句 `log.info` 直接 `UnboundLocalError` —— 而且它炸在
+  `except` 里（那句 `log.error` 同样未绑定），把真正的启动错误一起盖掉。
+  pytest 全绿是因为没有用例跑 GUI 启动，只有真敲 `python -m dualswitch ui2` 才暴露。
+  · 修：删掉那行，用模块级 `log`。
+  · 守卫一 `tests/test_logger_scope.py`：AST 扫描全项目 —— 模块级定义了 `log`/`logger`
+    的文件，函数内不许再同名赋值（嵌套函数也算，故意过近似；显式 `global log` 放行）。
+  · 守卫二 `tests/test_cli_startup.py`：真调 `_start_clip_engine`，断言默认配置下
+    能拿到引擎（不是 None）、切屏钩子与对端代发挂上、键盘跟随关闭时不建接收器，
+    开启时三个回调确实接到了接收器。
+  **验证**：全量 **447 passed / 24 skipped**；`QT_QPA_PLATFORM=offscreen ... ui2`
+  跑满 12 秒零 traceback（被 timeout 杀掉，rc=124）。
+
 - 2026-11-06 14:40 **开发环境收口到仓库内 `.venv`**（commit `ba1330e`）。
   以前项目依赖装在 `~/.workbuddy/binaries/python/envs/default` —— WorkBuddy 建的
   **共享 venv**（`envs/` 下只有这一个，升级/清理会被重建，多项目互相污染）。

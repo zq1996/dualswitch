@@ -634,7 +634,10 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
         if cfg.keyboard_follow.enabled:
             from .keyboard import KeyboardReceiver
 
-            log = logging.getLogger(__name__)
+            # 这里**不要**再 `log = logging.getLogger(...)`：本模块第 31 行已经有
+            # 模块级的 `log`，函数内再赋值会把它变成局部变量，于是紧跟着的
+            # "剪贴板同步已挂载" 那行 log.info 直接 UnboundLocalError —— 而且是在
+            # except 里再炸一次，把真正的启动错误也埋掉（2026-11-06 真踩）。
             kf = cfg.keyboard_follow
             key_receiver = KeyboardReceiver(
                 mod_map=kf.mod_map,
