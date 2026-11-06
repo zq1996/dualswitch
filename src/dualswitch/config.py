@@ -569,8 +569,8 @@ def _quarantine_unreadable(target: Path, exc: Exception) -> Path | None:
         )
         return None
     LOAD_WARNINGS.append(
-        f"配置文件无法解析（{exc}）；原件已备份到 {dest.name}，本次以默认配置启动。"
-        "常见原因：用旧版本程序读含新字段的配置。"
+        f"配置文件无法解析（{exc}）；原件已备份到 {dest.name}，本次以默认配置启动，"
+        "**且不会覆盖原文件**。常见原因：用旧版本程序读含新字段的配置。"
     )
     return dest
 
@@ -593,8 +593,15 @@ def load(path: str | os.PathLike[str] | None = None, *, strict: bool = True) -> 
     except ConfigError as exc:
         if strict:
             raise
-        _quarantine_unreadable(target, exc)
-        return platform_defaults()
+        backup = _quarantine_unreadable(target, exc)
+        cfg = platform_defaults()
+        # **这份是"借来用"的默认配置**：标记成只读，`save()` 一律拒绝落盘。
+        # 2026-10-30 那次只做了备份，紧接着 `ensure_device_id_persisted` 又把默认值
+        # 写回同一个文件 —— 备份在、用户的配置没了。2026-11-06 又复现了一次
+        # （旧包读不懂 keyboard_follow → 配对 psk / 鼠标槽位被抹）。
+        cfg._unreadable = True
+        cfg._unreadable_backup = str(backup) if backup else ""
+        return cfg
 
 
 def save(cfg: Config, path: str | os.PathLike[str] | None = None) -> Path:
@@ -606,6 +613,12 @@ def save(cfg: Config, path: str | os.PathLike[str] | None = None) -> Path:
     发送指令」，看着像坏了。`cli._load_config()` 把盘上的原值记进
     `cfg._cli_overrides`，这里按原值写回。
     """
+    if getattr(cfg, "_unreadable", False):
+        backup = getattr(cfg, "_unreadable_backup", "") or "（备份失败）"
+        raise ConfigError(
+            "配置文件读不懂，本次运行不会覆盖它（原件已备份到 "
+            f"{backup}）。请修好配置或删掉它再启动。"
+        )
     target = Path(path).expanduser() if path else config_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     data = cfg.to_dict()
@@ -636,6 +649,7 @@ def ensure_device_id_persisted(
     if not before:
         try:
             save(cfg, path)
-        except OSError as exc:  # 配置目录只读时不该让程序起不来
+        except (OSError, ConfigError) as exc:
+            # 配置目录只读 / 原件读不懂（本次是借来的默认值）都不该让程序起不来
             logging.getLogger(__name__).warning("设备 ID 无法落盘：%s", exc)
     return device_id

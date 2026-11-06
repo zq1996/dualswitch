@@ -366,7 +366,14 @@ class UiRunner2(QObject):
         if self.status is not None:
             # 托盘图标注册完 3 秒再报一次「看得见吗、在哪」（排查「进程在、图标没了」）
             QTimer.singleShot(3000, self._check_tray)
-        if warning:
+        if getattr(self.cfg, "_unreadable", False):
+            # 配置文件读不懂（通常是旧版本程序读了含新字段的配置）：必须让用户看见。
+            # 只在日志里说一句是不够的 —— 用户看到的是"配对没了、槽位丢了"，
+            # 根本联想不到是"配置没读懂"。而且本次运行**不会**覆盖原文件（config.save 拒绝）。
+            self.window.switch_page.set_note(
+                "配置文件读不懂，本次用默认值启动（不会覆盖原文件）", ok=False, bad=True
+            )
+        elif warning:
             self.window.switch_page.set_note(f"热键未启用：{warning}", ok=False)
         if self.status is None:
             # 托盘不可用：关窗后只能从任务栏恢复（§4.1）

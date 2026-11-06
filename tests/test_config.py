@@ -164,6 +164,37 @@ def test_unreadable_config_is_quarantined_not_overwritten(tmp_path):
     assert "future_field" in warnings[0] and backups[0].name in warnings[0]
 
 
+def test_unreadable_config_refuses_every_later_save(tmp_path):
+    """备份了还不够 —— **后续任何落盘都不能覆盖原件**（2026-11-06 二次事故）。
+
+    现场：用 10-30 的旧包（不认识 keyboard_follow）启动 → 判"读不懂" → 备份 +
+    默认值继续跑 → `ensure_device_id_persisted` 把默认值写回同一个文件 →
+    配对 psk、鼠标槽位、device_id 全被抹掉，用户看到的就是「配对没了、槽位丢了」。
+    """
+    config_mod.take_load_warnings()
+    path = tmp_path / "config.json"
+    raw = {
+        "hotkey": "alt+space",
+        # 「将来才有的字段」= 旧版本程序读新配置时的真实形态
+        "future_field": {"enabled": True},
+        "mouse_switch": {"local_slot": 1, "peer_slot": 2},
+        "clipboard": {"psk": "cd" * 32, "device_id": "windows-keepme"},
+    }
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    cfg = config_mod.load(path, strict=False)
+    assert getattr(cfg, "_unreadable", False) is True
+
+    # ① 界面里点开关触发的落盘：必须拒绝
+    with pytest.raises(ConfigError, match="不会覆盖"):
+        config_mod.save(cfg, path)
+    # ② 设备 ID 落盘（启动路径）：拒绝但不许炸，也不许改文件
+    config_mod.ensure_device_id_persisted(cfg, path)
+    # ③ 文件一个字节都没变
+    assert json.loads(path.read_text(encoding="utf-8")) == raw
+    config_mod.take_load_warnings()
+
+
 def test_strict_load_still_raises_without_backup(tmp_path):
     """strict=True 是「报错给人看」的路径：不许悄悄备份、不许改文件。"""
     config_mod.take_load_warnings()
