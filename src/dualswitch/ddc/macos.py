@@ -301,6 +301,15 @@ class M1ddcBackend(BaseBackend):
             )
         return monitors
 
+    def invalidate_ddc_cache(self) -> None:
+        """外接屏被停用 / 重新启用之后调用：旧的接口句柄已经失效。
+
+        `display_power` 在本机不持有画面时会把外接屏从 WindowServer 停掉，
+        重新启用后原先缓存的 DCPAVServiceProxy 是哑的（实测紧接着读会 -118）。
+        """
+        if self._av is not None:
+            self._av.invalidate()
+
     def set_input(self, value: int) -> None:
         """本机发 Set：**固定两条**（读完再写，第一条必被吞，原因见文件头注释）。
 

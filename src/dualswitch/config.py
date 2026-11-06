@@ -166,6 +166,24 @@ class KeyboardFollowConfig:
 
 
 @dataclass
+class DisplayPowerConfig:
+    """画面不在本机时，把不归本机的外接屏从 WindowServer 里停掉（只有 macOS 生效）。
+
+    显示器输入端切走后 USB-C / DP 链路还在，macOS 会继续为它合成与扫描输出；
+    2026-11-06 实测停掉这块屏后系统 CPU 从 23.4% 降到 19.0%（`outputs/measure_ab.py`），
+    用户侧表现是「Mac 没干活却发烫」。实现与安全底线见 `display_power.py` 模块注释。
+
+    只在「DDC 读出画面确实在对面」时才停；读不到、切回本机之前、程序退出时都会恢复。
+    """
+
+    enabled: bool = True
+    #: 画面走后等多久再停。Q2790 一次切换要 2–3 秒，太早停会让回读/归属判断踩空
+    off_delay_ms: int = 2500
+    #: 停用期间多久读一次 DDC 判断画面是否回来（读会毒化下一条 Set，别设太密）
+    probe_interval_ms: int = 1500
+
+
+@dataclass
 class Config:
     # ---- 热键 ----
     hotkey: str = "alt+space"
@@ -211,6 +229,9 @@ class Config:
 
     # ---- 键盘跟随（画面在哪台，键盘就从哪台输出）----
     keyboard_follow: KeyboardFollowConfig = field(default_factory=KeyboardFollowConfig)
+
+    # ---- 外接屏省电（画面不在本机时不再为它渲染）----
+    display_power: DisplayPowerConfig = field(default_factory=DisplayPowerConfig)
 
     # ---- 载入期元数据（不落盘）----
     #: 本版本不认识的字段，原样留着、落盘时写回。**不能丢**：老版本程序读到新配置
@@ -393,6 +414,31 @@ def _merge_keyboard_follow(
     return cfg
 
 
+def _merge_display_power(
+    raw: dict[str, Any],
+    base: DisplayPowerConfig,
+    *,
+    unknown: dict[str, Any] | None = None,
+) -> DisplayPowerConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError("display_power 必须是对象")
+    cfg = copy.deepcopy(base)
+    for key, value in raw.items():
+        if not hasattr(cfg, key) or key.startswith("_"):
+            if unknown is None:
+                raise ConfigError(f"未知的 display_power 字段: {key}")
+            unknown[key] = value
+            continue
+        current = getattr(cfg, key)
+        if isinstance(current, bool):
+            setattr(cfg, key, _coerce_bool(value))
+        elif isinstance(current, int) and not isinstance(current, bool):
+            setattr(cfg, key, int(value))
+        else:
+            setattr(cfg, key, value)
+    return cfg
+
+
 def from_dict(
     raw: dict[str, Any], base: Config | None = None, *, keep_unknown: bool = True
 ) -> Config:
@@ -411,7 +457,7 @@ def from_dict(
     extras: dict[str, Any] = {}
 
     for key, value in raw.items():
-        if key in ("readback", "clipboard", "mouse_switch", "keyboard_follow"):
+        if key in ("readback", "clipboard", "mouse_switch", "keyboard_follow", "display_power"):
             section: dict[str, Any] = {}
             slot = None if not keep_unknown else section
             if key == "readback":
@@ -420,6 +466,8 @@ def from_dict(
                 cfg.clipboard = _merge_clipboard(value, cfg.clipboard, unknown=slot)
             elif key == "mouse_switch":
                 cfg.mouse_switch = _merge_mouse_switch(value, cfg.mouse_switch, unknown=slot)
+            elif key == "display_power":
+                cfg.display_power = _merge_display_power(value, cfg.display_power, unknown=slot)
             else:
                 cfg.keyboard_follow = _merge_keyboard_follow(
                     value, cfg.keyboard_follow, unknown=slot
@@ -535,6 +583,13 @@ def _validate_keyboard_follow(kf: KeyboardFollowConfig, hotkey: str) -> None:
             )
 
 
+def _validate_display_power(dp: DisplayPowerConfig) -> None:
+    if int(dp.off_delay_ms) < 0:
+        raise ConfigError("display_power.off_delay_ms 不能为负")
+    if not (200 <= int(dp.probe_interval_ms) <= 10000):
+        raise ConfigError("display_power.probe_interval_ms 必须在 200..10000 之间")
+
+
 def _is_hex(value: str) -> bool:
     try:
         bytes.fromhex(value)
@@ -586,6 +641,7 @@ def validate(cfg: Config) -> None:
     _validate_clipboard(cfg.clipboard)
     _validate_mouse_switch(cfg.mouse_switch)
     _validate_keyboard_follow(cfg.keyboard_follow, cfg.hotkey)
+    _validate_display_power(cfg.display_power)
     if not str(cfg.hotkey).strip():
         raise ConfigError("hotkey 不能为空")
     # 延迟导入，避免 config 模块反向依赖 hotkey 包

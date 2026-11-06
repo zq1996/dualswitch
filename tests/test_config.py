@@ -243,6 +243,24 @@ def test_save_does_not_backup_a_corrupt_file(tmp_path):
     assert json.loads(bak.read_text(encoding="utf-8"))["hotkey"] == "ctrl+alt+f9"
 
 
+def test_display_power_defaults_and_partial_merge():
+    """外接屏省电默认开：画面不在本机时不再为它渲染（2026-11-06 发烫问题）。"""
+    cfg = from_dict({})
+    assert cfg.display_power.enabled is True
+    assert cfg.display_power.off_delay_ms == 2500
+    assert cfg.display_power.probe_interval_ms == 1500
+
+    cfg = from_dict({"display_power": {"enabled": False, "off_delay_ms": 0}})
+    assert cfg.display_power.enabled is False
+    assert cfg.display_power.off_delay_ms == 0
+    assert cfg.display_power.probe_interval_ms == 1500   # 没写的用默认值
+
+
+def test_display_power_rejects_silly_probe_interval():
+    with pytest.raises(ConfigError, match="probe_interval_ms"):
+        from_dict({"display_power": {"probe_interval_ms": 10}})
+
+
 def test_strict_load_keeps_unknown_field_too(tmp_path):
     """strict 只决定「读不懂要不要抛」，不认识字段一律保留（settings 存盘也走这条）。"""
     config_mod.take_load_warnings()
