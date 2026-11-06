@@ -471,3 +471,119 @@ DUALSWITCH_SIMULATE_MISSING=hid,Quartz,AppKit pytest
 ```bash
 PYTHON=/path/to/python3 ./packaging/macos/build.sh
 ```
+
+---
+
+## 13. 配置被覆盖了（槽位 / 配对 / 设备 ID 全没）—— 2026-11-06 事故
+
+### 13.1 现场与成因
+
+现象：鼠标槽位变回 `0/0`、`mouse_switch.enabled=false`，剪贴板掉线（要重新配对），
+界面上「跟随画面」的鼠标开关直接消失（槽位没配就不给点）。
+
+成因：**旧版应用和新版代码共用一个 `config.json`**。旧版程序的 `Config` 里没有新字段
+（这次是 `keyboard_follow`）→ 整份配置被判「未知配置项」→ 用默认值接管 →
+启动时 `ensure_device_id_persisted` 把默认值写回同一个文件。旧版连备份都不做，
+所以文件里只剩默认值。日志里也不会有明显痕迹。
+
+`paired_at` 变成本次启动的时间 = 被重置后重新配过对，可作为判据。
+
+### 13.2 新版怎么防（2026-11-06 修）
+
+| 机制 | 行为 |
+|---|---|
+| 不认识的字段原样保留 | 收进 `Config._extra`，落盘时写回；读到新字段不再丢掉整份配置 |
+| 每次落盘前留 `config.json.bak` | 上一份**能解析**的配置；坏文件不会覆盖它 |
+| 原子写 | 先写临时文件再 `os.replace`，崩溃不会留半截配置 |
+| 降级不落盘 | 取值真非法时降默认值并打 `_degraded`，`save()` 拒绝覆盖原文件 |
+| 设备 ID 旁挂 | 降级状态把 ID 写到同目录 `device-id.txt`，重启后对端仍认得你 |
+| `doctor` 报字段 | 不认识的字段以 `config 字段` 一行 warn 出来 |
+
+### 13.3 已经丢了怎么捞
+
+```bash
+cd ~/Library/Application\ Support/dualswitch/
+ls -l config.json*                 # 看 .bak / .unreadable-* 的时间戳
+python3 -c "import json;print(json.load(open('config.json.bak'))['mouse_switch'])"
+```
+
+`mouse_switch` 的对照关系是固定的（见 §11.3）：Mac `local_slot=2 / peer_slot=1`。
+
+日志也能反推：`切鼠标：槽位 2 → 1` 表示本机在槽 2、切屏时推对端槽 1。
+`grep 鼠标 logs/dualswitch.log.1` 就能看到上一次正常运行时的槽位。
+
+### 13.4 纪律
+
+**不要同时跑两个版本**（打包版 + 源码版）。旧版二进制改不了，它读不了新字段，
+唯一的自保是新版留了 `.bak`。跑源码版之前先把 `/Applications` 里旧的
+`屏幕切换.app` 移走。
+
+---
+
+## 14. Mac 发烫：画面不在本机，macOS 还在为外接屏渲染
+
+### 14.1 现象
+
+显示器输入切到 Windows，Mac 上只剩内建屏在用，但**外接屏的 USB-C / DP 链路还连着**。
+macOS 照样把它当一块 active display：WindowServer 继续为它建 framebuffer、继续合成、
+继续扫描输出。用户侧的表现就是「Mac 什么都没干，一会儿就烫」。
+
+判据（一行就能看出来）：
+
+```bash
+python3 -c "import Quartz;print([(d, Quartz.CGDisplayIsActive(d)) for d in Quartz.CGGetActiveDisplayList(16,None,None)[1]])"
+```
+
+画面明明在 Windows，外接屏的 `CGDisplayIsActive` 还是 1 —— 这就是在白白渲染。
+
+### 14.2 实测代价（M3 + Q2790R3，2026-11-06）
+
+`outputs/measure_ab.py` 用 mach `host_statistics` 采系统 CPU（不需要 root）：
+
+| 状态 | 系统 CPU（10 核，5s × 3 次） |
+|---|---|
+| 外接屏 active | 23.41% |
+| 外接屏停用 | 18.98% |
+
+差 ≈4.4 个百分点（≈0.44 个核），GPU / 显示引擎的功耗还没算进去。
+
+### 14.3 现在的行为（`display_power.py`）
+
+`display_power.enabled = true`（默认）：
+
+1. DDC 直读确认**画面确实在对面** → 等 `off_delay_ms`（默认 2500ms，躲开切换本身）→
+   用 `CGSConfigureDisplayEnabled` 把外接屏从 WindowServer 里**停用**（等价于系统设置
+   里取消「使用此显示器」，不是拔线）；
+2. 停用期间每 `probe_interval_ms`（默认 1500ms）读一次 DDC，画面一回来立刻恢复；
+3. 任何「要切回本机」的动作**之前**先恢复，再发 DDC —— 否则画面会落到一块停用的输出上（黑屏）；
+4. 退出 / SIGTERM 一律恢复；进程被 kill 时 id 记在 `display-power.json`，下次启动自愈。
+
+日志里能看到：
+
+```
+外接屏已停用：#3 外接 2560×1440 在用（画面不在本机，不再为它合成/扫描）
+外接屏已恢复输出（画面回到本机）
+```
+
+### 14.4 关掉 / 兜底
+
+```json
+{ "display_power": { "enabled": false } }
+```
+
+万一屏黑着又没人恢复（进程被强杀、脚本崩了）：
+
+```bash
+dualswitch display list     # 看 id 与状态（被停用的会显示成 1×1 停用）
+dualswitch display reset    # 按 display-power.json 恢复
+dualswitch display on 3     # 直接按 id 恢复
+dualswitch display off      # 手动停用（排障 / 不想让 macOS 渲染时）
+```
+
+### 14.5 三条安全底线
+
+* **内建屏和主屏永不碰**；停掉之后本机一块屏都不剩时直接放弃（Mac mini + 单屏）；
+* 画面归属读不到（None / unknown）一律恢复，宁可多烧电也不留黑屏；
+* 用的是私有 API，所以默认走「系统设置里停用」这条路，不写 permanent 作用域
+  （`kCGConfigureForSession`），重启登录即失效。
+

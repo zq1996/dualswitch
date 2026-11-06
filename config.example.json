@@ -52,6 +52,12 @@
     "settle_ms": 800
   },
 
+  "display_power": {
+    "enabled": true,
+    "off_delay_ms": 2500,
+    "probe_interval_ms": 1500
+  },
+
   "tray": true,
   "notify": true,
   "log_level": "INFO"

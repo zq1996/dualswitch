@@ -118,6 +118,18 @@ class AVServiceI2C:
         self._lib = None
 
     # ------------------------------------------------------------------ 底层
+    def invalidate(self) -> None:
+        """丢掉句柄缓存。
+
+        显示器被「停用 / 重新启用」（`display_power`，画面不在本机时省电）之后，
+        先前的 DCPAVServiceProxy 会被拆掉，缓存里的句柄全变成哑的 —— 表现是
+        每次读都 -118，看着像「链路不通」。重新启用之后必须让下一次读取重新枚举
+        （2026-11-06 实测：停用→启用后紧接着那次读就 -118，隔一会儿自己又好了）。
+        """
+        with self._lock:
+            self._handles = None
+            self._good = None
+
     def _ensure_lib(self) -> bool:
         """惰性加载 CoreDisplay / IOKit 并绑好签名。非 macOS 直接 False。"""
         if self._lib is not None:

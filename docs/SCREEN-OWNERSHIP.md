@@ -456,3 +456,21 @@ python -m dualswitch probe --json
 `test_windows_owner_follows_switch_despite_phantom_monitor`、
 `test_readback_confirmation_updates_owner`），并把两条「读失败回落枚举」的旧用例
 反向改写（那条捷径正是本 bug）。
+
+---
+
+## 10. 归属的第二用途：画面不在本机，就别再为它渲染（2026-11-06）
+
+归属判断原来只服务于「切到哪 / 请谁代发」。2026-11-06 用户报「Mac 没干活却很快发烫」，
+查下来是 §1.1 那条老事实的代价：**屏切走了，USB-C 链路还在，macOS 仍把它当 active
+display 持续合成与扫描**（`CGDisplayIsActive` 一直是 1）。
+
+现在归属一变就同步外接屏的开关（`src/dualswitch/display_power.py`）：
+
+* `source_state` 变成「在对面」→ 等 2.5s 再确认一次 → `CGSConfigureDisplayEnabled(false)`
+  把外接屏从 WindowServer 停掉（不是拔线，DDC 读写照常）；
+* 停用期间每 1.5s 读 DDC，画面一回来立刻恢复；切回本机之前**先恢复**再发 Set；
+* 退出 / SIGTERM 恢复；被 kill 时靠 `display-power.json` 下次启动自愈。
+
+实测：同一台机、同一块屏，停用后系统 CPU 从 23.4% 降到 19.0%（`outputs/measure_ab.py`）。
+代价与安全底线见 `TROUBLESHOOTING.md` §14。

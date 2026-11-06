@@ -18,6 +18,7 @@ from typing import Callable
 from . import logging_setup
 from .config import SOURCE_UNKNOWN, Config
 from .ddc.base import DDCError, DisplayBackend, probe_active_monitors
+from .display_power import AwayDisplayPower
 from .mouse import MouseSwitcher
 
 log = logging_setup.get("app")
@@ -108,6 +109,18 @@ class SwitchController:
         self._mouse = MouseSwitcher(cfg.mouse_switch)
         self._mouse_gen = 0
 
+        # 外接屏省电（macOS）：画面不在本机时把不归本机的屏从 WindowServer 停掉，
+        # 免得 macOS 继续为一块看不见的屏合成/扫描（用户 2026-11-06 报「Mac 发烫」）。
+        # 只在「DDC 读出画面确实在对面」时才停，读不到 / 切回本机 / 退出都会恢复。
+        self._display_power = AwayDisplayPower(
+            enabled=cfg.display_power.enabled,
+            off_delay_ms=cfg.display_power.off_delay_ms,
+            probe_interval_ms=cfg.display_power.probe_interval_ms,
+            read_host=self._read_host,
+            local_host=cfg.effective_host(),
+            on_change=self._invalidate_ddc_cache,
+        )
+
         # 键盘跟随（可选，默认关）：画面切走后，本机把按下的键全抬起来。
         # 注入端由 CLI 在引擎起来后注入（`keyboard.receiver.KeyboardReceiver`）；
         # 没注入时这里是 None，行为与以前完全一致。
@@ -182,8 +195,14 @@ class SwitchController:
         self._worker.start()
         self._detector = threading.Thread(target=self._detect_loop, name="source-detector", daemon=True)
         self._detector.start()
+        self._display_power.start()
 
     def stop(self) -> None:
+        # 先恢复外接屏：宁可最后一步慢一点，也不能把屏留在「被停用」状态
+        try:
+            self._display_power.stop()
+        except Exception:  # noqa: BLE001 - 退出路径绝不能因为省电模块崩掉
+            log.exception("恢复外接屏失败（已忽略）")
         if not self._running:
             return
         self._running = False
@@ -266,6 +285,16 @@ class SwitchController:
         needle = (self.cfg.monitor_match or "").strip()
         return any(m.matches(needle) for m in active) if needle else bool(active)
 
+    def _invalidate_ddc_cache(self) -> None:
+        """外接屏被停用 / 重新启用后，DDC 句柄缓存要作废（会变成哑句柄）。"""
+        fn = getattr(self.backend, "invalidate_ddc_cache", None)
+        if not callable(fn):
+            return
+        try:
+            fn()
+        except Exception:  # noqa: BLE001
+            log.debug("作废 DDC 句柄缓存失败", exc_info=True)
+
     def _read_host(self) -> str | None:
         """显示器亲口报当前输入（DDC 直读 VCP 0x60），反查成主机名。
 
@@ -297,11 +326,17 @@ class SwitchController:
             self._current_source = host
         if changed:
             log.info("显示器直报当前输入 → 画面在 %s（DDC 直读 0x60）", host)
+        if changed:
+            log.info("显示器直报当前输入 → 画面在 %s（DDC 直读 0x60）", host)
             # 外部切换也要让键盘端点跟上（2026-11-06）：`_after_screen_switch` 只覆盖
             # 「本机发起的切换」，而从对端切过来 / 手按显示器 OSD 都不经过它。
             # 不补这一下，画面已经到 Mac 了而 Windows 还在把按键留在本机（反之亦然）。
             # 两端各自维护 target 时这条就是唯一对齐点，所以它不能省。
             self._notify_keyboard(host)
+            # 画面归属一变就同步外接屏的开关（macOS 省电）：这不是「切换动作」，
+            # 而是「这块屏现在归谁」，所以放在唯一能确认归属的地方，一次不漏。
+            # （只在 changed 时调：`on_source` 幂等，但没变就没必要每 5 秒唤醒一次。）
+            self._display_power.on_source(host)
 
     def refresh_owner_now(self, min_gap: float = 1.0) -> None:
         """按需直读一次归属（界面回前台 / 切到切换页时由 runner 调，放后台线程）。
@@ -445,6 +480,8 @@ class SwitchController:
             self._display_source = detected if detected is not None else SOURCE_UNKNOWN
             if detected not in (None, SOURCE_UNKNOWN):
                 self._current_source = detected
+        # 启动探测也要告诉省电模块：冷启动时画面就在对面，屏该停就得停
+        self._display_power.on_source(detected if detected is not None else None)
 
     @property
     def source_state(self) -> str:
@@ -575,6 +612,11 @@ class SwitchController:
                 self._commit_read_host(host)
         target = self._resolve_target(forced_target)
         value = self.cfg.target_value(target)
+        # 目标是把画面叫回本机：先把被停用的外接屏唤醒，再发 DDC —— 否则画面会
+        # 落到一块被 WindowServer 停掉的输出上，用户看到的是黑屏（2026-11-06）。
+        restored_by_us = False
+        if target == self.cfg.effective_host():
+            restored_by_us = self._display_power.before_switch_to_local()
         t_send = self._clock()
         result = SwitchResult(
             ok=False,
@@ -603,6 +645,10 @@ class SwitchController:
         # 屏此刻在不在本机输出画面（None = 后端分不出「挂着」和「在用」）。
         # 这一个判据决定下面两条路，见 _picture_here() 上的注释。
         picture_here = None if policy_force else self._picture_here()
+        if restored_by_us and picture_here is False:
+            # 屏是刚刚被我们自己唤回来的：枚举还要过一拍才认得它，别据此把
+            # 「本地本来能发」的切换推到对端去（代发失败时用户会看到「切换失败」）
+            picture_here = True
 
         # 屏不在本机、而目标正是「把画面叫回来」⇒ 请对端代发兜底。
         # **修正（2026-10-24 实测，SCREEN-OWNERSHIP §1.4）**：本机的 DDC 写通道
@@ -743,6 +789,12 @@ class SwitchController:
         键盘同理，但键盘不搬家 —— 它留在 Windows，靠 `T_KEY` 转发（§键盘链路）。
         """
         self._notify_keyboard(target_host)
+        # 画面要去对面 ⇒ 到点把外接屏停掉（省电）；要回本机 ⇒ 立刻恢复。
+        # 这里先按「目标」通知一次，等回读拿到真值再校准，不必等 8 秒回读超时。
+        try:
+            self._display_power.on_source(target_host or None)
+        except Exception:  # noqa: BLE001
+            log.exception("外接屏省电调度失败（已忽略）")
         try:
             if not self.cfg.mouse_switch.enabled:
                 return
@@ -805,6 +857,11 @@ class SwitchController:
             log.info("[dry-run] 本应本机发送 Set VCP 0x%02X = %d", self.cfg.vcp_code, value)
             self._record(result)
             return result
+
+        # 显式通道（界面「本机发送」按钮）不经过 `_execute`，这里再兜一次：
+        # 往本机切之前必须先恢复外接屏，否则画面落到一块停用的输出上。
+        if host == self.cfg.effective_host():
+            self._display_power.before_switch_to_local()
 
         self._run_before_switch(source, host or str(value))
         try:

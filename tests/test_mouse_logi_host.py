@@ -306,9 +306,13 @@ def test_config_allows_empty_slots_when_disabled():
     assert cfg.mouse_switch.peer_slot == 0
 
 
-def test_config_rejects_unknown_field():
-    with pytest.raises(ConfigError):
-        from_dict({"mouse_switch": {"nope": 1}})
+def test_config_keeps_unknown_mouse_field():
+    """不认识的子字段不报错：旧版本程序读到新字段就整份放弃 + 覆盖，
+    是 2026-11-06 槽位丢失的直接原因。"""
+    cfg = from_dict({"mouse_switch": {"nope": 1, "enabled": True, "local_slot": 1, "peer_slot": 2}})
+    assert cfg._extra["mouse_switch"] == {"nope": 1}
+    assert cfg.mouse_switch.local_slot == 1
+    assert cfg.mouse_switch.peer_slot == 2
 
 
 def test_config_rejects_negative_settle():
