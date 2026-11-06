@@ -471,3 +471,49 @@ DUALSWITCH_SIMULATE_MISSING=hid,Quartz,AppKit pytest
 ```bash
 PYTHON=/path/to/python3 ./packaging/macos/build.sh
 ```
+
+---
+
+## 13. 配置被覆盖了（槽位 / 配对 / 设备 ID 全没）—— 2026-11-06 事故
+
+### 13.1 现场与成因
+
+现象：鼠标槽位变回 `0/0`、`mouse_switch.enabled=false`，剪贴板掉线（要重新配对），
+界面上「跟随画面」的鼠标开关直接消失（槽位没配就不给点）。
+
+成因：**旧版应用和新版代码共用一个 `config.json`**。旧版程序的 `Config` 里没有新字段
+（这次是 `keyboard_follow`）→ 整份配置被判「未知配置项」→ 用默认值接管 →
+启动时 `ensure_device_id_persisted` 把默认值写回同一个文件。旧版连备份都不做，
+所以文件里只剩默认值。日志里也不会有明显痕迹。
+
+`paired_at` 变成本次启动的时间 = 被重置后重新配过对，可作为判据。
+
+### 13.2 新版怎么防（2026-11-06 修）
+
+| 机制 | 行为 |
+|---|---|
+| 不认识的字段原样保留 | 收进 `Config._extra`，落盘时写回；读到新字段不再丢掉整份配置 |
+| 每次落盘前留 `config.json.bak` | 上一份**能解析**的配置；坏文件不会覆盖它 |
+| 原子写 | 先写临时文件再 `os.replace`，崩溃不会留半截配置 |
+| 降级不落盘 | 取值真非法时降默认值并打 `_degraded`，`save()` 拒绝覆盖原文件 |
+| 设备 ID 旁挂 | 降级状态把 ID 写到同目录 `device-id.txt`，重启后对端仍认得你 |
+| `doctor` 报字段 | 不认识的字段以 `config 字段` 一行 warn 出来 |
+
+### 13.3 已经丢了怎么捞
+
+```bash
+cd ~/Library/Application\ Support/dualswitch/
+ls -l config.json*                 # 看 .bak / .unreadable-* 的时间戳
+python3 -c "import json;print(json.load(open('config.json.bak'))['mouse_switch'])"
+```
+
+`mouse_switch` 的对照关系是固定的（见 §11.3）：Mac `local_slot=2 / peer_slot=1`。
+
+日志也能反推：`切鼠标：槽位 2 → 1` 表示本机在槽 2、切屏时推对端槽 1。
+`grep 鼠标 logs/dualswitch.log.1` 就能看到上一次正常运行时的槽位。
+
+### 13.4 纪律
+
+**不要同时跑两个版本**（打包版 + 源码版）。旧版二进制改不了，它读不了新字段，
+唯一的自保是新版留了 `.bak`。跑源码版之前先把 `/Applications` 里旧的
+`屏幕切换.app` 移走。

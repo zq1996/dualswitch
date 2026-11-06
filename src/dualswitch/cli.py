@@ -315,6 +315,10 @@ def cmd_doctor(args) -> int:
     else:
         add("配置文件", "warn", f"{cfg_file} 不存在（首次 run 会自动生成）")
 
+    # 「有字段我不认识」不是错，但要让人看得见 —— 否则拼错的键会静默失效
+    for msg in dict.fromkeys(config_mod.take_load_warnings()):
+        add("配置字段", "warn", msg)
+
     try:
         parse_hotkey(cfg.hotkey)
         add("热键语法", "ok", f"{cfg.hotkey} → {parse_hotkey(cfg.hotkey).describe()}")

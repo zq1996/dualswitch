@@ -22,6 +22,10 @@ from typing import Any
 
 APP_NAME = "dualswitch"
 CONFIG_FILENAME = "config.json"
+#: 每次落盘前，把上一份「能解析」的配置留成这个后缀（同目录）
+BACKUP_SUFFIX = ".bak"
+#: 配置读不懂时（`_degraded`）设备 ID 单独存这个文件，免得为了记 ID 去改用户的配置
+DEVICE_ID_FILENAME = "device-id.txt"
 
 
 class ConfigError(ValueError):
@@ -208,6 +212,13 @@ class Config:
     # ---- 键盘跟随（画面在哪台，键盘就从哪台输出）----
     keyboard_follow: KeyboardFollowConfig = field(default_factory=KeyboardFollowConfig)
 
+    # ---- 载入期元数据（不落盘）----
+    #: 本版本不认识的字段，原样留着、落盘时写回。**不能丢**：老版本程序读到新配置
+    #: 时把这些字段扔掉再存盘，等于替用户删配置（2026-11-06 事故）。
+    _extra: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    #: 载入时整份配置读不懂、已降到默认值。这个状态下 `save()` 拒绝覆盖原文件。
+    _degraded: bool = field(default=False, repr=False, compare=False)
+
     # ---- 派生属性 ----
     def effective_host(self) -> str:
         """本机在 sources 中的身份。"""
@@ -225,7 +236,18 @@ class Config:
             raise ConfigError(f"sources 中缺少 {target!r}") from exc
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        extra = data.pop("_extra", {}) or {}
+        data.pop("_degraded", None)
+        for key, value in extra.items():
+            current = data.get(key)
+            if isinstance(current, dict) and isinstance(value, dict):
+                # 只补本版本没有的子字段，认识的字段以内存里的值为准
+                for sub_key, sub_value in value.items():
+                    current.setdefault(sub_key, sub_value)
+            else:
+                data.setdefault(key, value)
+        return data
 
 
 DEFAULTS = Config()
@@ -273,24 +295,40 @@ def _coerce_bool(value: Any) -> bool:
     raise ConfigError(f"无法解析布尔值: {value!r}")
 
 
-def _merge_readback(raw: dict[str, Any], base: ReadbackConfig) -> ReadbackConfig:
+def _merge_readback(
+    raw: dict[str, Any],
+    base: ReadbackConfig,
+    *,
+    unknown: dict[str, Any] | None = None,
+) -> ReadbackConfig:
     if not isinstance(raw, dict):
         raise ConfigError("readback 必须是对象")
     cfg = copy.deepcopy(base)
     for key, value in raw.items():
-        if not hasattr(cfg, key):
-            raise ConfigError(f"未知的 readback 字段: {key}")
+        if not hasattr(cfg, key) or key.startswith("_"):
+            if unknown is None:
+                raise ConfigError(f"未知的 readback 字段: {key}")
+            unknown[key] = value
+            continue
         setattr(cfg, key, _coerce_bool(value) if isinstance(getattr(cfg, key), bool) else int(value))
     return cfg
 
 
-def _merge_clipboard(raw: dict[str, Any], base: ClipboardConfig) -> ClipboardConfig:
+def _merge_clipboard(
+    raw: dict[str, Any],
+    base: ClipboardConfig,
+    *,
+    unknown: dict[str, Any] | None = None,
+) -> ClipboardConfig:
     if not isinstance(raw, dict):
         raise ConfigError("clipboard 必须是对象")
     cfg = copy.deepcopy(base)
     for key, value in raw.items():
-        if not hasattr(cfg, key):
-            raise ConfigError(f"未知的 clipboard 字段: {key}")
+        if not hasattr(cfg, key) or key.startswith("_"):
+            if unknown is None:
+                raise ConfigError(f"未知的 clipboard 字段: {key}")
+            unknown[key] = value
+            continue
         current = getattr(cfg, key)
         if isinstance(current, bool):
             setattr(cfg, key, _coerce_bool(value))
@@ -305,13 +343,21 @@ def _merge_clipboard(raw: dict[str, Any], base: ClipboardConfig) -> ClipboardCon
     return cfg
 
 
-def _merge_mouse_switch(raw: dict[str, Any], base: MouseSwitchConfig) -> MouseSwitchConfig:
+def _merge_mouse_switch(
+    raw: dict[str, Any],
+    base: MouseSwitchConfig,
+    *,
+    unknown: dict[str, Any] | None = None,
+) -> MouseSwitchConfig:
     if not isinstance(raw, dict):
         raise ConfigError("mouse_switch 必须是对象")
     cfg = copy.deepcopy(base)
     for key, value in raw.items():
-        if not hasattr(cfg, key):
-            raise ConfigError(f"未知的 mouse_switch 字段: {key}")
+        if not hasattr(cfg, key) or key.startswith("_"):
+            if unknown is None:
+                raise ConfigError(f"未知的 mouse_switch 字段: {key}")
+            unknown[key] = value
+            continue
         current = getattr(cfg, key)
         if isinstance(current, bool):
             setattr(cfg, key, _coerce_bool(value))
@@ -323,14 +369,20 @@ def _merge_mouse_switch(raw: dict[str, Any], base: MouseSwitchConfig) -> MouseSw
 
 
 def _merge_keyboard_follow(
-    raw: dict[str, Any], base: KeyboardFollowConfig,
+    raw: dict[str, Any],
+    base: KeyboardFollowConfig,
+    *,
+    unknown: dict[str, Any] | None = None,
 ) -> KeyboardFollowConfig:
     if not isinstance(raw, dict):
         raise ConfigError("keyboard_follow 必须是对象")
     cfg = copy.deepcopy(base)
     for key, value in raw.items():
-        if not hasattr(cfg, key):
-            raise ConfigError(f"未知的 keyboard_follow 字段: {key}")
+        if not hasattr(cfg, key) or key.startswith("_"):
+            if unknown is None:
+                raise ConfigError(f"未知的 keyboard_follow 字段: {key}")
+            unknown[key] = value
+            continue
         current = getattr(cfg, key)
         if isinstance(current, bool):
             setattr(cfg, key, _coerce_bool(value))
@@ -341,24 +393,39 @@ def _merge_keyboard_follow(
     return cfg
 
 
-def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
-    """把 JSON 字典合并到默认配置上，并做严格校验。"""
+def from_dict(
+    raw: dict[str, Any], base: Config | None = None, *, keep_unknown: bool = True
+) -> Config:
+    """把 JSON 字典合并到默认配置上，并做严格校验。
+
+    本版本不认识的字段**不算错**，统一收进 `_extra`，落盘时原样写回。这条是硬要求：
+    旧版本程序读到新字段就放弃整份配置、再用默认值覆盖，等于替用户删配置
+    （2026-11-06 事故：鼠标槽位 2⇄1、配对 psk、device_id 一起没了）。
+
+    真正非法的取值（类型错、越界）仍然抛 `ConfigError`；`keep_unknown=False` 只
+    用于「我要知道这份配置里有没有我不认识的键」的显式检查场景。
+    """
     if not isinstance(raw, dict):
         raise ConfigError("配置文件顶层必须是 JSON 对象")
     cfg = copy.deepcopy(base or DEFAULTS)
+    extras: dict[str, Any] = {}
 
     for key, value in raw.items():
-        if key == "readback":
-            cfg.readback = _merge_readback(value, cfg.readback)
-            continue
-        if key == "clipboard":
-            cfg.clipboard = _merge_clipboard(value, cfg.clipboard)
-            continue
-        if key == "mouse_switch":
-            cfg.mouse_switch = _merge_mouse_switch(value, cfg.mouse_switch)
-            continue
-        if key == "keyboard_follow":
-            cfg.keyboard_follow = _merge_keyboard_follow(value, cfg.keyboard_follow)
+        if key in ("readback", "clipboard", "mouse_switch", "keyboard_follow"):
+            section: dict[str, Any] = {}
+            slot = None if not keep_unknown else section
+            if key == "readback":
+                cfg.readback = _merge_readback(value, cfg.readback, unknown=slot)
+            elif key == "clipboard":
+                cfg.clipboard = _merge_clipboard(value, cfg.clipboard, unknown=slot)
+            elif key == "mouse_switch":
+                cfg.mouse_switch = _merge_mouse_switch(value, cfg.mouse_switch, unknown=slot)
+            else:
+                cfg.keyboard_follow = _merge_keyboard_follow(
+                    value, cfg.keyboard_follow, unknown=slot
+                )
+            if section:
+                extras[key] = section
             continue
         if key == "sources":
             if not isinstance(value, dict):
@@ -370,8 +437,11 @@ def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
                 merged[host] = int(code)
             cfg.sources = merged
             continue
-        if not hasattr(cfg, key):
-            raise ConfigError(f"未知的配置项: {key}")
+        if not hasattr(cfg, key) or key.startswith("_"):
+            if not keep_unknown:
+                raise ConfigError(f"未知的配置项: {key}")
+            extras[key] = value
+            continue
         current = getattr(cfg, key)
         if isinstance(current, bool):
             setattr(cfg, key, _coerce_bool(value))
@@ -386,6 +456,7 @@ def from_dict(raw: dict[str, Any], base: Config | None = None) -> Config:
         else:
             setattr(cfg, key, value)
 
+    cfg._extra = extras
     validate(cfg)
     return cfg
 
@@ -545,6 +616,17 @@ def take_load_warnings() -> list[str]:
     return out
 
 
+def _device_id_sidecar(target: Path) -> Path:
+    return target.with_name(DEVICE_ID_FILENAME)
+
+
+def _read_device_id_sidecar(target: Path) -> str:
+    try:
+        return _device_id_sidecar(target).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def _quarantine_unreadable(target: Path, exc: Exception) -> Path | None:
     """把读不懂的配置另存一份，再让调用方用默认值继续。
 
@@ -578,8 +660,13 @@ def _quarantine_unreadable(target: Path, exc: Exception) -> Path | None:
 def load(path: str | os.PathLike[str] | None = None, *, strict: bool = True) -> Config:
     """读取配置；文件不存在时返回本平台的默认配置（不落盘）。
 
-    `strict=False` 时读不懂就用默认值继续跑，但**必须**先备份原件并记下警告——
-    否则调用方随后的落盘会把用户配置彻底覆盖掉。
+    `strict=False` 是运行期路径：
+    * 本版本不认识的字段**原样保留**（`_extra`），落盘时写回，不算错；
+    * 真的读不懂（类型/取值非法）才降到默认值，此时先备份原件并打上
+      `_degraded`，后续 `save()` 拒绝覆盖原文件 —— 备份只是最后的兜底，
+      用户不该为了找回配置去翻 `.unreadable-*` 文件。
+
+    `strict=True` 只影响「读不懂」的处理：直接抛给调用方（`doctor` 用）。
     """
     target = Path(path).expanduser() if path else config_path()
     if not target.exists():
@@ -589,18 +676,65 @@ def load(path: str | os.PathLike[str] | None = None, *, strict: bool = True) -> 
     except json.JSONDecodeError as exc:
         raise ConfigError(f"配置文件不是合法 JSON: {target} ({exc})") from exc
     try:
-        return from_dict(raw)
+        cfg = from_dict(raw)
     except ConfigError as exc:
         if strict:
             raise
         _quarantine_unreadable(target, exc)
-        return platform_defaults()
+        cfg = platform_defaults()
+        cfg._degraded = True
+        # 降级状态下不许回写配置，设备 ID 只能靠旁边的小文件保持稳定
+        cfg.clipboard.device_id = _read_device_id_sidecar(target)
+        return cfg
+    if cfg._extra:
+        LOAD_WARNINGS.append(
+            "配置里有本版本不认识的字段（"
+            + ", ".join(sorted(cfg._extra))
+            + "），已原样保留、不会写掉。若这是旧版本程序在读新配置，"
+            "请先升级再用它改配置。"
+        )
+    return cfg
+
+
+def _backup_before_overwrite(target: Path) -> None:
+    """覆盖前把上一份**能解析**的配置留成 `config.json.bak`。
+
+    2026-11-06 事故：旧版程序把整份配置写成默认值，槽位 / 配对 / 设备 ID 全丢，
+    一个可回滚的副本都没有。备份放在每次落盘之前 —— 旧版程序不认这个文件、
+    也不会碰它，所以恰恰是它造成的覆盖能从 `.bak` 里捞回来。
+    """
+    if not target.exists():
+        return
+    try:
+        json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # 现文件已经坏了：别拿它盖掉上一份好备份
+        return
+    try:
+        shutil.copy2(target, target.with_name(target.name + BACKUP_SUFFIX))
+    except OSError as exc:
+        logging.getLogger(__name__).warning("配置备份失败：%s", exc)
 
 
 def save(cfg: Config, path: str | os.PathLike[str] | None = None) -> Path:
     target = Path(path).expanduser() if path else config_path()
+    if getattr(cfg, "_degraded", False):
+        raise ConfigError(
+            "本次配置是「读不懂 → 降到默认值」的状态，拒绝覆盖原文件；"
+            f"请先修好 {target}（原件备份见同目录 config.json.unreadable-*）"
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(cfg.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(cfg.to_dict(), ensure_ascii=False, indent=2) + "\n"
+    _backup_before_overwrite(target)
+    tmp = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, target)   # 原子替换：中途崩溃也不会留下半截配置
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
     return target
 
 
@@ -619,11 +753,21 @@ def ensure_device_id_persisted(
     cfg: Config, path: str | os.PathLike[str] | None = None
 ) -> str:
     """保证设备 ID 已生成并**落盘**（跨重启必须不变，否则对端会把你当新设备）。"""
+    target = Path(path).expanduser() if path else config_path()
     before = cfg.clipboard.device_id
     device_id = ensure_device_id(cfg)
-    if not before:
+    if before:
+        return device_id
+    if getattr(cfg, "_degraded", False):
+        # 配置读不懂时整份都不回写（见 load），设备 ID 单独存一个小文件：
+        # 既不污染用户的配置，又保证重启后对端还认得你。
         try:
-            save(cfg, path)
-        except OSError as exc:  # 配置目录只读时不该让程序起不来
+            _device_id_sidecar(target).write_text(device_id + "\n", encoding="utf-8")
+        except OSError as exc:
             logging.getLogger(__name__).warning("设备 ID 无法落盘：%s", exc)
+        return device_id
+    try:
+        save(cfg, target)
+    except OSError as exc:  # 配置目录只读时不该让程序起不来
+        logging.getLogger(__name__).warning("设备 ID 无法落盘：%s", exc)
     return device_id
