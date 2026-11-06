@@ -135,12 +135,12 @@ def build_window(app, cfg, *, unknown: bool = False, peer: bool = True, records_
     win.attach_pages(sp, cp, st)
     win.show()
     if unknown:
-        sp.set_state(SOURCE_UNKNOWN)
+        sp.set_owner(None)
         sp.set_remote_available(peer)
         win.set_side_status("对端离线 · 仅本机" if not peer else "已连接 Mac", ok=peer)
         win.set_footer("对端未连接" if not peer else "已连接 Mac · 剪贴板已开启", ok=peer)
     else:
-        sp.set_state("windows")
+        sp.set_owner("windows")
         sp.set_note("上次切换 63.9 ms · 回读已确认", ok=True)
         win.set_side_status("已连接 Mac", ok=True)
         win.set_footer("已连接 Mac · 剪贴板已开启", ok=True)
@@ -221,7 +221,8 @@ def main() -> int:
 
     # ---- 7 清空确认遮罩 ----
     overlay = ConfirmOverlay(win)
-    overlay.ask(8, lambda: None)
+    overlay.ask("清空剪贴板记录？", "本机记录会全部删除，对端不受影响。",
+                "清空", lambda: None)
     app.processEvents()
     win.grab().save(str(OUT / "win2-confirm.png"))
     overlay.cancel()
