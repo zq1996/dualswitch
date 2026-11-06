@@ -227,14 +227,19 @@ _MODIFIER_VK = {
     MOD_MAP_POSITION: {
         # 用户 2026-11-06 明确：空格左边那颗（Win 键盘的 Alt）在 mac 上是 ⌘，
         # 这样 Alt+C 就是复制，拇指位置对得上。
+        #
+        # 右侧那颗（2026-11-06 二次确认，用户键盘**没有右 Win**，只有右 Alt / 右 Ctrl）：
+        #   右 Alt（靠空格）→ 右⌘   —— 位置对齐，拇指落在哪儿就是 Command
+        #   右 Ctrl（最右）  → 右⌥   —— 用户要用它打 Option 组合（特殊字符）
+        # 右 Win 那颗键用户键盘上没有，占位给右⌃，永远触发不到。
         HID_LCTRL: kVK_Control,
-        HID_RCTRL: kVK_RightControl,
+        HID_RCTRL: kVK_RightOption,
         HID_LSHIFT: kVK_Shift,
         HID_RSHIFT: kVK_RightShift,
         HID_LALT: kVK_Command,
         HID_RALT: kVK_RightCommand,
         HID_LGUI: kVK_Option,
-        HID_RGUI: kVK_RightOption,
+        HID_RGUI: kVK_RightControl,
     },
     MOD_MAP_SEMANTIC: {
         # 按名字：系统键 Win → ⌘，Alt → ⌥
@@ -261,25 +266,46 @@ def vk_for(usage: int, mod_map: str = MOD_MAP_POSITION) -> int | None:
     return USAGE_TO_VK.get(usage)
 
 
+#: 位图里的每一位 remap 之后对应哪个 CGEventFlag —— **必须与 `_MODIFIER_VK` 一一对应**。
+#: 不能像早期那样「整组 cmd/opt 一刀切」：右侧现在是错位的
+#: （右 Alt→右⌘、右 Ctrl→右⌥），一个集合表达不了。
+_MOD_FLAG_BY_POSITION = {
+    MOD_LCTRL: FLAG_CONTROL,
+    MOD_RCTRL: FLAG_OPTION,      # 右 Ctrl → 右⌥
+    MOD_LSHIFT: FLAG_SHIFT,
+    MOD_RSHIFT: FLAG_SHIFT,
+    MOD_LALT: FLAG_COMMAND,
+    MOD_RALT: FLAG_COMMAND,      # 右 Alt → 右⌘
+    MOD_LGUI: FLAG_OPTION,
+    MOD_RGUI: FLAG_CONTROL,      # 右 Win → 右⌃（用户键盘没有这颗键）
+}
+
+_MOD_FLAG_BY_SEMANTIC = {
+    MOD_LCTRL: FLAG_CONTROL,
+    MOD_RCTRL: FLAG_CONTROL,
+    MOD_LSHIFT: FLAG_SHIFT,
+    MOD_RSHIFT: FLAG_SHIFT,
+    MOD_LALT: FLAG_OPTION,
+    MOD_RALT: FLAG_OPTION,
+    MOD_LGUI: FLAG_COMMAND,
+    MOD_RGUI: FLAG_COMMAND,
+}
+
+
 def cg_flags(mods: int, mod_map: str = MOD_MAP_POSITION) -> int:
     """HID 修饰键位图 → CGEventFlags。
 
-    必须**跟着 remap 走**：明明按的是物理 Alt，注入的却是 ⌘，如果 flags 还报
-    "Option 按下"，应用看到的就是 ⌥ + 一个"⌘键码"的乱组合，快捷键全错。
+    必须**跟着 remap 走**：明明按的是物理右 Ctrl，注入的却是右⌥，如果 flags 还报
+    "Control 按下"，应用看到的就是 ⌃ + 一个"⌥键码"的乱组合，快捷键全错。
+    所以这里按位查表，表的每一项都对着 `_MODIFIER_VK` 里的那一条。
     """
+    table = (
+        _MOD_FLAG_BY_SEMANTIC if mod_map == MOD_MAP_SEMANTIC else _MOD_FLAG_BY_POSITION
+    )
     flags = 0
-    if mods & (MOD_LCTRL | MOD_RCTRL):
-        flags |= FLAG_CONTROL
-    if mods & (MOD_LSHIFT | MOD_RSHIFT):
-        flags |= FLAG_SHIFT
-    if mod_map == MOD_MAP_SEMANTIC:
-        cmd, opt = (MOD_LGUI | MOD_RGUI), (MOD_LALT | MOD_RALT)
-    else:
-        cmd, opt = (MOD_LALT | MOD_RALT), (MOD_LGUI | MOD_RGUI)
-    if mods & cmd:
-        flags |= FLAG_COMMAND
-    if mods & opt:
-        flags |= FLAG_OPTION
+    for bit, flag in table.items():
+        if mods & bit:
+            flags |= flag
     return flags
 
 

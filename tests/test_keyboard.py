@@ -27,12 +27,19 @@ from dualswitch.keyboard.keymap import (
     HID_LGUI,
     HID_LSHIFT,
     HID_RALT,
+    HID_RCTRL,
+    HID_RGUI,
     MOD_LALT,
     MOD_LCTRL,
     MOD_LGUI,
     MOD_LSHIFT,
     MOD_MAP_POSITION,
     MOD_MAP_SEMANTIC,
+    MOD_MAPS,
+    MOD_RALT,
+    MOD_RCTRL,
+    MOD_RGUI,
+    USAGE_TO_MOD_BIT,
     cg_flags,
     usage_for_char,
     vk_for,
@@ -107,9 +114,14 @@ def test_letters_map_to_position_not_character():
 
 
 def test_position_mapping_puts_command_next_to_space():
-    """用户的肌肉记忆：空格左边那颗（Win 键盘 Alt）= ⌘。"""
+    """用户的肌肉记忆：空格左边那颗（Win 键盘 Alt）= ⌘。
+
+    右侧（2026-11-06 用户二次确认：键盘没有右 Win，只有右 Alt / 右 Ctrl）：
+    右 Alt → 右⌘、右 Ctrl → 右⌥。
+    """
     assert vk_for(HID_LALT, MOD_MAP_POSITION) == 0x37        # kVK_Command
     assert vk_for(HID_RALT, MOD_MAP_POSITION) == 0x36        # kVK_RightCommand
+    assert vk_for(HID_RCTRL, MOD_MAP_POSITION) == 0x3D       # kVK_RightOption
     assert vk_for(HID_LGUI, MOD_MAP_POSITION) == 0x3A        # kVK_Option
     assert vk_for(HID_LCTRL) == 0x3B                         # kVK_Control
     assert vk_for(HID_LSHIFT) == 0x38                        # kVK_Shift
@@ -126,11 +138,41 @@ def test_unmapped_usage_returns_none_instead_of_guessing():
 
 
 def test_flags_follow_the_remap():
-    """按的是物理 Alt，注入的是 ⌘，flags 就必须报 ⌘ —— 否则应用看到 ⌥+⌘键码。"""
+    """按的是物理键，注入的是 remap 后的键，flags 就必须报 remap 后的那个。"""
     assert cg_flags(MOD_LALT, MOD_MAP_POSITION) == FLAG_COMMAND
+    assert cg_flags(MOD_RALT, MOD_MAP_POSITION) == FLAG_COMMAND
     assert cg_flags(MOD_LGUI, MOD_MAP_POSITION) == FLAG_OPTION
+    # 右 Ctrl 在 position 下是「右⌥」：flags 必须跟着变成 OPTION，
+    # 否则应用看到 ⌃ + 一个 ⌥ 键码，Option 组合全废（2026-11-06 用户报的现象）
+    assert cg_flags(MOD_RCTRL, MOD_MAP_POSITION) == FLAG_OPTION
     assert cg_flags(MOD_LGUI, MOD_MAP_SEMANTIC) == FLAG_COMMAND
     assert cg_flags(MOD_LCTRL | MOD_LSHIFT) == FLAG_CONTROL | FLAG_SHIFT
+
+
+def test_flags_always_match_the_injected_keycode():
+    """**一致性守卫**：每个修饰键的 flags 必须和它被注入的键码是同一个语义。
+
+    这条是给「改映射忘改 flags」兜底的 —— 两张表分开写，最容易漏一边，
+    而漏了的表现是「按 Option 却打出 Control 的组合」，很难从现象倒推。
+    """
+    vk_to_flag = {
+        0x37: FLAG_COMMAND,       # kVK_Command
+        0x36: FLAG_COMMAND,       # kVK_RightCommand
+        0x3A: FLAG_OPTION,        # kVK_Option
+        0x3D: FLAG_OPTION,        # kVK_RightOption
+        0x3B: FLAG_CONTROL,       # kVK_Control
+        0x3E: FLAG_CONTROL,       # kVK_RightControl
+        0x38: FLAG_SHIFT,         # kVK_Shift
+        0x3C: FLAG_SHIFT,         # kVK_RightShift
+    }
+    for mod_map in MOD_MAPS:
+        for usage, bit in USAGE_TO_MOD_BIT.items():
+            vk = vk_for(usage, mod_map)
+            assert vk is not None, f"{mod_map} 下 usage=0x{usage:02X} 没有键码"
+            assert cg_flags(bit, mod_map) == vk_to_flag[vk], (
+                f"{mod_map}: usage=0x{usage:02X} 注入 vk=0x{vk:02X}，"
+                f"flags 却是 0x{cg_flags(bit, mod_map):X}"
+            )
 
 
 def test_alt_c_char_table_is_consistent():

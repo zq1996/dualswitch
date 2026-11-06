@@ -519,6 +519,22 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-06 22:40 **右侧修饰键错位修正**（用户：键盘没有右 Win，只有右 Alt / 右 Ctrl）。
+  要求：右 Alt → Mac 右⌘、右 Ctrl → Mac 右⌥（用来打 Option 组合）。
+  · 改前 position 是「右侧镜像」：右 Alt→右⌘、右 Win→右⌥、右 Ctrl→右⌃。
+    用户键盘没有右 Win，所以最右那颗 Ctrl 一直落在「右⌃」上 —— 这就是他说的
+    「右 Alt 现在对应 Control」的来源（其实是 Ctrl 那颗）。
+  · 改后 `_MODIFIER_VK[MOD_MAP_POSITION]`：`HID_RCTRL → kVK_RightOption`、
+    `HID_RGUI → kVK_RightControl`（占位，该键盘没有这颗键）；左半边不动。
+  · **`cg_flags()` 改成按位查表**（`_MOD_FLAG_BY_POSITION`）：右侧不再是镜像，
+    「整组 cmd/opt 一刀切」会把右 Ctrl 算成 ⌃ flag 却注入 ⌥ 键码 —— 应用看到的是
+    ⌃ + ⌥ 的乱组合，Option 组合全废。新表每一项都对着 `_MODIFIER_VK` 的一条。
+  · 新增一致性守卫 `test_keyboard.py::test_flags_always_match_the_injected_keycode`：
+    遍历两种策略 × 八个修饰键，断言「注入的键码」和「flags」是同一个语义。
+  · ⚠️ 映射在**接收端**生效（`vk_for` 在 mac 上跑），Windows 端只发 HID usage ——
+    **Mac 端必须拉这次代码才会变**。
+  · 全量 **625 tests / 0 failed / 12 skipped**。
+
 - 2026-11-06 21:30 **切换页彻底不要悬停浮窗**（用户第二次报：「又出现一个黑浮窗，
   点下面的按钮没反应」）。上一条把自绘 `TipBubble` 换成原生 `setToolTip()` 是**错的方向**：
   原生 tooltip 也是独立顶层窗，而且**不带 `WS_EX_TRANSPARENT`**。

@@ -261,15 +261,22 @@ sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 | Windows 物理键 | VK | macOS | 效果 |
 |---|---|---|---|
-| 左 Ctrl / 右 Ctrl | `VK_LCONTROL` / `VK_RCONTROL` | `kVK_Control` / `kVK_RightControl` | 控制键，位置不变 |
+| 左 Ctrl | `VK_LCONTROL` | `kVK_Control` | 控制键，位置不变 |
 | 左 Win | `VK_LWIN` | `kVK_Option` | 远左那颗 = ⌥ |
 | 左 Alt | `VK_LMENU` | `kVK_Command` | **空格左边那颗 = ⌘，所以 Alt+C 就是复制** |
-| 右 Alt | `VK_RMENU` | `kVK_RightCommand` | 对称 |
-| 右 Win | `VK_RWIN` | `kVK_RightOption` | 对称 |
+| 右 Alt | `VK_RMENU` | `kVK_RightCommand` | 空格右边那颗 = 右⌘（位置对称） |
+| 右 Ctrl | `VK_RCONTROL` | `kVK_RightOption` | **最右那颗 = 右⌥**（用户要用它打 Option 组合） |
+| 右 Win | `VK_RWIN` | `kVK_RightControl` | 占位；用户键盘没有这颗键，触发不到 |
 | Menu 键 | `VK_APPS` | 不映射 | 丢弃 |
 
 这套映射是"位置优先"，和用户肌肉记忆对齐。设置页留一个 `mod_map: position | semantic` 开关，
-`semantic` = 按名字（Win↔⌘、Alt↔⌥）。
+`semantic` = 按名字（Win↔⌘、Alt↔⌥，左右对称）。
+
+> **右侧不是镜像的（2026-11-06 用户明确）**：右 Alt→右⌘、右 Ctrl→右⌥。
+> 因为用户的键盘没有右 Win，最右那颗是 Ctrl，而他要用它当 Option。
+> 所以 `cg_flags()` 必须**按位查表**（`_MOD_FLAG_BY_POSITION`），不能像早期那样
+> 「整组 cmd/opt 一刀切」—— 那样按右 Ctrl 会发出「⌃ flag + ⌥ 键码」的乱组合。
+> 守卫：`test_keyboard.py::test_flags_always_match_the_injected_keycode`。
 
 > 键盘保持 `Fn+N`（Windows 模式）不变。**不要**为了 Mac 去切 `Fn+M`——
 > 那样在 Windows 下 Win/Ctrl 会错位，得不偿失。
