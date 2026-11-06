@@ -627,6 +627,27 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
                 return False, str(exc)
 
         config_mod.ensure_device_id_persisted(cfg, cfg_file)
+
+        # 键盘跟随（默认关）：Mac 这一侧是**注入端** —— 收 Windows 转发来的
+        # T_KEY，注入到本机。捕获端还没实现，所以这里只有接收的一半。
+        key_receiver = None
+        if cfg.keyboard_follow.enabled:
+            from .keyboard import KeyboardReceiver
+
+            log = logging.getLogger(__name__)
+            kf = cfg.keyboard_follow
+            key_receiver = KeyboardReceiver(
+                mod_map=kf.mod_map,
+                dedupe_repeat=(kf.repeat_mode == "dedupe"),
+                align_caps=kf.align_caps,
+            )
+            ok, why = key_receiver.available()
+            if ok:
+                log.info("键盘跟随已启用：%s", key_receiver.describe())
+            else:
+                # 不可用是正常状态（没装 pyobjc / 没授权），但要让人看得见
+                log.warning("键盘跟随已启用但注入不可用：%s", why)
+
         engine = SyncEngine(
             cfg.clipboard,
             host_label=cfg.effective_host(),
@@ -634,12 +655,17 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
             vcp_code=cfg.vcp_code,
             save_config=lambda: config_mod.save(cfg, cfg_file),
             version=__version__,
+            on_key=key_receiver.handle_key if key_receiver else None,
+            on_key_state=key_receiver.handle_state if key_receiver else None,
+            on_focus=key_receiver.handle_focus if key_receiver else None,
         )
         engine.start()
         controller.add_before_switch(lambda source, target: engine.push_now(f"switch:{source}"))
         # 本机打不到这块屏时（画面在对面 / 没接线），交给对端代发
         controller.remote_switch = engine.request_switch
         controller.remote_ready = lambda: engine.switch_ready
+        # 键盘跟随：切屏成功后把"还按着的键"全抬起来，避免修饰键卡死
+        controller.set_keyboard(key_receiver)
 
         # 画面归属联合判定（T_STATE 0x32）：两台各报「我看不看得到这块屏」，
         # 单机判不了的两种情况（冷启动屏在对端 / 拔线）都能唯一定下来。

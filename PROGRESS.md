@@ -514,6 +514,28 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-06 13:40 **键盘跟随：Mac 注入端落地**（Windows 捕获端未做）。
+  新增 `keyboard/` 包（`keymap` 映射表 / `state` 按键状态机 / `inject_macos` Quartz 注入 /
+  `receiver` 收帧注入），`sync/protocol.py` 加 `T_KEY(0x40)/T_KEYSTATE(0x41)/T_FOCUS(0x42)`，
+  `transport.py` 加三个回调与发送方法 + **`TCP_NODELAY`**，`engine.py` 只搬运，
+  `config.py` 加 `keyboard_follow` 段（默认关），`app._after_screen_switch` 里通知释放，
+  `cli.py` 按开关建接收器。工具 `tools/key_feeder.py`：本地直喂 / 走链路 / 阶段 0 探测。
+  实现期两个真发现：① 这台机器的 pyobjc `Quartz` **没有** `AXIsProcessTrusted`，
+  查它会被兜底吞成「一切正常、就是打不出字」，改用 `CGPreflightPostEventAccess()`；
+  `IsSecureEventInputEnabled` 也不在 Quartz 里，得 ctypes 走 Carbon。② receiver 的 epoch
+  **只能跟对端走**，本端自增会让两端数出两套号、所有帧被判过期。
+  用例 `tests/test_keyboard.py` 31 例；全量 **430 passed / 24 skipped**。
+  （注意：`/usr/bin/python3` 没装 hidapi，会让 `test_mouse_logi_host` 里 3 例参数化失败；
+  带齐依赖的解释器是 `.workbuddy/binaries/python/envs/default/bin/python3`。）
+
+- 2026-11-06 12:05 **出键盘跟随方案（未实现）**：`docs/KEYBOARD-BRIDGE.md`。
+  结论：方向定 **Windows 捕获 → Mac 注入**（单向），理由是这个方向让「Windows UIPI」和
+  「macOS 安全输入」两条无解硬伤**直接不发生**，且 Mac 永远有画面、不必和无显示器休眠对抗。
+  键盘（洛斐 FLOW2）确认无软件切通道（非罗技无 HID++；QMK/VIA 仅限有线且无切主机指令）。
+  焦点挂在现成的 `_after_screen_switch()`（4 个成功分支）上，不新增握手。
+  另记两条实现级发现：`transport.py` 缺 `TCP_NODELAY`（老 Synergy 发黏的元凶）；
+  `hotkey/windows.py` 已占用 `WH_KEYBOARD_LL`，键盘桥不能再装第二个钩子，须改成唯一钩子 + 分发器。
+
 - 2026-10-30 22:20 **清掉旧包 + 重新打包 + 桌面快捷方式**。
   删除：`dist\dualswitch`（134MB，10-24 16:54 的旧包）、`build\dualswitch`（20MB 中间产物）、
   `build\dualswitch.spec`、桌面 `dualswitch.exe - 快捷方式.lnk`（移入回收站）。

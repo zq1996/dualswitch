@@ -95,6 +95,9 @@ class SyncEngine:
         vcp_code: int = 0x60,
         save_config: Callable[[], None] | None = None,
         version: str = "",
+        on_key: Callable[[dict[str, Any]], None] | None = None,
+        on_key_state: Callable[[dict[str, Any]], None] | None = None,
+        on_focus: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.cfg = cfg
         self.host_label = host_label or "mac"
@@ -109,6 +112,14 @@ class SyncEngine:
         # 远端代发切屏（ISSUE-002）：对端来到的请求交给它，返回值是 (ok, detail)
         self._switch_executor = switch_executor
         self._vcp_code = int(vcp_code)
+        # ---- 键盘跟随（T_KEY / T_KEYSTATE / T_FOCUS，2026-11-06）----
+        # 引擎只搬运，不认识按键含义：注入端在 app 侧（`keyboard.receiver`）。
+        # 回调必须自己兜异常 —— 这里不 try，因为 transport 的读线程已经兜了一层，
+        # 但按键是高频路径，我们不希望每一帧都过一次 except。
+        self._on_key = on_key
+        self._on_key_state = on_key_state
+        self._on_focus = on_focus
+        self.keyboard_stats = {"sent": 0, "received": 0}
         self._switch_waiters: dict[str, tuple[threading.Event, dict[str, Any]]] = {}
         self._switch_seen: dict[str, tuple[float, dict[str, Any]]] = {}
         self.switch_stats = {"requested": 0, "served": 0, "failed": 0}
@@ -252,6 +263,9 @@ class SyncEngine:
             on_switch_ack=self._on_switch_ack,
             on_peer_state=self._on_peer_state_request,
             on_peer_state_ack=self._on_peer_state_ack,
+            on_key=self._handle_key_frame,
+            on_key_state=self._handle_key_state_frame,
+            on_focus=self._handle_focus_frame,
             on_state=self._on_state,
             on_auth_failed=self._on_auth_failed,
             expected_peer_device=self.cfg.peer_device,
@@ -774,6 +788,54 @@ class SyncEngine:
         waiter.set()
 
     # ------------------------------------------------------------ 画面归属联合判定
+    # ------------------------------------------------------------------ 键盘跟随
+    def _handle_key_frame(self, header: dict[str, Any]) -> None:
+        self.keyboard_stats["received"] += 1
+        if self._on_key is None:
+            return
+        try:
+            self._on_key(header)
+        except Exception:  # noqa: BLE001 - 注入端出错绝不能断链路
+            log.exception("键盘帧处理失败（已忽略）")
+
+    def _handle_key_state_frame(self, header: dict[str, Any]) -> None:
+        if self._on_key_state is None:
+            return
+        try:
+            self._on_key_state(header)
+        except Exception:  # noqa: BLE001
+            log.exception("键盘状态帧处理失败（已忽略）")
+
+    def _handle_focus_frame(self, header: dict[str, Any]) -> None:
+        if self._on_focus is None:
+            return
+        try:
+            self._on_focus(header)
+        except Exception:  # noqa: BLE001
+            log.exception("键盘焦点帧处理失败（已忽略）")
+
+    def send_key(self, header: dict[str, Any]) -> bool:
+        """发一个按键。返回 False = 链路不可用，捕获端**必须立刻停止吞键**。"""
+        transport = self._transport
+        if transport is None:
+            return False
+        ok = transport.send_key(header)
+        if ok:
+            self.keyboard_stats["sent"] += 1
+        return ok
+
+    def send_key_state(self, header: dict[str, Any]) -> bool:
+        transport = self._transport
+        if transport is None:
+            return False
+        return transport.send_key_state(header)
+
+    def send_focus(self, header: dict[str, Any]) -> bool:
+        transport = self._transport
+        if transport is None:
+            return False
+        return transport.send_focus(header)
+
     def set_monitor_probe(self, probe: Callable[[], bool] | None) -> None:
         """挂上「本机现在能不能枚举到这块屏」（由 CLI 注入，引擎不碰硬件）。"""
         self._monitor_probe = probe

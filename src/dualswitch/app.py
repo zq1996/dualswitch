@@ -108,6 +108,13 @@ class SwitchController:
         self._mouse = MouseSwitcher(cfg.mouse_switch)
         self._mouse_gen = 0
 
+        # 键盘跟随（可选，默认关）：画面切走后，本机把按下的键全抬起来。
+        # 注入端由 CLI 在引擎起来后注入（`keyboard.receiver.KeyboardReceiver`）；
+        # 没注入时这里是 None，行为与以前完全一致。
+        # 注意：这里**不推进 epoch** —— epoch 属于"决定按键去向"的那一端
+        # （键盘挂在谁身上谁定），本端只做释放（见 keyboard/receiver.py 模块注释）。
+        self._keyboard = None
+
         # 切屏前的钩子：剪贴板同步在这里把"本机当前剪贴板"入队（必须极快返回）。
         # 放在 _execute 开头而不是 trigger() 里，是为了让托盘菜单 / CLI 的切换也带上同步。
         self.on_before_switch: list[Callable[..., None]] = []
@@ -701,8 +708,26 @@ class SwitchController:
     # ------------------------------------------------------------------ 显式通道实现
 
     # ------------------------------------------------------------------ 鼠标联动
+    def set_keyboard(self, receiver) -> None:
+        """挂上键盘注入端（`keyboard.receiver.KeyboardReceiver`）。None = 不启用。"""
+        self._keyboard = receiver
+
+    def _notify_keyboard(self, target_host: str) -> None:
+        """切屏后通知键盘端"画面走了"。**永不抛异常。**
+
+        只做一件事：把本机还按着的键全抬起来。真正决定"按键发给谁"的是
+        键盘所在端（Windows），它的 epoch 由它自己推进。
+        """
+        receiver = self._keyboard
+        if receiver is None:
+            return
+        try:
+            receiver.on_focus(target_host)
+        except Exception:  # noqa: BLE001 - 键盘联动失败绝不影响切屏
+            log.exception("键盘焦点通知失败（已忽略）")
+
     def _after_screen_switch(self, target_host: str) -> None:
-        """切屏成功后联动罗技鼠标。**永不抛异常、永不阻塞调用方。**
+        """切屏成功后联动外设（键盘释放 + 罗技鼠标 Easy-Switch）。**永不抛异常、永不阻塞调用方。**
 
         方向逻辑（docs/FEASIBILITY-LOGI-EASYSWITCH.md §4）：
           * 画面去了对端 ⇒ 鼠标还挂在本机 ⇒ 本机把它推出去；
@@ -710,7 +735,9 @@ class SwitchController:
             `_do_local` 里推回来（对端代发最终也走 `set_input_local`，链路自动闭合）。
 
         也就是说：**谁身上还挂着鼠标、而画面已经走了，就由谁推。**
+        键盘同理，但键盘不搬家 —— 它留在 Windows，靠 `T_KEY` 转发（§键盘链路）。
         """
+        self._notify_keyboard(target_host)
         try:
             if not self.cfg.mouse_switch.enabled:
                 return
