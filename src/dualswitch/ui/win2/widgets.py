@@ -1037,6 +1037,11 @@ class TipBubble(QWidget):
         super().__init__(parent, Qt.ToolTip | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        # **顶层窗口必须再加这一条**：`WA_TransparentForMouseEvents` 只对**子控件**
+        # 生效，顶层窗口照样会收走落在它矩形里的点击（2026-11-06 实测：提示弹层
+        # 卡在屏幕上时，点它下面的按钮完全没反应 —— 用户报的"点击都不好用"）。
+        # `WindowTransparentForInput` 才是让 OS 把这块矩形当透明（WS_EX_TRANSPARENT）。
+        self.setWindowFlag(Qt.WindowTransparentForInput, True)
         self.setObjectName("tipBubble")
         self._text = ""
         self._font = theme.qfont(11.5)
@@ -1148,6 +1153,13 @@ class HoverTip(QObject):
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._show)
+        #: 看门狗：弹层显示期间每 150ms 检查一次"鼠标还在按钮上吗"。
+        #: **不能只靠 `QEvent.Leave`** —— 弹层是独立顶层窗，鼠标一旦落在它上面
+        #: （翻到按钮上方 / 系统抢焦点 / 程序被切走）按钮就收不到 Leave，
+        #: 弹层会一直挂在屏幕上，还会吃掉那块区域的点击（2026-11-06 实测）。
+        self._watch = QTimer(self)
+        self._watch.setInterval(150)
+        self._watch.timeout.connect(self._recheck)
         widget._hover_tip = self          # noqa: SLF001 - 生命周期靠这条引用
         if self._text:
             widget.setToolTip(self._text)
@@ -1178,18 +1190,52 @@ class HoverTip(QObject):
         w = self._w
         if not self._text or not w.isVisible() or not w.underMouse():
             return
-        bubble = tip_bubble()               # 全局单例：不挂在窗口里，才不会被裁
-        bubble.set_text(self._text, self._width)
+        try:
+            bubble = tip_bubble()           # 全局单例：不挂在窗口里，才不会被裁
+            bubble.set_text(self._text, self._width)
+        except RuntimeError:                # 退出过程中弹层已销毁
+            return
         bubble.place_near(w)
-        bubble.show()
-        bubble.raise_()
+        try:
+            bubble.show()
+            bubble.raise_()
+        except RuntimeError:
+            return
         self._bubble = bubble
+        self._watch.start()
+
+    def _recheck(self) -> None:
+        """看门狗：鼠标离开按钮 / 按钮没了 / 弹层自己没了 → 收起来。"""
+        w = self._w
+        try:
+            alive = w is not None and w.isVisible() and w.underMouse()
+            shown = self._bubble is not None and self._bubble.isVisible()
+        except RuntimeError:      # C++ 对象已销毁（切页 / 关窗 / 解释器退出）
+            self._forget()
+            return
+        if not alive or not shown:
+            self._hide()
+
+    def _forget(self) -> None:
+        """C++ 侧已经没了：只清引用，不再碰任何 Qt 对象。"""
+        if self._timer.isActive():
+            self._timer.stop()
+        if self._watch.isActive():
+            self._watch.stop()
+        self._bubble = None
 
     def _hide(self) -> None:
         if self._timer.isActive():
             self._timer.stop()
-        if self._bubble is not None:
-            self._bubble.hide()
+        if self._watch.isActive():
+            self._watch.stop()
+        bubble = self._bubble
+        self._bubble = None
+        if bubble is not None:
+            try:
+                bubble.hide()
+            except RuntimeError:      # 解释器退出时弹层可能已经先被删了
+                pass
 
     def eventFilter(self, obj, event):  # noqa: N802
         kind = event.type()

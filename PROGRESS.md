@@ -519,6 +519,27 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-06 19:55 **修用户报的「启动后页面点击都不好用」**（我自己引入的回归）。
+  真凶是切换页的长悬停提示弹层 `TipBubble`：它是**独立顶层窗口**，而
+  `WA_TransparentForMouseEvents` **只对子控件生效**，顶层窗口照样把落在它矩形里的
+  点击收走；同时它只靠 `QEvent.Leave` 收，鼠标一旦落在弹层上（或窗口正好在光标下
+  出现，Enter 与弹层同时发生）Leave 就再也不来 —— 弹层永久挂在界面上，
+  **它盖住的「本机发送 18」/「请对端发送 18」全部点不动**。
+  实测证据（真实鼠标注入 + Win32）：弹层 315×82 卡在 (1347,673)，`WindowFromPoint`
+  命中的是弹层而不是主窗口；`WS_EX_TRANSPARENT` 位为 0。
+  · 修一：`setWindowFlag(Qt.WindowTransparentForInput, True)` —— 顶层窗必须用这个
+    （= `WS_EX_TRANSPARENT`），`WA_TransparentForMouseEvents` 不够。
+  · 修二：加 150ms 看门狗 `_recheck()`，鼠标不在按钮上 / 按钮没了 → 立刻收，
+    不再依赖 Leave。
+  · 修三：`_hide/_show/_recheck` 全部兜 `RuntimeError`（解释器退出时弹层可能先被删，
+    原来会在 atexit 里抛「Internal C++ object already deleted」）。
+  **验证**（不是看代码，是真机点）：弹层 exstyle 变成 `0x800a8`（含 0x20）、
+  `WindowFromPoint(弹层中心)` 返回主窗口、鼠标移开 0.5s 内弹层消失；
+  在弹层正中间真点一下 → 下面的「本机发送 18」真的执行了（note 变
+  「✓ [演练] 未真正发送指令」）。新增守卫
+  `test_ui_win2.py::test_hover_tip_bubble_is_click_through_and_self_closing`。
+  **mac2 的 `widgets.py` 是同一份代码，同一个坑还在**（mac 侧需要同步这两处修改）。
+
 - 2026-11-06 17:30 **Windows 捕获端落地 + 切换页跟 mac2 改版**（合并 `2f3d525` 后补齐 Windows 那一半）。
   **键盘跟随至此两端都通了**：Windows 吞键转发（本轮）、macOS 注入（`2aa325f`）。
   · `keyboard/hook_windows.py`：**进程唯一**的 `WH_KEYBOARD_LL` + 分发器，引用计数

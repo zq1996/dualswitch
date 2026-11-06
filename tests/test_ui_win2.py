@@ -1533,3 +1533,39 @@ def test_hover_tip_wraps_long_text_and_waits_for_the_delay(app, cfg):
     assert max(fm.horizontalAdvance(line) for line in bubble._lines) <= theme.HOVER_TIP_W + 1
     assert bubble.width() <= theme.HOVER_TIP_W + bubble.PAD_H * 2 + 2
     bubble.hide()
+
+
+def test_hover_tip_bubble_is_click_through_and_self_closing(app, cfg):
+    """长悬停弹层是**独立顶层窗**：必须点得穿，且不能卡在屏幕上。
+
+    2026-11-06 用户报「启动后点哪儿都没反应」，实测就是这个弹层：
+    `WA_TransparentForMouseEvents` **只对子控件生效**，顶层窗口照样把落在它矩形里的
+    点击收走；而它当时只靠 `QEvent.Leave` 收，鼠标一旦落在弹层上（或窗口在光标下
+    出现），Leave 就再也来不了，弹层永久挂在界面上 —— 它盖住的按钮全部点不动。
+
+    三条守卫：① 顶层窗必须带 `WindowTransparentForInput`（= WS_EX_TRANSPARENT）；
+    ② 保留 `WA_TransparentForMouseEvents`（子控件语义）；③ 看门狗在鼠标离开后收起。
+    """
+    from PySide6.QtWidgets import QPushButton
+
+    from dualswitch.ui.win2.widgets import attach_hover_tip, tip_bubble
+
+    btn = QPushButton("x")
+    btn.resize(150, 38)
+    btn.show()
+    tip = attach_hover_tip(btn, "长文案" * 40)
+    QTest.qWait(20)
+
+    bubble = tip_bubble()
+    assert bubble.windowFlags() & Qt.WindowTransparentForInput, "弹层会吃掉它下面的点击"
+    assert bubble.testAttribute(Qt.WA_TransparentForMouseEvents)
+
+    # 看门狗：按钮没了 / 鼠标不在按钮上时，150ms 内必须收起来（不依赖 Leave）。
+    # 这里用 hide() 而不是移动鼠标：offscreen 下 `underMouse()` 不可靠。
+    bubble.set_text("测试提示", theme.HOVER_TIP_W)
+    bubble.show()
+    tip._bubble = bubble          # noqa: SLF001 - 模拟"已弹出"
+    tip._watch.start()            # noqa: SLF001
+    btn.hide()
+    QTest.qWait(400)
+    assert not bubble.isVisible(), "按钮都不在了，弹层还挂着"
