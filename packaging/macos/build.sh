@@ -15,28 +15,32 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-PYTHON="${PYTHON:-python3}"
+# 解释器解析只有一处规则（tools/py.sh）：$PYTHON / $DUALSWITCH_PY → 仓库内 .venv → PATH。
+# 以前是裸 `python3`，在装了 Homebrew 的机器上会解析到 3.15（零依赖），
+# 于是下面的 pip install 会往它里面现装一套，打出来的包用一个谁也没验证过的解释器。
+DS_ROOT="$ROOT"          # py.sh 靠它定位仓库内 .venv
+. "$ROOT/tools/py.sh"
+PYTHON="$(ds_python)" || {
+    echo "✗ 找不到 python3。先建仓库内环境：" >&2
+    echo "    python3 -m venv .venv && .venv/bin/pip install -e \".[dev,mouse,macos,gui,tray]\"" >&2
+    exit 1
+}
 APP="dist/dualswitch.app"
 ICNS="design/icon/screen-switch.icns"
 
-# 打包解释器必须和「跑应用 / 跑测试」那个是同一个。
-#
-# 默认 python3 走 PATH：装了 Homebrew 的机器上它是 /opt/homebrew/bin/python3（本项目
-# 实测 3.15，没装任何项目依赖），于是下面的 pip install 会往它里面现装一套，
-# 打出来的包用一个谁也没验证过的解释器 —— 10-30 那次 `hid.cp313-win_amd64.pyd`
-# 没进包的教训就是「打包环境 ≠ 运行环境」。
-#
-# 先体检再动手，把"缺依赖"报在这里，别让它变成 PyInstaller 深处一句看不懂的 ImportError。
-if ! "$PYTHON" -c "import PySide6" >/dev/null 2>&1; then
+# 先体检再动手：把"缺依赖"报在这里，别让它变成 PyInstaller 深处一句看不懂的 ImportError。
+if ! ds_python_has "$PYTHON" PySide6; then
     RESOLVED="$("$PYTHON" -c 'import sys; print(sys.executable)' 2>/dev/null || echo "$PYTHON")"
     cat >&2 <<EOF
 ✗ 打包解释器缺 PySide6：$RESOLVED
 
-  打包请显式指定装了项目依赖的那个解释器：
+  显式指定装了项目依赖的那个解释器：
     PYTHON=/path/to/python3 ./packaging/macos/build.sh
 
-  先体检再打包：
-    python3 tools/check_env.py
+  或者先建仓库内环境（推荐）：
+    python3 -m venv .venv && .venv/bin/pip install -e ".[dev,mouse,macos,gui,tray]"
+
+  体检：tools/check_env.py
 EOF
     exit 1
 fi
@@ -54,9 +58,15 @@ mkdir -p "$PYINSTALLER_CONFIG_DIR"
 CLEAN_ARGS=(--clean)
 [[ "${NO_CLEAN:-0}" == "1" ]] && CLEAN_ARGS=()
 
-"$PYTHON" -m pip install --quiet --upgrade pyinstaller pystray pillow \
-    PySide6-Essentials \
-    pyobjc-framework-Quartz pyobjc-framework-ApplicationServices pyobjc-framework-Cocoa
+# 只补缺的：环境已经齐了就跑 pip 都不跑（离线也能打包）。
+# 以前这里无条件 `pip install --upgrade ...`，每打一次包都会把 PySide6 / pyobjc
+# 悄悄升到最新版 —— "测试跑过的版本"和"打进包的版本"可能不是一个；网络慢的时候
+# 还会卡在解析上十几分钟。
+if ! ds_python_has "$PYTHON" PyInstaller; then
+    "$PYTHON" -m pip install --quiet pyinstaller pystray pillow \
+        PySide6-Essentials \
+        pyobjc-framework-Quartz pyobjc-framework-ApplicationServices pyobjc-framework-Cocoa
+fi
 
 if [[ ! -f "$ICNS" ]]; then
     echo "[warn] 没有 $ICNS，先生成图标"

@@ -400,29 +400,50 @@ python3 tools/check_env.py --strict # CI / 提交前：缺平台必需依赖直�
 
 | 解释器 | 版本 | hid | pyobjc | 结果 |
 |---|---|---|---|---|
-| `~/.workbuddy/binaries/python/envs/default/bin/python3` | 3.13.12 | ✓ | ✓ | **全量 460 例全绿，用这个** |
+| **`.venv/bin/python`（仓库内，推荐）** | 3.13.12 | ✓ | ✓ | **全量全绿，用这个** |
+| `~/.workbuddy/binaries/python/envs/default/` | 3.13.12 | ✓ | ✓ | 也能跑，但**不是本项目的家**（见下） |
 | `/usr/bin/python3`（实为 CLT 3.9.6） | 3.9.6 | ✗ | ✗ | 曾红 3 例 + 静默少跑 9 例 |
 | `/opt/homebrew/bin/python3` | 3.15.0 | ✗ | ✗ | 同上 |
 
-`/usr/bin/python3` 和 Homebrew 那个都**不是**本项目的运行环境。`.workbuddy/binaries/...`
-是 WorkBuddy 自带 Python 运行时建的 venv（`envs/` 下只有 `default` 一个，全机器共享），
-项目依赖装在那里。
+后两个都**不是**本项目的运行环境。`~/.workbuddy/binaries/python/envs/default` 是
+WorkBuddy 自带运行时建的 venv（`envs/` 下只有 `default` 一个，**全机器共享**），
+项目依赖一度装在那里 —— 它会被 WorkBuddy 升级/清理，多项目还会互相污染。
 
-### 12.3 要不要换成仓库内 `.venv`
-
-值得（`.venv/` 已在 `.gitignore` 里），理由：`envs/default` 是 WorkBuddy 的资产，
-升级/清理时可能被重建或删掉，而且全机器共享一个 venv，多项目会互相污染。
-建法（用已验证的 3.13 底座）：
+### 12.3 仓库内 `.venv`（已经是现状）
 
 ```bash
+# 建（底座用已验证的 3.13.12；Homebrew 那个 3.15 太新，个别包没有轮子）
 ~/.workbuddy/binaries/python/versions/3.13.12/bin/python3 -m venv .venv
-.venv/bin/pip install -e ".[dev,mouse,macos,gui]"
-.venv/bin/python tools/check_env.py          # 必须全绿
-.venv/bin/python -m pytest
-PYTHON="$PWD/.venv/bin/python" ./packaging/macos/build.sh
+.venv/bin/pip install -e ".[dev,mouse,macos,gui,tray]"
+
+# 用
+.venv/bin/python tools/check_env.py     # 必须全绿
+.venv/bin/python -m pytest              # 不用再手打环境变量
+.venv/bin/python -m dualswitch ui2
 ```
 
-换之前记一下现在那条命令（`~/.workbuddy/.../python3 -m dualswitch ui2`），换完要同步改。
+> 受限环境（本机 agent 沙箱）里 `pip install -e .` 会在 editable wheel 阶段报
+> `EEXIST .../​.tmp-xxxx`。这不影响使用：仓库内 `.venv` 用一个 `dualswitch-dev.pth`
+> 指向 `src/`，所有脚本与测试都走 `python -m dualswitch`，控制台脚本
+> `.venv/bin/dualswitch` 只是锦上添花。在普通终端里重跑 `pip install -e .` 通常能过。
+
+**脚本不用改也不用传参**：`tools/py.sh` 统一解析解释器，优先级是
+`$PYTHON` / `$DUALSWITCH_PY` → 仓库内 `.venv` → PATH。`build.sh`、`install.sh`、
+`logi-mouse.sh` 都 source 了它。所以：
+
+```bash
+./packaging/macos/build.sh            # 自动用 .venv
+./packaging/macos/install.sh --dry-run # 只渲染 plist，不写不加载
+./logi-mouse.sh probe
+PYTHON=/opt/homebrew/bin/python3 ./packaging/macos/build.sh   # 仍可显式覆盖
+```
+
+⚠️ `install.sh` 会把解释器路径**写死进 launchd plist**，所以更要指向 `.venv` 而不是
+别人的共享 venv。`.venv` 被删了重跑一次即可。
+
+底座是 WorkBuddy 的 3.13.12，所以 WorkBuddy 若把 `versions/` 删掉，`.venv` 会失效
+（它只 share 解释器二进制，site-packages 是独立的）。想彻底独立：
+`brew install python@3.13` 后用那个重建 `.venv`。
 
 ### 12.4 规则（写进 tests/conftest.py，也有守卫用例）
 

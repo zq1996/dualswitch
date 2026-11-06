@@ -56,6 +56,9 @@ def main(argv: list[str]) -> int:
 
     print(f"解释器  : {sys.executable}")
     print(f"版本    : {sys.version.split()[0]}  ({sys.platform})")
+    venv_py = ROOT / ".venv" / "bin" / "python"
+    if venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
+        print(f"仓库 venv: {venv_py}（存在，但当前不是它 —— 建议用它）")
     try:
         import dualswitch
 
@@ -86,8 +89,8 @@ def main(argv: list[str]) -> int:
 
     if missing_required:
         print(f"\n✗ 缺必需依赖：{'、'.join(p for _, p in missing_required)}")
-        print('  本解释器装：pip install -e ".[dev,mouse,macos,gui]"')
-        print("  或者换成跑应用的那个解释器 —— 两处必须是同一个，装到另一个 python3 等于没装。")
+        print('  本解释器装：pip install -e ".[dev,mouse,macos,gui,tray]"')
+        print("  或者换成仓库内 .venv / 跑应用的那个解释器 —— 两处必须是同一个，装到另一个 python3 等于没装。")
         if strict:
             return 1
         print("  （加 --strict 让这一条直接失败，CI / 提交前检查用）")

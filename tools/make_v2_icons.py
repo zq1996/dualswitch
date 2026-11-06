@@ -19,12 +19,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# 托管环境的 PySide6（脚本可独立运行）
-sys.path.insert(
-    0,
-    "/Users/zhqi/.workbuddy/binaries/python/envs/default/lib/python3.13/site-packages",
-)
-
 from PySide6.QtCore import QPointF, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import (  # noqa: E402
     QColor,

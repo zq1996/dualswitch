@@ -9,7 +9,7 @@
     python tools/clip_serve.py --port 47823 --log outputs/clip_serve.log
 
 mac 上必须用带 pyobjc 的解释器，否则后端会静默降级成 NullBackend：
-    ~/.workbuddy/binaries/python/envs/default/bin/python tools/clip_serve.py
+    .venv/bin/python tools/clip_serve.py
 """
 
 from __future__ import annotations
