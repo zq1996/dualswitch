@@ -659,7 +659,11 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
         kf = cfg.keyboard_follow
         key_endpoint = create_endpoint(
             cfg,
+            # 紧急停止组合：关掉转发 + 落盘（捕获端会先停吞键再回调）
             on_release=lambda: _on_keyboard_release(cfg, cfg_file),
+            # 转发期间由捕获端自己认切屏热键：热键的修饰键已经被吞给 Mac，
+            # Windows 看不到 Alt 按下，RegisterHotKey 根本不会触发（见 capture_windows）
+            on_hotkey=controller.trigger,
             rtt_probe=None,      # 引擎还没建，建好后回填
         )
         if kf.enabled:

@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import sys
-import types
+import threading
 
 import pytest
 
@@ -186,17 +186,45 @@ def test_unmapped_vk_is_passed_and_counted():
 # --------------------------------------------------------------------------- #
 # 白名单：热键 / 紧急停止
 # --------------------------------------------------------------------------- #
-def test_hotkey_is_neither_forwarded_nor_swallowed():
-    """吞了切屏热键，用户就再也切不回来了（§8.7）。"""
+def test_hotkey_is_handled_locally_while_forwarding():
+    """转发期间热键由捕获端自己认 —— **不能**放行给 Windows。
+
+    现场：热键是 Alt+Space，而 Alt 在转发期间已经被吞给 Mac 了，Windows 根本看不到
+    Alt 按下。放行 Space 的话 RegisterHotKey / 钩子后端都不会触发 —— 用户按热键毫无
+    反应，等于**再也切不回来**（§8.7 最怕的那件事）。
+    """
+    fired = threading.Event()
     mods = {0xA4: True}
-    cap, engine, _, clock = make_capture(enabled=True, mods=mods)
+    cap, engine, _, clock = make_capture(
+        enabled=True, mods=mods, on_hotkey=lambda: fired.set()
+    )
     arm(cap, clock)
-    assert cap.on_hook_event(0x20, True, FakeKB()) is False     # Alt+Space
+
+    assert cap.on_hook_event(0x20, True, FakeKB()) is True    # Alt+Space：吞掉
+    assert fired.wait(1.0), "转发期间按热键必须真的触发切屏"
+    assert cap.on_hook_event(0x20, False, FakeKB()) is True   # 抬起也吞（不漏半下）
     flush(cap)
-    assert engine.keys == []
-    # 普通空格（没按 Alt）照常转发
+    assert engine.keys == [], "热键一个字节都不该发给对端"
+
+    # 没按 Alt 的普通空格照常转发
     mods[0xA4] = False
     assert cap.on_hook_event(0x20, True, FakeKB()) is True
+    flush(cap)
+    assert [k["u"] for k in engine.keys] == [0x2C]
+
+
+def test_hotkey_passes_through_when_not_forwarding():
+    """画面在本机时不接管热键：交给系统热键后端，行为与没装键盘桥时一致。"""
+    fired = threading.Event()
+    cap, engine, _, clock = make_capture(
+        enabled=True, mods={0xA4: True}, on_hotkey=lambda: fired.set()
+    )
+    arm(cap, clock)
+    cap._target = "windows"                    # noqa: SLF001 - 画面回到本机
+    assert cap.on_hook_event(0x20, True, FakeKB()) is False
+    assert not fired.wait(0.1)
+    flush(cap)
+    assert engine.keys == []
 
 
 def test_release_chord_stops_forwarding_and_reports():
@@ -210,7 +238,9 @@ def test_release_chord_stops_forwarding_and_reports():
     cap.on_hook_event(0x41, True, FakeKB())      # 先按着一个键
     flush(cap)
     swallowed = cap.on_hook_event(0x4B, True, FakeKB())   # Ctrl+Alt+Shift+K
-    assert swallowed is False, "紧急组合本身要放行，用户得看见它生效"
+    # **必须吞掉**：它的修饰键已经被吞给 Mac 了，放行就是一个光秃秃的 `k`
+    # 打进 Windows 前台窗口
+    assert swallowed is True
     assert asked == [True]
     assert cap.enabled is False
     assert cap.forwarding is False

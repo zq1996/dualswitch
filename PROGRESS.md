@@ -534,7 +534,11 @@ dualswitch/
   · `keyboard.create_endpoint()`：按平台返回捕获端 / 注入端，`cli.py` 不写平台分支；
     `app._commit_read_host()` 补一条 —— **外部切换**（对端发起 / 手按 OSD）也要通知键盘
     端点，否则画面回来了键盘还往对面打。
-  · 与设计稿的两处偏差：Raw Input 互证、`SetThreadExecutionState` 保活都没做，
+  · **白名单不能"放行"**（方案 §8.7 有漏洞，实现期改掉）：热键的修饰键在转发期间
+    已经被吞给 Mac，Windows 看不到 Alt 按下 —— 放行 Space 的话 RegisterHotKey 根本不会
+    触发，用户按热键毫无反应 = **再也切不回来**。改成"转发期间由捕获端自己认组合并
+    回调切屏"；紧急停止组合同理（否则漏下去的是一个光秃秃的 `k`，会打进前台窗口）。
+  · 与设计稿的另两处偏差：Raw Input 互证、`SetThreadExecutionState` 保活都没做，
     理由写在 `docs/KEYBOARD-BRIDGE.md` §14 阶段 2（都不解决闸门真正关心的两个条件）。
   · `tools/key_tap_probe.py`：逐键打印 usage / 是否注入 / 闸门四条件，`--swallow` 才真吞。
 
@@ -549,7 +553,7 @@ dualswitch/
   · 窗口 580 → **550**：Windows 标题栏画在窗口内部，页面只拿 `WIN_H−40−2`；
     最坏文案下切换页最小高度 482（实测），550 装得下且留 ~26px 呼吸。**没照抄 mac2 的 570**
     —— 那会多出 48px 空洞。守备用例把页面放进真实 MainWindow 量，不推算常量。
-  **验证**：全量 **586 passed / 12 skipped**（基线 554/12，+32 例）；
+  **验证**：全量 **588 passed / 12 skipped**（基线 554/12，+34 例）；
   离屏 `ui2` 跑满 12 秒零 traceback；`windows` 平台抓图逐页核验（跟随卡片三态 + tip 弹层）。
   **未做**：真机联调（连续切 20 次 / 打字 10 分钟 / 拔网线自愈 / `Fn+W` 挪走键盘），
   这四条要两台机器都在场。

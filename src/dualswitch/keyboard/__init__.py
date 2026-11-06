@@ -53,6 +53,7 @@ def create_endpoint(
     *,
     hotkey: Any = None,
     on_release: Callable[[], None] | None = None,
+    on_hotkey: Callable[[], None] | None = None,
     rtt_probe: Callable[[], bool | None] | None = None,
 ) -> Any:
     """按平台建键盘端点：Windows 捕获端 / macOS 注入端。
@@ -82,6 +83,7 @@ def create_endpoint(
             key_state_hz=int(getattr(kf, "key_state_hz", 10) or 10),
             enabled=bool(getattr(kf, "enabled", False)),
             on_release_request=on_release,
+            on_hotkey=on_hotkey,
             rtt_probe=rtt_probe,
         )
 

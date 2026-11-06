@@ -99,6 +99,7 @@ class KeyboardCapture:
         caps_reader: Callable[[], bool] = caps_lock_on,
         mods_reader: Callable[[int], bool] = key_down,
         on_release_request: Callable[[], None] | None = None,
+        on_hotkey: Callable[[], None] | None = None,
         rtt_probe: Callable[[], bool | None] | None = None,
         rtt_interval_s: float = 5.0,
     ) -> None:
@@ -110,6 +111,10 @@ class KeyboardCapture:
         self._caps_reader = caps_reader
         self._mods_reader = mods_reader
         self._on_release_request = on_release_request
+        self._on_hotkey = on_hotkey
+        #: 刚刚被我们吃掉的"白名单键"的 VK：它的抬起也要吃掉，否则会漏一个孤立的
+        #: keyup 给 Windows（对大多数键无害，但用户会看到"我按了一下，系统收到半下"）。
+        self._swallow_up_vk: int | None = None
         self._rtt_probe = rtt_probe
         self._rtt_interval = max(1.0, float(rtt_interval_s))
         self._hz = max(1, min(50, int(key_state_hz)))
@@ -323,24 +328,43 @@ class KeyboardCapture:
         """钩子回调。返回 True = 吞掉。**这里只做判断和入队，绝不做 I/O。**"""
         if kb is not None and getattr(kb, "injected", False):
             return False          # 自己注入的事件不路由（防回环）
+        # 上一次被我们吃掉的键（热键 / 紧急组合）：抬起也吃掉，别漏半下给 Windows
+        if not down and self._swallow_up_vk is not None and self._swallow_up_vk == vk:
+            self._swallow_up_vk = None
+            return True
+
         usage = usage_for_vk(vk)
         if usage is None:
             if down:
                 self.stats["dropped_unmapped"] += 1
             return False
 
-        # 紧急停止组合：命中就解除转发，并**放行**这个键（不吞，用户能看到它生效）
+        # ---- 紧急停止组合 ----
+        # **必须吃掉这个键**：它的修饰键（Ctrl/Alt/Shift）在转发期间已经被吞给 Mac 了，
+        # Windows 根本不知道它们按着 —— 放行的话就是一个光秃秃的 `k` 打进了前台窗口。
         if down and self._matches(vk, usage, self.release_vk, self.release_mods):
             log.warning("紧急停止组合命中，键盘转发放手")
+            # **先算"吞不吞"再停转发**：`_trigger_release()` 会把 forwarding 变成 False，
+            # 之后再问就永远得到 False —— 那个 `k` 就会漏给 Windows。
+            swallow = self._should_swallow_whitelist()
+            self._swallow_up_vk = vk if swallow else None
             self._trigger_release()
-            return False
+            return swallow
 
         if usage in MODIFIER_USAGES or usage == 0x39:
             self._track_local_state(usage, down)
 
-        # 白名单：切屏热键永远不转发也不吞（否则用户切不回来）
-        if self._matches(vk, usage, self.hotkey_vk, self.hotkey_mods):
-            return False
+        # ---- 切屏热键 ----
+        # 这里**不能**简单"放行给 Windows"：热键是 Alt+Space，而 Alt 在转发期间已经被
+        # 我们吞给 Mac 了，Windows 看不到 Alt 按下 —— RegisterHotKey / 钩子后端都不会
+        # 触发，用户按热键毫无反应，等于**再也切不回来**（§8.7 最怕的那件事）。
+        # 所以转发期间由捕获端自己认这个组合并直接回调，按键一个都不外泄。
+        if down and self._matches(vk, usage, self.hotkey_vk, self.hotkey_mods):
+            if not self.forwarding:
+                return False              # 没在转发：交给系统热键后端，行为不变
+            self._swallow_up_vk = vk
+            self._fire_hotkey()
+            return self._should_swallow_whitelist()
 
         if not self._gate_open():
             self.stats["passed"] += 1
@@ -357,6 +381,26 @@ class KeyboardCapture:
         self.stats["keys"] += 1
         self.stats["swallowed"] += 1
         return True
+
+    def _should_swallow_whitelist(self) -> bool:
+        """白名单键该不该吞。**只要在转发中就必须吞**（见上面两段的理由），
+        不在转发中一律放行，交回系统热键后端，行为与没装键盘桥时一致。"""
+        return bool(self.forwarding)
+
+    def _fire_hotkey(self) -> None:
+        """触发切屏。**另起线程**：钩子回调里做 DDC Set 会卡住整条输入链。"""
+        callback = self._on_hotkey
+        if callback is None:
+            return
+        threading.Thread(target=self._run_callback, args=(callback, "切屏热键"),
+                         name="keyboard-hotkey", daemon=True).start()
+
+    @staticmethod
+    def _run_callback(callback: Callable[[], None], what: str) -> None:
+        try:
+            callback()
+        except Exception:  # noqa: BLE001 - 回调炸了不能把键盘留在吞键态
+            log.exception("%s回调失败", what)
 
     def _matches(self, vk: int, usage: int, want_vk: int | None, want_mods: tuple[str, ...]) -> bool:
         if want_vk is None:

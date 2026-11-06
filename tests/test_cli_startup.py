@@ -30,6 +30,11 @@ class FakeController:
         self.remote_ready = None
         self.peer_sees_monitor = None
         self.keyboard: object = "未挂载"
+        self.triggers = 0
+
+    def trigger(self) -> None:
+        """切屏热键的入口。捕获端在转发期间会直接调它（见 capture_windows）。"""
+        self.triggers += 1
 
     def add_before_switch(self, fn) -> None:  # noqa: ANN001
         self.before_switch.append(fn)
