@@ -514,6 +514,27 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-01 17:45 **开机自启升级为「无需登录」版（任务计划程序）**。
+  用户要求开机即启动、不输开机密码也生效。原 `install_autostart.ps1`（启动文件夹
+  快捷方式）要登录后才启动，满足不了。新增
+  `packaging/windows/install_autostart_service.ps1` / `uninstall_autostart_service.ps1`：
+  注册两个计划任务——
+  `DualSwitchBoot`（ONSTART，SYSTEM，开机 15s 延迟）跑 `run --no-tray --no-console
+  --config <用户 config.json 绝对路径>`（**必须显式传 config**：SYSTEM 的 %APPDATA%
+  不指向用户目录，psk/槽位都读不到）；`DualSwitchLogon`（ONLOGON，交互令牌，5s 延迟）
+  先 taskkill 结束 SYSTEM 实例再拉 `ui2`（剪贴板同步必须跑在交互会话，且避免双实例
+  抢 47823 端口/热键；SO_REUSEADDR 下双绑定不会报错只会串连接）。
+  动作脚本放 `%ProgramData%\DualSwitch\`（boot.cmd / logon.cmd / logon.vbs，
+  vbs 套 wscript 为消除登录时黑框闪烁；重建 dist 不受影响）。
+  已知取舍：登录前剪贴板内容同步不生效（SYSTEM 会话看不到用户剪贴板），链路/切屏/代发可用；
+  引擎日志在 systemprofile 的 AppData 下。装了这个就不要再装启动文件夹快捷方式（双实例）。
+  注意：本机安全策略把 schtasks.exe 拉黑，脚本由用户在管理员 PowerShell 自行执行。
+  脚本均 UTF-8 with BOM，PSParser 解析通过；打包 exe `run --help` 参数解析实测通过。
+- 2026-11-01 18:55 **修 install_autostart_service.ps1 首跑失败**（用户回报 schtasks
+  「无效参数 - 'C:\...\boot.cmd\'」）。原因：PS 5.1 往原生程序传 `\"` 转义引号会被搅
+  （引号被吞、结尾多反斜杠）。改法：/TR 一律传裸路径（动作脚本固定在无空格的
+  %ProgramData%\DualSwitch\ 下），%ProgramData% 万一带空格则 FSO ShortPath 8.3 兜底。
+
 - 2026-10-30 22:20 **清掉旧包 + 重新打包 + 桌面快捷方式**。
   删除：`dist\dualswitch`（134MB，10-24 16:54 的旧包）、`build\dualswitch`（20MB 中间产物）、
   `build\dualswitch.spec`、桌面 `dualswitch.exe - 快捷方式.lnk`（移入回收站）。
