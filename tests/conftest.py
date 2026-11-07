@@ -14,6 +14,7 @@
 3. **报告头**打印解释器与缺失的可选依赖，让"红"之前先看到"你缺什么"。
 """
 
+import gc
 import importlib
 import importlib.abc
 import os
@@ -152,6 +153,43 @@ def pytest_report_header(config):  # noqa: ARG001
 # --------------------------------------------------------------------------- #
 # 既有：测试一律不广播发现报文
 # --------------------------------------------------------------------------- #
+def _qt_cleanup() -> None:
+    """每个 UI 用例结束后释放顶层窗口。
+
+    为什么需要：PySide6 在解释器退出时会遍历所有 Python 包装的 QWidget；
+    如果此时还有没销毁的顶层窗口，子控件（QPushButton 等）可能已经被 C++ 父对象
+    删掉，Python 包装再析构一次就是 SIGABRT —— macOS 上会弹「Python 意外退出」。
+    在 QApplication 还活着时关掉/删除窗口，能把这一整类退出崩溃挡在测试阶段。
+    """
+    try:
+        from PySide6.QtWidgets import QApplication
+    except Exception:  # noqa: BLE001 - 没装 PySide6 的机器无窗口可清
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in list(app.topLevelWidgets()):
+        try:
+            widget.close()
+            widget.deleteLater()
+        except Exception:  # noqa: BLE001 - 已销毁的控件直接跳过
+            pass
+    try:
+        app.processEvents()
+    except Exception:  # noqa: BLE001
+        pass
+    gc.collect()
+    try:
+        app.processEvents()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def pytest_runtest_teardown(item, nextitem):  # noqa: ARG001
+    """UI 用例结束就清窗口，别留到解释器退出时算总账。"""
+    _qt_cleanup()
+
+
 @pytest.fixture(autouse=True)
 def _no_discovery_broadcast(monkeypatch):
     """测试一律不广播发现报文（BUG-003）。

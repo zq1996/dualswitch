@@ -222,6 +222,7 @@ class SwitchCard(QFrame):
         col.setSpacing(4)
         self.name = label((monitor_name or "").strip() or "外接显示器", "heroName")
         self.sub = label(self._port_line(), "heroSub")
+        self.sub.setWordWrap(True)   # 4 口屏的端口名+码值会更长，装不下就换行
         src = QHBoxLayout()
         src.setContentsMargins(0, 2, 0, 0)
         src.setSpacing(6)
@@ -243,6 +244,7 @@ class SwitchCard(QFrame):
         acts = QVBoxLayout()
         acts.setContentsMargins(0, 0, 0, 0)
         acts.setSpacing(8)
+        self._acts = acts
         self.rows: list[ActionRow] = []
         for port, value in cfg.active_ports():
             row = ActionRow(port, int(value), role=cfg.port_role(port))
@@ -295,6 +297,24 @@ class SwitchCard(QFrame):
     # ------------------------------------------------------------------ 状态
     def set_monitor_name(self, name: str) -> None:
         self.name.setText((name or "").strip() or "外接显示器")
+
+    def rebuild(self, cfg) -> None:  # noqa: ANN001
+        """profile / wiring 变了以后重建端口行（换屏、标定、改接线都走这里）。"""
+        self.cfg = cfg
+        self.sub.setText(self._port_line())
+        while self._acts.count():
+            item = self._acts.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.rows = []
+        for port, value in cfg.active_ports():
+            row = ActionRow(port, int(value), role=cfg.port_role(port))
+            row.localClicked.connect(self.localRequested)
+            row.peerClicked.connect(self.peerRequested)
+            self.rows.append(row)
+            self._acts.addWidget(row)
+        self._apply_enabled()
 
     def set_owner(self, host: str | None, detail: str = "") -> None:
         """画面读数：`host` 为 None/空 = 读不到。
@@ -398,6 +418,11 @@ class SwitchPage(QWidget):
     def set_monitor_name(self, name: str) -> None:
         self.monitor_name = name or ""
         self.hero.set_monitor_name(self.monitor_name)
+
+    def set_config(self, cfg) -> None:  # noqa: ANN001
+        """配置变了（标定 / 改接线 / 重新识别）后刷新端口行。"""
+        self.cfg = cfg
+        self.hero.rebuild(cfg)
 
     def set_remote_available(self, available: bool) -> None:
         self._remote_ok = bool(available)

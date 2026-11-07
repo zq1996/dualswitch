@@ -176,6 +176,7 @@ class SettingsPage(QWidget):
     probeRequested = Signal()              # 高级：探测显示器 / 读取输入源
     openLogRequested = Signal()            # 高级：查看日志
     openConfigDirRequested = Signal()      # 高级：打开配置目录
+    monitorConfigRequested = Signal()      # 「显示器配置 ›」子页入口
 
     def __init__(self, cfg: Config, config_file: Path, parent=None):
         super().__init__(parent)
@@ -262,7 +263,15 @@ class SettingsPage(QWidget):
         self.edit_match.setPlaceholderText("（自动取第一台）")
         self.edit_match.editingFinished.connect(self._apply)
         val_backend = label(self.cfg.ddc_backend, "setVal")
+        self.btn_monitor = QPushButton("显示器配置 ›")
+        self.btn_monitor.setObjectName("ghostBtn")
+        self.btn_monitor.setFixedHeight(28)
+        self.btn_monitor.setMinimumWidth(88)
+        self.btn_monitor.setCursor(Qt.PointingHandCursor)
+        self.btn_monitor.setFocusPolicy(Qt.NoFocus)
+        self.btn_monitor.clicked.connect(self.monitorConfigRequested)
         lay.addWidget(self._section("显示器", [
+            settings_row("显示器配置", "标定端口码表 / 设置这台与对方接哪个口", self.btn_monitor),
             settings_row("显示器匹配", "按设备名或 device_id 的片段定位这台屏", self.edit_match),
             settings_row("DDC 后端", "auto / dxva2 / command / mock", val_backend),
             settings_row("输入源映射", "27 会被这块屏拒绝，别照抄网上的值", self._sources_control()),

@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 from . import icons, theme
 from .widgets import KeyCaps, NavButton, dot, label
 
-PAGE_SWITCH, PAGE_CLIP, PAGE_SETTINGS, PAGE_PAIR = 0, 1, 2, 3
+PAGE_SWITCH, PAGE_CLIP, PAGE_SETTINGS, PAGE_PAIR, PAGE_MONITOR = 0, 1, 2, 3, 4
 
 # footer 对齐规范（8px 栅格）：
 #   [10px 行内边距][16px 图标/灯列][8px 间距][文字列]
@@ -339,16 +339,20 @@ class MainWindow(QWidget):
         self._page = PAGE_SWITCH
 
     # ------------------------------------------------------------------ 页面
-    def attach_pages(self, switch_page, clip_page, settings_page, pairing_page=None) -> None:
+    def attach_pages(self, switch_page, clip_page, settings_page, pairing_page=None,
+                     monitor_page=None) -> None:
         self.switch_page = switch_page
         self.clip_page = clip_page
         self.settings_page = settings_page
         self.pairing_page = pairing_page
+        self.monitor_page = monitor_page
         self.pages.addWidget(switch_page)
         self.pages.addWidget(clip_page)
         self.pages.addWidget(settings_page)
         if pairing_page is not None:
             self.pages.addWidget(pairing_page)
+        if monitor_page is not None:
+            self.pages.addWidget(monitor_page)
         self.switch_page.localRequested.connect(self.localRequested)
         self.switch_page.peerRequested.connect(self.peerRequested)
 
@@ -358,7 +362,8 @@ class MainWindow(QWidget):
         self.nav_switch.setChecked(index == PAGE_SWITCH)
         self.nav_clip.setChecked(index == PAGE_CLIP)
         self.nav_pair.setChecked(index == PAGE_PAIR)
-        self.nav_settings.setChecked(index == PAGE_SETTINGS)
+        # 显示器配置是设置页的子页：左侧栏仍高亮「设置」
+        self.nav_settings.setChecked(index in (PAGE_SETTINGS, PAGE_MONITOR))
         for btn in (self.nav_switch, self.nav_clip, self.nav_pair, self.nav_settings):
             btn.update()
         title = {
@@ -366,6 +371,7 @@ class MainWindow(QWidget):
             PAGE_CLIP: "剪贴板",
             PAGE_PAIR: "配对电脑",
             PAGE_SETTINGS: "设置",
+            PAGE_MONITOR: "显示器配置",
         }[index]
         from ...config import APP_DISPLAY_NAME
 
@@ -380,6 +386,13 @@ class MainWindow(QWidget):
 
     def current_page(self) -> int:
         return self._page
+
+    def apply_port_count(self, cfg) -> None:  # noqa: ANN001
+        """profile 变了（换屏 / 标定 / 改端口表）后，窗口高度跟着端口行数走。"""
+        from ...ddc.profiles import ROW_H
+
+        extra = max(0, len(cfg.active_ports()) - 2) * ROW_H
+        self.setFixedSize(theme.WIN_W, theme.WIN_H + extra)
 
     def on_clipboard_page(self) -> bool:
         return self._page == PAGE_CLIP

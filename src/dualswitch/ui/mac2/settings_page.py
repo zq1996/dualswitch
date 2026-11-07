@@ -143,6 +143,7 @@ class SettingsPage(QWidget):
     clearRequested = Signal()         # 「存储上限」旁边的清理按钮
     recordingChanged = Signal(bool)   # 热键录制中 → 调用方暂停全局热键
     toastRequested = Signal(str)
+    monitorConfigRequested = Signal()  # 「显示器配置 ›」子页入口
 
     def __init__(self, cfg: Config, config_file: Path, parent=None):
         super().__init__(parent)
@@ -219,7 +220,15 @@ class SettingsPage(QWidget):
         # ---- 显示器 ----
         val_match = label(self.cfg.monitor_match or "（自动取第一台）", "setVal")
         val_backend = label(self.cfg.ddc_backend, "setVal")
+        self.btn_monitor = QPushButton("显示器配置 ›")
+        self.btn_monitor.setObjectName("ghostBtn")
+        self.btn_monitor.setFixedHeight(28)
+        self.btn_monitor.setMinimumWidth(88)
+        self.btn_monitor.setCursor(Qt.PointingHandCursor)
+        self.btn_monitor.setFocusPolicy(Qt.NoFocus)
+        self.btn_monitor.clicked.connect(self.monitorConfigRequested)
         lay.addWidget(self._section("显示器", [
+            settings_row("显示器配置", "标定端口码表 / 设置这台与对方接哪个口", self.btn_monitor),
             settings_row("显示器匹配", "按 m1ddc 列出的显示器名匹配", val_match),
             settings_row("DDC 后端", "auto 在 mac 上即 m1ddc", val_backend),
         ]))

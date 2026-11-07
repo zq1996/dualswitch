@@ -2265,3 +2265,100 @@ def test_hover_tip_wraps_long_text_and_waits_for_the_delay(app, cfg):
     bubble.hide()
     btn.hide()
 
+
+# --------------------------------------------------------------------------- #
+# P2：显示器配置子页 + 标定向导
+# --------------------------------------------------------------------------- #
+def _cfg_with(identity_key: str):
+    from dualswitch.ddc.identity import DisplayIdentity
+    from dualswitch.ddc.profiles import resolve_active
+
+    cfg = platform_defaults()
+    mfg, _, pid = identity_key.partition(":")
+    ident = DisplayIdentity(mfg, int(pid), name="U27N3G6R4B", slot="dispext0")
+    resolve_active(cfg, ident)
+    return cfg, ident
+
+
+def test_settings_has_monitor_config_entry(app, cfg):
+    from dualswitch.ui.mac2.settings_page import SettingsPage
+
+    page = SettingsPage(cfg, "/tmp/dualswitch-v3-test.json")
+    hits = []
+    page.monitorConfigRequested.connect(lambda: hits.append(True))
+    assert page.btn_monitor.text() == "显示器配置 ›"
+    page.btn_monitor.click()
+    assert hits == [True]
+
+
+def test_monitor_page_shows_three_ports_for_current_screen(app):
+    from dualswitch.ui.mac2.monitor_page import MonitorPage
+
+    cfg, _ = _cfg_with("AOC:10128")
+    page = MonitorPage(cfg, "/tmp/dualswitch-v3-test.json")
+    assert set(page._port_edits) == {"hdmi1", "dp", "usb_c"}
+    assert page.combo_local.count() == 3
+    assert page.combo_peer.count() == 3
+    assert page.pill.text() == "已标定"
+
+
+def test_monitor_page_fits_inside_the_window(app):
+    """570 高的窗口里默认状态不出现整页滚动条（§6.8）。"""
+    from dualswitch.ui.mac2.monitor_page import MonitorPage
+
+    cfg, _ = _cfg_with("AOC:10128")
+    page = MonitorPage(cfg, "/tmp/dualswitch-v3-test.json")
+    page.resize(theme.WIN_W, theme.WIN_H)
+    page.show()
+    app.processEvents()
+    assert page.minimumSizeHint().height() <= theme.WIN_H
+
+
+def test_monitor_page_saves_edited_port_table(app, tmp_path):
+    import json
+
+    from dualswitch.ui.mac2.monitor_page import MonitorPage
+
+    cfg, _ = _cfg_with("AOC:10128")
+    target = tmp_path / "config.json"
+    page = MonitorPage(cfg, target)
+    page._port_edits["dp"].setText("27")
+    page._save_ports()
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["monitors"]["AOC:10128"]["ports"]["dp"] == 27
+    assert data["active_monitor"] == "AOC:10128"
+
+
+def test_calibration_dialog_preselects_known_ports(app):
+    from dualswitch.ddc.mock import MockBackend
+    from dualswitch.ui.mac2.calibrate import CalibrationDialog
+
+    cfg, _ = _cfg_with("AOC:10128")
+    profile = cfg.active_profile()
+    dialog = CalibrationDialog(profile, MockBackend(current=18), None, None)
+    try:
+        assert [p for p, box in dialog._checks.items() if box.isChecked()] == [
+            "hdmi1",
+            "dp",
+            "usb_c",
+        ]
+    finally:
+        dialog.close()
+
+
+def test_calibration_dialog_unknown_screen_defaults_to_three_common_ports(app):
+    from dualswitch.ddc.mock import MockBackend
+    from dualswitch.ddc.profiles import default_profile
+    from dualswitch.ui.mac2.calibrate import CalibrationDialog
+
+    profile = default_profile({"windows": 17, "mac": 18}, "mac")
+    dialog = CalibrationDialog(profile, MockBackend(current=18), None, None)
+    try:
+        assert [p for p, box in dialog._checks.items() if box.isChecked()] == [
+            "hdmi1",
+            "dp",
+            "usb_c",
+        ]
+    finally:
+        dialog.close()
+

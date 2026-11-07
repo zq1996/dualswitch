@@ -1537,3 +1537,67 @@ def test_peer_button_greys_out_when_peer_offline(app, cfg):
     for row in rows:
         assert row.btn_peer.isEnabled()
         assert row.btn_peer.toolTip() == ""
+
+
+# --------------------------------------------------------------------------- #
+# P2：显示器配置子页 + 标定向导（Windows 端）
+# --------------------------------------------------------------------------- #
+def _cfg_with(identity_key: str):
+    from dualswitch.ddc.identity import DisplayIdentity
+    from dualswitch.ddc.profiles import resolve_active
+
+    cfg = platform_defaults()
+    mfg, _, pid = identity_key.partition(":")
+    ident = DisplayIdentity(mfg, int(pid), name="U27N3G6R4B", slot="DISPLAY\\AOC2790\\mock")
+    resolve_active(cfg, ident)
+    return cfg, ident
+
+
+def test_settings_has_monitor_config_entry(app, cfg):
+    page = SettingsPage(cfg, "C:/dualswitch-v3-test.json")
+    hits = []
+    page.monitorConfigRequested.connect(lambda: hits.append(True))
+    assert page.btn_monitor.text() == "显示器配置 ›"
+    page.btn_monitor.click()
+    assert hits == [True]
+
+
+def test_monitor_page_shows_three_ports_for_current_screen(app):
+    from dualswitch.ui.win2.monitor_page import MonitorPage
+
+    cfg, _ = _cfg_with("AOC:10128")
+    page = MonitorPage(cfg, "C:/dualswitch-v3-test.json")
+    assert set(page._port_edits) == {"hdmi1", "dp", "usb_c"}
+    assert page.combo_local.count() == 3
+    assert page.combo_peer.count() == 3
+    assert page.pill.text() == "已标定"
+
+
+def test_monitor_page_saves_edited_port_table(app, tmp_path):
+    import json
+
+    from dualswitch.ui.win2.monitor_page import MonitorPage
+
+    cfg, _ = _cfg_with("AOC:10128")
+    target = tmp_path / "config.json"
+    page = MonitorPage(cfg, target)
+    page._port_edits["dp"].setText("27")
+    page._save_ports()
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["monitors"]["AOC:10128"]["ports"]["dp"] == 27
+
+
+def test_calibration_dialog_preselects_known_ports(app):
+    from dualswitch.ddc.mock import MockBackend
+    from dualswitch.ui.win2.calibrate import CalibrationDialog
+
+    cfg, _ = _cfg_with("AOC:10128")
+    dialog = CalibrationDialog(cfg.active_profile(), MockBackend(current=18), None, None)
+    try:
+        assert [p for p, box in dialog._checks.items() if box.isChecked()] == [
+            "hdmi1",
+            "dp",
+            "usb_c",
+        ]
+    finally:
+        dialog.close()

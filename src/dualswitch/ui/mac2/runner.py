@@ -20,11 +20,20 @@ from ... import __version__, logging_setup
 from ...config import SOURCE_UNKNOWN, save as save_config
 from ..clipboard_feed import LocalClipFeed
 from . import openers, statusmenu, theme
+from .calibrate import CalibrationDialog
 from .clipboard_page import ClipboardPage
+from .monitor_page import MonitorPage
 from .pairing_page import PairingPage
 from .settings_page import SettingsPage
 from .switch_page import SwitchPage
-from .window import PAGE_CLIP, PAGE_PAIR, PAGE_SETTINGS, PAGE_SWITCH, MainWindow
+from .window import (
+    PAGE_CLIP,
+    PAGE_MONITOR,
+    PAGE_PAIR,
+    PAGE_SETTINGS,
+    PAGE_SWITCH,
+    MainWindow,
+)
 
 log = logging_setup.get("ui")
 
@@ -122,11 +131,16 @@ class UiRunner2(QObject):
             ),
         )
         self.settings_page = SettingsPage(cfg, self.cfg_file)
+        self.monitor_page = MonitorPage(cfg, self.cfg_file)
         self.pairing_page = PairingPage(
             clip_engine, default_port=cfg.clipboard.effective_peer_port()
         )
         self.window.attach_pages(
-            self.switch_page, self.clipboard_page, self.settings_page, self.pairing_page
+            self.switch_page,
+            self.clipboard_page,
+            self.settings_page,
+            self.pairing_page,
+            monitor_page=self.monitor_page,
         )
         # 配对落盘要用「当前」cfg（设置页保存后 runner 会换成新对象）
         if self.clip_engine is not None:
@@ -166,6 +180,13 @@ class UiRunner2(QObject):
             self.clipboard_page.clear_records_with_confirm
         )
         self.settings_page.recordingChanged.connect(self._on_recording_changed)
+        self.settings_page.monitorConfigRequested.connect(self.open_monitor_page)
+        self.monitor_page.backRequested.connect(lambda: self.show_page(PAGE_SETTINGS))
+        self.monitor_page.saved.connect(self.on_config_saved)
+        self.monitor_page.reidentifyRequested.connect(self.reidentify_monitor)
+        self.monitor_page.calibrateRequested.connect(self.open_calibration)
+        self.monitor_page.toastRequested.connect(self.toast.show_text)
+        self._onboard_shown = False
 
         # 首帧：归属状态以控制器为准（note_scan 启动探测已喂过一次，
         # DDC 直读可用时首帧就是真值；还判不出则显示「未检测」），
@@ -209,6 +230,7 @@ class UiRunner2(QObject):
         self.app.installEventFilter(self)
         self._center(self.window)
         self.window.show()
+        QTimer.singleShot(1200, self._maybe_onboard)
         if warning:
             self.window.switch_page.set_note(f"热键未启用：{warning}", ok=False)
 
@@ -319,6 +341,67 @@ class UiRunner2(QObject):
         if index == PAGE_SWITCH:
             self._refresh_owner_bg()
 
+    def open_monitor_page(self) -> None:
+        self.monitor_page.set_config(self.cfg)
+        self.show_page(PAGE_MONITOR)
+
+    def open_calibration(self, profile) -> None:  # noqa: ANN001
+        dialog = CalibrationDialog(
+            profile,
+            self.backend,
+            self.controller,
+            self._on_calibrated,
+            self.window,
+        )
+        dialog.exec()
+
+    def _on_calibrated(self, profile) -> None:  # noqa: ANN001
+        """标定完成：写回 profile、刷新端口行与窗口高度。"""
+        self.cfg.monitors[profile.key] = profile
+        self.cfg.active_monitor = profile.key
+        self.cfg.set_active_profile(profile)
+        try:
+            save_config(self.cfg, self.cfg_file)
+        except Exception as exc:  # noqa: BLE001 - 保存失败也要让本次生效
+            log.error("保存标定结果失败：%s", exc)
+            self.toast.show_text(f"标定已生效，但保存失败：{exc}")
+        else:
+            self.toast.show_text(f"标定已保存：{profile.name or profile.key}")
+        self.controller.cfg = self.cfg
+        self.switch_page.set_config(self.cfg)
+        self.window.apply_port_count(self.cfg)
+        self.switch_page.set_monitor_name(self._monitor_name())
+        self.monitor_page.set_config(self.cfg)
+
+    def reidentify_monitor(self) -> None:
+        """重新读身份并重新匹配 profile（换屏后不用重启）。"""
+        from ...ddc import identity, profiles
+
+        try:
+            ident = identity.read_current()
+            profiles.resolve_active(self.cfg, ident)
+            save_config(self.cfg, self.cfg_file)
+        except Exception as exc:  # noqa: BLE001
+            self.toast.show_text(f"重新识别失败：{exc}")
+            return
+        self.controller.cfg = self.cfg
+        self.switch_page.set_config(self.cfg)
+        self.window.apply_port_count(self.cfg)
+        self.switch_page.set_monitor_name(self._monitor_name())
+        self.monitor_page.set_config(self.cfg)
+        self.toast.show_text("已重新识别显示器")
+
+    def _maybe_onboard(self) -> None:
+        """启动时识别不到已标定的 profile → 弹一次标定引导（可稍后再说）。"""
+        if self._onboard_shown:
+            return
+        profile = self.cfg.active_profile()
+        if profile.key != "default" or self.cfg.monitors.get("default") is None:
+            return
+        self._onboard_shown = True
+        self.switch_page.set_note("这块显示器还没标定 · 先用默认端口码，切屏仍可用", ok=False)
+        self.open_calibration(profile)
+
     def _refresh_owner_bg(self) -> None:
         """按需直读一次画面归属（后台线程，DDC 读 ~150ms 不能堵 UI）。"""
         threading.Thread(
@@ -335,6 +418,8 @@ class UiRunner2(QObject):
             self.pairing_page.activate()
         elif previous == PAGE_PAIR:
             self.pairing_page.deactivate()
+        if index == PAGE_MONITOR:
+            self.monitor_page.set_config(self.cfg)
 
     def _on_paired_changed(self, paired: bool) -> None:
         self.clipboard_page.mark_dirty()
@@ -727,8 +812,10 @@ class UiRunner2(QObject):
         if self.clip_engine is not None:
             self.clip_engine.cfg = cfg.clipboard
         self.controller.cfg = cfg
-        self.switch_page.cfg = cfg
+        self.switch_page.set_config(cfg)
         self.settings_page.cfg = cfg
+        self.monitor_page.set_config(cfg)
+        self.window.apply_port_count(cfg)
         # 外观固定浅色：用户 2026-10-21 明确不要深色模式（设置页已移除该项）
         theme.set_appearance("light")
         from . import icons
