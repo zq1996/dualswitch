@@ -519,6 +519,22 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-07 22:30 **切到 `v3` 分支做 Windows 复核，修掉「Windows 读不到显示器身份」**
+  （`docs/WINDOWS-VERIFY.md` §0.8）。
+  · 分支：`main` 快进到 `e87a9d3`；新建本地 `v3` 跟踪 `origin/v3`（`d24b4bf`，P1–P3 全量）。
+    v3 缺 `e87a9d3`（SIGTERM 处理器）但自己补过同一函数，**不需要合并 main**。
+  · **真 bug**：`ddc/identity.py` 的 Windows 分支只做一级 `EnumDisplayDevicesW`，而本机一级枚举
+    （即使带 `EDD_GET_DEVICE_INTERFACE_NAME`）返回的 `DeviceID` **全是空串** → 每条都 `continue`
+    → `read_displays()` 恒空。显示器接口路径只在**二级**枚举（适配器→监视器）里出现。
+    后果是静默降级：profile 退回 `default`、切换页只显示 2 个口、`doctor` 永远 warn。
+    修法：两级枚举 + 跳过 mirroring driver + 抽出 `pnp_from_device_id()`（纯函数、可单测）。
+    修完 `monitor identity` → `AOC:10128 Q2790R3 slot=DISPLAY\AOC2790\7&3ae6a500&1&UID524 sn=5363`，
+    命中内置 3 口表 `hdmi1=17 / dp=15 / usb_c=18`，wiring `local=hdmi1, peer=usb_c`。
+  · 6 个「按 macOS 本机写死」的跨平台用例改成都真跑（`test_profiles`×2、`test_config`×1、
+    `test_chrome_contract`×1、`test_ui_win2` 托盘×2）；新增 3 条 `pnp_from_device_id` 回归。
+  · 基线：**611 tests / 601 passed / 0 failed / 10 skipped**（Windows）。
+  · 界面：离屏抓图复核 3 口屏版面（780×608，三行端口、无重叠）；新增 `start-ui3.bat`。
+  · V3 独立配置目录 `dualswitch-v3` + 端口 47833/47834，**PSK 是新的 ⇒ 联调要重新配对**。
 - 2026-11-07 16:10 **Windows 端验证券 W1/W2/W3 回收，P1 阻塞解除**（`docs/WINDOWS-VERIFY.md`）。
   · 合并远端 `0937dbc` / `4af40bf`（V3 四份文档 + 删 v1 界面树 8,059 行 + 8 个垫片）。
   · W1：Windows 能拿到 `厂商:PID`。`WmiMonitorID` 四个身份字段全是 `uint16[]`，

@@ -193,7 +193,9 @@ def test_menu_entries_are_platform_agnostic():
     from dualswitch.config import Config
     from dualswitch.ui.mac2.statusmenu import MenuEntry, build_menu_entries
 
-    entries = build_menu_entries(Config(), "mac", "Right Option+Space", {})
+    cfg = Config()
+    # 「这台」= 本机所在的那一侧，不写死 mac（否则 Windows 上跑就成了「对面」）
+    entries = build_menu_entries(cfg, cfg.effective_host(), "Right Option+Space", {})
     assert all(isinstance(e, MenuEntry) for e in entries)
     titles = [e.title for e in entries]
     assert any("当前画面：这台" in t for t in titles)

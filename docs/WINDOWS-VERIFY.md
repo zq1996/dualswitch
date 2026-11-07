@@ -169,6 +169,47 @@ mac 侧报的「~50% 成功率、连续两次必吞一次」在本机 **没有�
 - 全量测试：`PYTHONPATH=src QT_QPA_PLATFORM=offscreen pytest tests` → **567 tests / 557 passed / 0 failed / 10 skipped**（本机基线）。
 - 合并远端后按约定扫了改动文件的同名定义，无重复遮蔽。
 
+### 0.8 P1–P3 合并到 `v3` 后的 Windows 复核（2026-11-07 22:1x 实跑）
+
+**发现一个真 bug：`ddc/identity.py` 的 Windows 分支永远读不到屏。**
+
+- 原实现只做**一级**枚举：`EnumDisplayDevicesW(None, i, &dev, EDD_GET_DEVICE_INTERFACE_NAME)`。
+  本机实测：一级枚举即使带 EDD 标志，返回的 `DeviceID` 全是**空串**（17 个适配器逐条为空），
+  于是 `if not raw: continue` 把每一条都跳掉 → `read_displays()` 恒返回 `[]`。
+- 显示器接口路径只出现在**二级**枚举：`EnumDisplayDevicesW(adapter.DeviceName, j, &mon, 0x1)`。
+  本机 `\\.\DISPLAY1` → `\\?\DISPLAY#AOC2790#7&3ae6a500&1&UID524#{e6f07b5f-…}`，
+  注册表 `…\Enum\DISPLAY\AOC2790\7&3ae6a500&1&UID524\Device Parameters\EDID` 有 128 字节。
+- 后果不是报错，是**静默降级**：`resolve_active()` 一路退回 `default` profile，切换页显示 2 个口
+  （实际这块屏 3 个口），`doctor` 的「显示器身份」永远是 warn —— 面板上看不出是 bug。
+- 修法：两级枚举（适配器 → 监视器），跳过 `DISPLAY_DEVICE_MIRRORING_DRIVER(0x8)`，
+  DeviceID → PnP 实例抽成纯函数 `pnp_from_device_id()`（可单测，不再用 `lstrip("\\?\\")`
+  那种按字符集剥的写法）。
+- 修完实测：
+
+  ```
+  $ python -m dualswitch monitor identity
+  AOC:10128 Q2790R3 slot=DISPLAY\AOC2790\7&3ae6a500&1&UID524 sn=5363
+  profile  : AOC:10128（内置）[('hdmi1', 17), ('dp', 15), ('usb_c', 18)]
+  wiring   : {'local': 'hdmi1', 'peer': 'usb_c'}
+  ```
+
+  与 §0.2 的 W1 结论（`AOC:10128`、SN 5363）一致，P1 的内置表在本机命中。
+
+**顺带修掉的 6 个跨平台用例**（都是「按 macOS 本机写死」，在 Windows 上真跑就红）：
+`test_profiles` 2 条（期望 `local=usb_c/peer=hdmi1`）、`test_config` 1 条（同上）、
+`test_chrome_contract` 1 条（把 `current="mac"` 当本机）、`test_ui_win2` 2 条托盘
+（P3 已把文案改成「这台 / 对端名字」，用例还在断言「Windows / Mac」）。
+
+**测试基线（v3 分支，Windows）**：`611 tests / 601 passed / 0 failed / 10 skipped`。
+
+**界面复核（离屏 `grab()`，3 口屏 AOC:10128）**：窗口 780×608（`WIN_H + 1×ROW_H`），
+切换页三行端口 `HDMI 1=17 本机输入口` / `DP=15 空闲输入口` / `USB-C=18 对端输入口`，
+显示器配置页 `Q2790R3 已标定 · 产品号 10128 · 序列号 5363 · 3 个输入口`，无重叠/裁字。
+
+**遗留（不阻塞联调）**：切换页「跟随画面 → 键盘转发」副文案仍写死「转发给 Mac」；
+设置页「输入源映射」仍是旧 `sources{windows,mac}` 口径（P3 的新路径是 profile + wiring）。
+双 Windows 场景下这两处文案会误导，属文案层，等 P4/收尾统一改。
+
 ---
 
 ## 以下为原始任务（存档，保持原文；结果见 §0）

@@ -7,9 +7,13 @@ V3 的 profile 主键是 `厂商:ProductID`（如 `AOC:9987`）。这个模块�
   `dispN` / `dispextN` 是型号与 `DCPAVServiceProxy` 句柄的共同前缀，
   所以这里返回的 `slot` 可以直接交给 `ddc/avservice.py` 挑句柄。
   内建屏没有 `ProductName`，据此过滤，不靠 VCP 试错。
-* Windows：`EnumDisplayDevicesW(EDD_GET_DEVICE_INTERFACE_NAME)` 拿活动屏的
-  PnP 实例，再从注册表 `...\\Device Parameters\\EDID` 解 128 字节。
+* Windows：**两级** `EnumDisplayDevicesW` 拿活动屏的 PnP 实例（适配器 → 监视器），
+  再从注册表 `...\\Device Parameters\\EDID` 解 128 字节。
   只认活动实例 —— 注册表里有大量已拔掉/重复的历史实例（2026-11-07 实测 6 条）。
+
+  ⚠️ 必须两级枚举：一级（`lpDevice=None`）即使带 `EDD_GET_DEVICE_INTERFACE_NAME`，
+  返回的 `DeviceID` 也是**空串**（2026-11-07 本机实测，见 `docs/WINDOWS-VERIFY.md` §0.4）。
+  早期版本只做一级枚举，于是 Windows 端永远读不到屏、profile 一直退回 default。
 
 字段口径（Windows 端 2026-11-07 实测）：
 `WmiMonitorID.ProductCodeID` 是**十六进制 ASCII 串**（`"2790"` → `0x2790`），
@@ -273,6 +277,29 @@ def _read_macos() -> list[DisplayIdentity]:
 # --------------------------------------------------------------------------- #
 # Windows
 # --------------------------------------------------------------------------- #
+#: `\\?\DISPLAY#AOC2790#7&3ae6a500&1&UID524#{guid}` 的前缀
+_DEVICE_INTERFACE_PREFIX = "\\\\?\\"
+
+
+def pnp_from_device_id(raw: str) -> str:
+    """设备接口名 → PnP 实例 ID（`DISPLAY\\AOC2790\\7&3ae6a500&1&UID524`）。
+
+    这个字符串与 WMI `InstanceName`、注册表 `Enum\\DISPLAY` 下的键名**逐字相同**，
+    也是「型号 ↔ DDC 句柄」的绑定键。不是显示器接口就返回空串。
+
+    注意：不要用 `lstrip("\\\\?\\\\")` —— 那是按**字符集**剥，不是按前缀剥。
+    """
+    text = str(raw or "").strip()
+    if text.startswith(_DEVICE_INTERFACE_PREFIX):
+        text = text[len(_DEVICE_INTERFACE_PREFIX):]
+    parts = text.split("#")
+    if len(parts) < 3 or parts[0].upper() != "DISPLAY":
+        return ""
+    if not parts[1] or not parts[2]:
+        return ""
+    return "DISPLAY\\" + parts[1] + "\\" + parts[2]
+
+
 def _read_windows() -> list[DisplayIdentity]:
     import ctypes
     import winreg
@@ -297,53 +324,59 @@ def _read_windows() -> list[DisplayIdentity]:
     ]
     user32.EnumDisplayDevicesW.restype = wintypes.BOOL
 
+    def _enum(parent: str | None, flags: int) -> list[_DISPLAY_DEVICEW]:
+        items: list[_DISPLAY_DEVICEW] = []
+        index = 0
+        while True:
+            dev = _DISPLAY_DEVICEW()
+            dev.cb = ctypes.sizeof(_DISPLAY_DEVICEW)
+            if not user32.EnumDisplayDevicesW(parent, index, ctypes.byref(dev), flags):
+                break
+            items.append(dev)
+            index += 1
+        return items
+
+    # 一级：适配器（`\\\\.\\DISPLAY1` …）。这一级的 DeviceID 是 PCI 路径或空串，
+    # 拿不到显示器接口，必须再往下枚举一层。
+    adapters = [dev.DeviceName for dev in _enum(None, 0)]
+
     found: list[DisplayIdentity] = []
     seen: set[str] = set()
-    index = 0
-    while True:
-        dev = _DISPLAY_DEVICEW()
-        dev.cb = ctypes.sizeof(_DISPLAY_DEVICEW)
-        # EDD_GET_DEVICE_INTERFACE_NAME = 0x1 → DeviceID 带 PnP 实例路径
-        if not user32.EnumDisplayDevicesW(None, index, ctypes.byref(dev), 0x1):
-            break
-        index += 1
-        raw = (dev.DeviceID or "").strip()
-        if not raw:
-            continue
-        # \\?\DISPLAY#AOC2790#7&3ae6a500&1&UID524#{guid}
-        parts = raw.lstrip("\\?\\").split("#")
-        if len(parts) < 3 or parts[0].upper() != "DISPLAY":
-            continue
-        pnp = "DISPLAY\\" + parts[1] + "\\" + parts[2]
-        if pnp in seen:
-            continue
-        seen.add(pnp)
-        try:
-            key = winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                f"SYSTEM\\CurrentControlSet\\Enum\\{pnp}\\Device Parameters",
-            )
+    for adapter in adapters:
+        # 二级：该适配器下的监视器，EDD_GET_DEVICE_INTERFACE_NAME = 0x1
+        for mon in _enum(adapter, 0x1):
+            if mon.StateFlags & 0x8:  # DISPLAY_DEVICE_MIRRORING_DRIVER
+                continue
+            pnp = pnp_from_device_id(mon.DeviceID)
+            if not pnp or pnp in seen:
+                continue
+            seen.add(pnp)
             try:
-                edid, _ = winreg.QueryValueEx(key, "EDID")
-            finally:
-                winreg.CloseKey(key)
-        except OSError:
-            continue
-        ident = parse_edid(bytes(edid))
-        if ident is None:
-            continue
-        found.append(
-            DisplayIdentity(
-                mfg=ident.mfg,
-                product_code=ident.product_code,
-                name=ident.name or (dev.DeviceString or "").strip(),
-                serial=ident.serial,
-                year=ident.year,
-                week=ident.week,
-                slot=pnp,
-                pnp_instance=pnp,
+                key = winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    f"SYSTEM\\CurrentControlSet\\Enum\\{pnp}\\Device Parameters",
+                )
+                try:
+                    edid, _ = winreg.QueryValueEx(key, "EDID")
+                finally:
+                    winreg.CloseKey(key)
+            except OSError:
+                continue
+            ident = parse_edid(bytes(edid))
+            if ident is None:
+                continue
+            found.append(
+                DisplayIdentity(
+                    mfg=ident.mfg,
+                    product_code=ident.product_code,
+                    name=ident.name or (mon.DeviceString or "").strip(),
+                    serial=ident.serial,
+                    year=ident.year,
+                    week=ident.week,
+                    slot=pnp,
+                    pnp_instance=pnp,
+                )
             )
-        )
     return found
 
 

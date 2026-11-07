@@ -63,3 +63,27 @@ def test_read_current_prefers_external_slot(monkeypatch):
 def test_read_current_without_display_returns_none(monkeypatch):
     monkeypatch.setattr(identity, "read_displays", lambda: [])
     assert identity.read_current() is None
+
+
+# --------------------------------------------------------------------------- #
+# Windows：设备接口名 → PnP 实例（2026-11-07 回归：一级枚举 DeviceID 是空串）
+# --------------------------------------------------------------------------- #
+def test_pnp_from_device_id_real_windows_string():
+    raw = (
+        "\\\\?\\DISPLAY#AOC2790#7&3ae6a500&1&UID524"
+        "#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+    )
+    assert identity.pnp_from_device_id(raw) == "DISPLAY\\AOC2790\\7&3ae6a500&1&UID524"
+
+
+def test_pnp_from_device_id_rejects_non_display_and_empty():
+    assert identity.pnp_from_device_id("") == ""
+    assert identity.pnp_from_device_id("\\\\?\\PCI#VEN_1002&DEV_73DF#4&2c1f0a5&0&0008") == ""
+    assert identity.pnp_from_device_id("\\\\?\\DISPLAY#AOC2790") == ""
+
+
+def test_pnp_from_device_id_strips_prefix_by_length_not_charset():
+    """`lstrip("\\\\?\\\\")` 是按字符集剥，遇到 `DISPLAY` 里没有的字符前会多吃；
+    这里锁死「只剥前缀」。"""
+    raw = "\\\\?\\DISPLAY#DELD0E6#1&28a6823a&8&UID256#{guid}"
+    assert identity.pnp_from_device_id(raw) == "DISPLAY\\DELD0E6\\1&28a6823a&8&UID256"

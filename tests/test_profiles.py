@@ -44,10 +44,12 @@ def test_resolve_active_prefers_builtin_for_known_screen():
     profile = profiles.resolve_active(cfg, _identity())
     assert profile.key == "AOC:9987"
     assert profile.ports["usb_c"] == 100
-    # 接线仍是平台的默认：本机 USB-C、对端 HDMI 1
-    assert cfg.wiring == {"local": "usb_c", "peer": "hdmi1"}
-    assert cfg.target_value(cfg.effective_host()) == 100
-    assert cfg.target_value(cfg.other_host()) == 17
+    # 接线仍是平台的默认（Windows 本机 HDMI 1、对端 USB-C；mac 反过来）
+    local_port = "hdmi1" if cfg.effective_host() == "windows" else "usb_c"
+    peer_port = "usb_c" if local_port == "hdmi1" else "hdmi1"
+    assert cfg.wiring == {"local": local_port, "peer": peer_port}
+    assert cfg.target_value(cfg.effective_host()) == profile.ports[local_port]
+    assert cfg.target_value(cfg.other_host()) == profile.ports[peer_port]
 
 
 def test_user_profile_overrides_builtin():
@@ -70,8 +72,9 @@ def test_unknown_screen_falls_back_to_default_without_error():
     cfg = from_dict({"sources": {"windows": 17, "mac": 18}})
     profile = profiles.resolve_active(cfg, _identity("DELL:1234"))
     assert profile.key == profiles.DEFAULT_KEY
-    assert cfg.target_value(cfg.effective_host()) == 18
-    assert cfg.target_value(cfg.other_host()) == 17
+    # default 由旧 sources 迁移：本机/对端各自搬到自己那个语义端口上，码值不变
+    assert cfg.target_value(cfg.effective_host()) == cfg.sources[cfg.effective_host()]
+    assert cfg.target_value(cfg.other_host()) == cfg.sources[cfg.other_host()]
 
 
 def test_no_identity_still_uses_default():

@@ -829,16 +829,18 @@ def test_settings_sources_must_differ(app, cfg, tmp_path):
 # 9. 托盘菜单（§4.2 / §11.3）
 # --------------------------------------------------------------------------- #
 def test_tray_menu_structure(app, cfg):
+    cfg.clipboard.peer_name = "DESKTOP-B"
     entries = tray.build_menu_entries(cfg, "windows", "Alt+Space", {})
     kinds = [e.kind for e in entries]
     titles = [e.title for e in entries if e.title]
     # 2026-10-22：跟随 mac2 加第 7 行「配对电脑…」→ 9 行 + 5 条分隔线（§14.3）
     assert kinds.count("sep") == 5
     assert len(entries) == 14                     # 9 行 + 5 分隔线
-    assert titles[0] == "当前画面：Windows"
+    # P3：画面归属改用「这台 / 对端名字」，双 Windows 时也不会说成 Mac
+    assert titles[0] == "当前画面：这台"
     assert "打开主界面" in titles
-    assert any(t.startswith("切换到 Mac（USB-C）") for t in titles)
-    assert any(t.startswith("强制切到 Mac（USB-C）") for t in titles)
+    assert any(t.startswith("切换到 DESKTOP-B（USB-C）") for t in titles)
+    assert any(t.startswith("强制切到 DESKTOP-B（USB-C）") for t in titles)
     assert "剪贴板" in titles
     assert "设置…" in titles
     assert any(t.startswith("配对电脑…") for t in titles)
@@ -877,19 +879,26 @@ def test_tray_menu_keycaps_are_text(app, cfg):
 
 
 def test_tray_menu_states(app, cfg):
+    cfg.clipboard.peer_name = "DESKTOP-B"
     for current, expect in (
-        ("windows", "当前画面：Windows"),
-        ("mac", "当前画面：Mac"),
+        ("windows", "当前画面：这台"),          # 本机 Windows ⇒ 这台
+        ("mac", "当前画面：DESKTOP-B"),         # 对端 ⇒ 用对端自报的名字
         (SOURCE_UNKNOWN, "当前画面：未检测到"),
     ):
         entries = tray.build_menu_entries(cfg, current, "Alt+Space", {})
         status_row = [e for e in entries if e.kind == "status"][0]
         assert status_row.title == expect
 
+    # 没拿到对端名字时退回「对端」占位
+    cfg.clipboard.peer_name = ""
+    entries = tray.build_menu_entries(cfg, "mac", "Alt+Space", {})
+    assert [e for e in entries if e.kind == "status"][0].title == "当前画面：对端"
+    cfg.clipboard.peer_name = "DESKTOP-B"
+
     online = {"remote_ready": lambda: True}
     entries = tray.build_menu_entries(cfg, SOURCE_UNKNOWN, "Alt+Space", online)
     row = [e for e in entries if "切过来" in e.title][0]
-    assert row.title == f"从 {PEER_SYS} 切过来" and row.enabled
+    assert row.title == "从 DESKTOP-B 切过来" and row.enabled
     offline = {"remote_ready": lambda: False}
     entries = tray.build_menu_entries(cfg, SOURCE_UNKNOWN, "Alt+Space", offline)
     assert not [e for e in entries if "切过来" in e.title]

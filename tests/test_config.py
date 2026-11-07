@@ -331,8 +331,9 @@ def test_legacy_sources_migrate_to_default_profile():
     assert cfg.monitors["default"].ports == {"hdmi1": 17, "usb_c": 18}
     local_port = "hdmi1" if cfg.effective_host() == "windows" else "usb_c"
     assert cfg.wiring["local"] == local_port
-    assert cfg.target_value(cfg.effective_host()) == 18
-    assert cfg.target_value(cfg.other_host()) == 17
+    # 迁移只搬「哪台机器接哪个口」，码值跟着那台机器走：Windows 17、Mac 18
+    assert cfg.target_value("windows") == 17
+    assert cfg.target_value("mac") == 18
 
 
 def test_new_profile_allows_same_code_on_different_ports():
