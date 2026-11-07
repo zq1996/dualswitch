@@ -1154,9 +1154,9 @@ def test_pairing_page_discover_lists_peers(app):
     assert page.top_pill.text() == "未配对"
     assert page.scan_hint.text() == "找到 2 台"
     assert set(page._peer_rows) == {"windows-3f2a91c4", "macos-77aa"}
-    # 已与别的电脑配对 → 「替换配对」；正常 → 「配对」
+    # 已与别的电脑配对 → 「替换配对」；正在显示码 → 「输入配对码」
     assert page._peer_rows["macos-77aa"]["btn"].text() == "替换配对"
-    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "配对"
+    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "输入配对码"
 
 
 def test_pairing_page_show_code_then_deactivate_cancels(app):

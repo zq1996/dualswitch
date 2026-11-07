@@ -456,6 +456,56 @@ def test_pairing_page_goes_through_states(app):
     assert page.success_title.text() == "已和 DESKTOP-8Q2K 配对"
 
 
+def test_pairing_peer_click_shows_code_when_peer_not_waiting(app):
+    """对端没在显示码：点「配对」= 本机出码，不再把人送进输入页空等。"""
+    engine = FakePairEngine()
+    engine.peers[0]["pairing"] = False
+    page = PairingPage(engine)
+    page.activate()
+    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "配对"
+    page._select_peer(engine.peers[0])
+    assert page._state == "showcode"
+    assert engine.begin_calls == 1
+    assert page._show_code_peer["device"] == "windows-3f2a91c4"
+
+
+def test_pairing_peer_button_says_enter_when_peer_shows_code(app):
+    engine = FakePairEngine()
+    page = PairingPage(engine)
+    page.activate()
+    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "输入配对码"
+    page._select_peer(engine.peers[0])
+    assert page._state == "entercode"
+
+
+def test_pairing_both_showing_code_switches_loser_to_enter(app):
+    """两端同时出码：设备 ID 大的一端撤码改输入，ID 小的一端保留显示。"""
+    engine = FakePairEngine()
+    engine.device_id = "windows-zzzz"
+    engine.peers = [dict(engine.peers[0], device="macos-aaaa", pairing=True)]
+    page = PairingPage(engine)
+    page.activate()
+    page._start_show_code_for({"device": "macos-aaaa"})
+    assert page._state == "showcode"
+    page._check_show_race()
+    assert page._state == "entercode"
+    assert engine.cancel_calls == 1
+    assert not page.enter_note.isHidden()
+
+
+def test_pairing_both_showing_code_keeper_stays_on_code(app):
+    engine = FakePairEngine()
+    engine.device_id = "macos-0000"          # 比对方 ID 小 → 保留自己的码
+    engine.peers = [dict(engine.peers[0], pairing=True)]
+    page = PairingPage(engine)
+    page.activate()
+    page._start_show_code_for({"device": "windows-3f2a91c4"})
+    page._check_show_race()
+    assert page._state == "showcode"
+    assert engine.cancel_calls == 0
+    assert not page.race_note.isHidden()
+
+
 def test_pairing_page_unpair_needs_inline_confirm(app):
     engine = FakePairEngine(paired=True, peer_device="windows-3f2a91c4",
                             peer_name="DESKTOP-8Q2K", addr="192.168.1.31:47823")
