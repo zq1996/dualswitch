@@ -206,6 +206,8 @@ class MainWindow(QWidget):
         self.monitor_name = monitor_name
         self._allow_close = False
         self.withdraw_to_tray = True
+        # 设置里关掉「关闭窗口后仍在菜单栏运行」→ 关窗直接退出应用
+        self.quit_on_close = False
 
         from ...config import APP_DISPLAY_NAME
 
@@ -496,6 +498,9 @@ class MainWindow(QWidget):
             event.accept()
             return
         event.ignore()
+        if self.quit_on_close:
+            self.quitRequested.emit()
+            return
         if not self.withdraw_to_tray:
             self.showMinimized()
             return

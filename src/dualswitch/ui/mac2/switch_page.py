@@ -317,13 +317,31 @@ class SwitchCard(QFrame):
         self._apply_enabled()
 
     def set_owner(self, host: str | None, detail: str = "") -> None:
-        """画面读数：`host` 为 None/空 = 读不到。
+        """旧接口：按平台名展示（测试与旧调用方用）。
 
+        新代码请用 `set_owner_role()` —— 双 Windows / 双 Mac 下平台名无法区分角色。
         **只做展示**：不改变任何按钮的可用性（§3.5）。
         """
         if host in TITLE:
             self.src_dot.setObjectName("srcDotOk")
             text = f"画面在 {_title(host)}"
+            if detail:
+                text += f" · {detail}"
+        else:
+            self.src_dot.setObjectName("srcDotIdle")
+            text = "画面位置未检测" + (f" · {detail}" if detail else "")
+        self.src_text.setText(text)
+        self._polish(self.src_dot)
+
+    def set_owner_role(self, role: str | None, peer_name: str = "", detail: str = "") -> None:
+        """按角色展示画面位置：`local` = 这台，`peer` = 对端机器名。
+
+        这是 P3 的展示口径：两台 Windows 相连时不会再出现「画面在 Mac」。
+        """
+        peer = (peer_name or "").strip() or "对端"
+        if role in ("local", "peer"):
+            self.src_dot.setObjectName("srcDotOk")
+            text = f"画面在 {peer}" if role == "peer" else "画面在这台"
             if detail:
                 text += f" · {detail}"
         else:
@@ -414,6 +432,9 @@ class SwitchPage(QWidget):
     # ------------------------------------------------------------------ 状态
     def set_owner(self, host: str | None, detail: str = "") -> None:
         self.hero.set_owner(host, detail)
+
+    def set_owner_role(self, role: str | None, peer_name: str = "", detail: str = "") -> None:
+        self.hero.set_owner_role(role, peer_name, detail)
 
     def set_monitor_name(self, name: str) -> None:
         self.monitor_name = name or ""

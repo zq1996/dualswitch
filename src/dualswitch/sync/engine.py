@@ -31,6 +31,7 @@ import logging
 import os
 import queue
 import secrets
+import sys
 import threading
 import time
 from collections import deque
@@ -41,6 +42,15 @@ from ..clipboard.base import ClipItem, ClipboardError, create_backend
 from . import protocol as P
 from .discovery import Discovery, computer_name
 from .transport import LinkError, Transport
+
+def _normalize_platform(value: str) -> str:
+    value = str(value or "").strip().lower()
+    if value in ("mac", "macos", "darwin", "apple"):
+        return "mac"
+    if value in ("win", "windows", "win32"):
+        return "windows"
+    return ""
+
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +76,7 @@ class ClipRecord:
     width: int = 0
     height: int = 0
     source: str = "local"        # local | remote
+    source_platform: str = ""    # 这条内容来自哪个真实平台（mac / windows）
     peer_name: str = ""
     ts: float = field(default_factory=time.time)
     state: str = "local"         # ok | pend | fail | local
@@ -91,7 +102,7 @@ class SyncEngine:
         backend=None,
         transport: Transport | None = None,
         clock: Callable[[], float] = time.time,
-        switch_executor: Callable[[int], "tuple[bool, str]"] | None = None,
+        switch_executor: Callable[[str], "tuple[bool, str]"] | None = None,
         vcp_code: int = 0x60,
         save_config: Callable[[], None] | None = None,
         version: str = "",
@@ -263,6 +274,7 @@ class SyncEngine:
             device_id=self.device_id,
             listen_port=int(self.cfg.port),
             host_label=display_name,
+            platform="mac" if sys.platform == "darwin" else "windows",
             key=key,
             peer=peer,
             on_clip=self._on_remote_clip,
@@ -352,12 +364,31 @@ class SyncEngine:
             self.last_error = detail
         if state == "connected":
             self.last_error = ""
+            self._remember_peer_platform()
             # 连上后立刻把当前剪贴板同步过去一次？不。切屏时才推，避免"一启动就覆盖对端"。
             self._pair_on_connected()
         elif state == "unpaired" and self._pair_role == "enter" and self._pair_pin:
             self._pair_fail("密钥不匹配（PIN 不正确或对端不在配对状态）", "auth")
         elif state == "error" and self._pair_role == "enter" and self._pair_pin:
             self._pair_fail(detail or "连接失败", "network")
+
+    def _remember_peer_platform(self) -> None:
+        """把 HELLO 上报的真实平台记进配置对象/状态里，供界面选图标。"""
+        transport = self._transport
+        if transport is None:
+            return
+        value = _normalize_platform(getattr(transport, "peer_platform", ""))
+        if value:
+            self.cfg.peer_platform = value
+
+    @property
+    def peer_platform(self) -> str:
+        transport = self._transport
+        if transport is not None:
+            value = _normalize_platform(getattr(transport, "peer_platform", ""))
+            if value:
+                return value
+        return _normalize_platform(getattr(self.cfg, "peer_platform", ""))
 
     def _pair_on_connected(self) -> None:
         """任一端认证通过后落盘。A 端在状态回调里走到这里，B 端在等待线程里也会走。"""
@@ -692,27 +723,29 @@ class SyncEngine:
         transport = self._transport
         return bool(transport and transport.connected and transport.authenticated)
 
-    def set_switch_executor(self, executor: Callable[[int], "tuple[bool, str]"] | None) -> None:
+    def set_switch_executor(self, executor: Callable[[str], "tuple[bool, str]"] | None) -> None:
         """挂上"替对端发 DDC Set"的实现（由 CLI 注入，引擎不碰硬件）。"""
         self._switch_executor = executor
 
-    def request_switch(self, value: int, *, timeout: float = 3.0) -> tuple[bool, str]:
-        """请对端代发一次 VCP Set。返回 (ok, detail)，**阻塞到对端回执或超时**。
+    def request_switch(self, port: str, *, timeout: float = 3.0) -> tuple[bool, str]:
+        """请对端代发一次切屏。载荷只传**端口语义名**（hdmi1/dp/usb_c…）。
 
-        调用方要放在后台线程（runner 的切换线程），不要卡 UI / 热键回调。
+        两端各自用自己的 profile 把端口名解析成语义码值：这样 Mac 的 18 和
+        Windows 的 17 不会再被硬编码进协议。返回 (ok, detail)，阻塞到回执或超时。
         """
         transport = self._transport
         if transport is None or not self.switch_ready:
             return False, "对端未连接或未配对"
+        port = str(port or "").strip()
+        if not port:
+            return False, "目标端口为空"
         req = secrets.token_hex(8)
         waiter = threading.Event()
         box: dict[str, Any] = {}
         with self._lock:
             self._switch_waiters[req] = (waiter, box)
         try:
-            transport.send_switch(
-                {"vcp": self._vcp_code, "value": int(value), "req": req}
-            )
+            transport.send_switch({"port": port, "req": req})
         except (LinkError, OSError) as exc:
             with self._lock:
                 self._switch_waiters.pop(req, None)
@@ -734,15 +767,17 @@ class SyncEngine:
 
     def _on_switch_request(self, header: dict[str, Any]) -> None:
         """socket 读线程：对端要我们替它切屏。DDC 调用放到小线程里，别堵读循环。"""
-        try:
-            req = str(header.get("req") or "")
-            vcp = int(header.get("vcp", -1))
-            value = int(header.get("value", -1))
-        except (TypeError, ValueError):
-            log.warning("收到非法的 SWITCH 帧：%r", header)
-            return
+        req = str(header.get("req") or "")
+        port = str(header.get("port") or "").strip()
         if not req:
             log.warning("SWITCH 帧缺 req，丢弃（无法回执）")
+            return
+        if not port:
+            # 旧版协议只有数值载荷；不猜它的码表，直接回执失败让发送端本地兜底。
+            self._transport_switch_ack(
+                {"req": req, "ok": False,
+                 "detail": "对端是旧版协议（数值载荷），本端只接受端口名"}
+            )
             return
         # 幂等：同一 req 10 秒内重复到达，直接重发上次的结果
         with self._lock:
@@ -752,18 +787,16 @@ class SyncEngine:
             self._transport_switch_ack(cached)
             return
         threading.Thread(
-            target=self._serve_switch, args=(req, vcp, value), name="remote-switch", daemon=True
+            target=self._serve_switch, args=(req, port), name="remote-switch", daemon=True
         ).start()
 
-    def _serve_switch(self, req: str, vcp: int, value: int) -> None:
+    def _serve_switch(self, req: str, port: str) -> None:
         ok, detail = False, ""
-        if vcp != self._vcp_code:
-            detail = f"VCP 0x{vcp:02X} 与本机配置（0x{self._vcp_code:02X}）不一致"
-        elif self._switch_executor is None:
+        if self._switch_executor is None:
             detail = "本机未挂载切屏实现"
         else:
             try:
-                ok, detail = self._switch_executor(value)
+                ok, detail = self._switch_executor(port)
             except Exception as exc:  # noqa: BLE001 - 对端请求不能把引擎搞崩
                 ok, detail = False, f"{type(exc).__name__}: {exc}"
         ack = {"req": req, "ok": bool(ok), "detail": detail}
@@ -777,7 +810,7 @@ class SyncEngine:
             self.switch_stats["served"] += 1
         else:
             self.switch_stats["failed"] += 1
-        log.info("替对端切屏 VCP 0x%02X=%d → %s（%s）", vcp, value, "ok" if ok else "失败", detail or "-")
+        log.info("替对端切屏 port=%s → %s（%s）", port or "?", "ok" if ok else "失败", detail or "-")
         self._transport_switch_ack(ack)
 
     def _transport_switch_ack(self, ack: dict[str, Any]) -> None:
@@ -1266,6 +1299,11 @@ class SyncEngine:
             self.last_error = detail or "对端拒绝"
 
     # ------------------------------------------------------------------ 记录
+    def _record_platform(self, source: str) -> str:
+        if source == "remote":
+            return self.peer_platform or ""
+        return "mac" if sys.platform == "darwin" else "windows"
+
     def _add(self, item: ClipItem, *, source: str, state: str, detail: str = "") -> ClipRecord:
         rec = ClipRecord(
             id=item.digest,
@@ -1275,6 +1313,7 @@ class SyncEngine:
             width=item.image.width if item.image is not None else 0,
             height=item.image.height if item.image is not None else 0,
             source=source,
+            source_platform=self._record_platform(source),
             peer_name=self._peer_name(),
             ts=item.ts,
             state=state,

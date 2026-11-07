@@ -330,15 +330,30 @@ def message_to_item(header: dict[str, Any], payload: bytes) -> ClipItem:
     return item
 
 
-def hello_header(device_id: str, host_label: str, key: bytes | None, *, nonce: str | None = None) -> dict[str, Any]:
+def hello_header(
+    device_id: str,
+    host_label: str,
+    key: bytes | None,
+    *,
+    nonce: str | None = None,
+    platform: str = "",
+) -> dict[str, Any]:
+    """HELLO 头。`platform` 是**真实平台**（macos / windows），不是角色。
+
+    旧版本不认识 `plat` 会忽略它；新版本没收到时按历史假设兜底，所以加这个
+    字段是兼容扩展，不需要改版本号。
+    """
     nonce = nonce or new_nonce()
-    return {
+    header = {
         "device": device_id,
         "host": host_label,
         "proto": VERSION,
         "nonce": nonce,
         "auth": auth_token(key, nonce) if key else "",
     }
+    if platform:
+        header["plat"] = str(platform)
+    return header
 
 
 def verify_hello(header: dict[str, Any], key: bytes | None) -> tuple[bool, str]:

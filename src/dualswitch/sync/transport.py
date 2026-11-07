@@ -59,6 +59,7 @@ class Link:
         host_label: str,
         direction: str,
         on_frame: Callable[["Link", P.Frame], None],
+        platform: str = "",
         on_ready: Callable[["Link"], None],
         on_closed: Callable[["Link", str], None],
         expected_peer_device: str = "",
@@ -68,6 +69,7 @@ class Link:
         self.key = key
         self.device_id = device_id
         self.host_label = host_label
+        self.platform = str(platform or "")
         self.direction = direction          # "in" | "out"
         # 配对后的身份绑定：只接受 HELLO.device 等于它的连接
         self.expected_peer_device = expected_peer_device
@@ -75,6 +77,7 @@ class Link:
         self.peer_addr = _peer_addr(sock)
         self.peer_device = ""
         self.peer_host = ""
+        self.peer_platform = ""
         self.authenticated = False
 
         self._on_frame = on_frame
@@ -116,7 +119,9 @@ class Link:
         # 先发 HELLO 再起线程：反过来的话读线程可能先收到对端 HELLO 并触发选举，
         # 把这条还没发 HELLO 的连接判负关掉，`send` 就会撞上"连接已关闭"。
         try:
-            self.send(P.T_HELLO, P.hello_header(self.device_id, self.host_label, self.key))
+            self.send(P.T_HELLO, P.hello_header(
+                self.device_id, self.host_label, self.key, platform=self.platform
+            ))
         except (OSError, LinkError) as exc:
             self.close(f"发 HELLO 失败：{exc}", notify=False)
             return
@@ -192,6 +197,7 @@ class Link:
             ok, reason = P.verify_hello(frame.header, self.key)
             self.peer_device = str(frame.header.get("device") or "")
             self.peer_host = str(frame.header.get("host") or "")
+            self.peer_platform = str(frame.header.get("plat") or "")
             if ok and self.expected_peer_device and self.peer_device != self.expected_peer_device:
                 # 密钥对了但不是已配对的那台：契约只支持一对一
                 ok, reason = False, "已与另一台设备配对"
@@ -204,6 +210,7 @@ class Link:
                 {
                     "device": self.device_id,
                     "host": self.host_label,
+                    "plat": self.platform,
                     "ok": ok,
                     "reason": reason,
                 },
@@ -226,6 +233,7 @@ class Link:
             reason = str(frame.header.get("reason") or "未知原因")
             self.peer_device = str(frame.header.get("device") or self.peer_device)
             self.peer_host = str(frame.header.get("host") or self.peer_host)
+            self.peer_platform = str(frame.header.get("plat") or self.peer_platform)
             self.authenticated = ok
             if not ok:
                 log.warning("对端拒绝了握手：%s", reason)
@@ -291,6 +299,7 @@ class Transport:
         device_id: str,
         listen_port: int,
         host_label: str = "",
+        platform: str = "",
         key: bytes | None = None,
         peer: tuple[str, int] | None = None,
         on_clip: Callable[[dict[str, Any], bytes], None] | None = None,
@@ -309,6 +318,7 @@ class Transport:
         self.device_id = device_id
         self.listen_port = int(listen_port)
         self.host_label = host_label
+        self.platform = str(platform or "")
         self.key = key
         self.peer = peer
         self.expected_peer_device = expected_peer_device
@@ -335,6 +345,7 @@ class Transport:
         self.last_error = ""
         self.peer_device = ""
         self.peer_host = ""
+        self.peer_platform = ""
         self.authenticated = False
         #: 认证失败后的等待（指数退避，BUG-006）。握手成功即复位。
         self._auth_fail_wait = AUTH_FAIL_MIN_WAIT_S
@@ -505,6 +516,7 @@ class Transport:
             key=self.key,
             device_id=self.device_id,
             host_label=self.host_label,
+            platform=self.platform,
             direction=direction,
             on_frame=self._handle_frame,
             on_ready=self._handle_ready,
@@ -559,6 +571,7 @@ class Transport:
             return                      # 自己就是被取代的那条，状态交给赢家去报
         self.peer_device = link.peer_device
         self.peer_host = link.peer_host
+        self.peer_platform = link.peer_platform
         self.authenticated = link.authenticated
         if link.authenticated:
             self._set_state("connected", link.describe())

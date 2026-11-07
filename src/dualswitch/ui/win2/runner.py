@@ -532,23 +532,33 @@ class UiRunner2(QObject):
         )
         dialog.exec()
 
-    def _on_calibrated(self, profile) -> None:  # noqa: ANN001
-        """标定完成：写回 profile、刷新端口行与窗口高度。"""
+    def _on_calibrated(self, profile) -> bool:  # noqa: ANN001
+        """标定完成：写回 profile、刷新端口行与窗口高度。
+
+        返回 False 表示**落盘失败**（本次仍生效）；标定窗口据此不关闭并把原因
+        显示在确认页上，而不是只在主窗口底部闪一条 toast。
+        """
         self.cfg.monitors[profile.key] = profile
         self.cfg.active_monitor = profile.key
         self.cfg.set_active_profile(profile)
+        saved = True
         try:
             save_config(self.cfg, self.cfg_file)
         except Exception as exc:  # noqa: BLE001
             log.error("保存标定结果失败：%s", exc)
             self.toast.show_text(f"标定已生效，但保存失败：{exc}")
+            saved = False
         else:
             self.toast.show_text(f"标定已保存：{profile.name or profile.key}")
-        self.controller.cfg = self.cfg
-        self.switch_page.set_config(self.cfg)
-        self.window.apply_port_count(self.cfg)
-        self.switch_page.set_monitor_name(self._monitor_name())
-        self.monitor_page.set_config(self.cfg)
+        try:
+            self.controller.cfg = self.cfg
+            self.switch_page.set_config(self.cfg)
+            self.window.apply_port_count(self.cfg)
+            self.switch_page.set_monitor_name(self._monitor_name())
+            self.monitor_page.set_config(self.cfg)
+        except Exception:  # noqa: BLE001 - 界面刷新失败不该被误报成「保存失败」
+            log.exception("标定后的界面刷新失败")
+        return saved
 
     def reidentify_monitor(self) -> None:
         """重新读身份并重新匹配 profile（换屏后不用重启）。"""
@@ -634,7 +644,10 @@ class UiRunner2(QObject):
         if target not in ("windows", "mac"):
             target = self._next_target()
         self._busy = True
-        label = "Mac" if target == "mac" else "Windows"
+        from ...ddc.profiles import port_label
+
+        port = self.cfg.port_for_host(target)
+        label = port_label(port) if port else "目标输入口"
         self.switch_page.set_busy(True, label)
         self.switch_page.set_note(f"正在发送 DDC Set · 目标 {label}", ok=False)
 
@@ -653,8 +666,7 @@ class UiRunner2(QObject):
         port = self.controller.port_of_value(int(value))
         if port:
             return port_label(port)
-        host = self.controller.host_of_value(int(value))
-        return "Mac" if host == "mac" else ("Windows" if host == "windows" else f"输入源 {value}")
+        return f"输入源 {value}"
 
     def do_local(self, value: int) -> None:
         """「本机发送」：只让本机发一条 DDC Set，不请对端、不判归属。"""
@@ -882,7 +894,8 @@ class UiRunner2(QObject):
         """
         if source is None:
             source = self.controller.source_state
-        self.switch_page.set_owner(source if source in ("windows", "mac") else None)
+        role = self.cfg.role_for_host(source) if source in ("windows", "mac") else ""
+        self.switch_page.set_owner_role(role or None, self._peer_name())
 
     # ------------------------------------------------------------------ 跟随画面
     def _refresh_follow(self, remote_ok: bool) -> None:
@@ -1032,8 +1045,8 @@ class UiRunner2(QObject):
             self.switch_page.set_note("[演练] 未真正发送指令", ok=True)
             return
         if getattr(result, "via", "local") == "remote":
-            peer = "Windows" if self.cfg.other_host() == "windows" else "Mac"
-            self.switch_page.set_note(f"已由 {peer} 端代发 · 回读跳过（屏不在本机）", ok=True)
+            peer = self._peer_name()
+            self.switch_page.set_note(f"已由 {peer} 代发 · 回读跳过（屏不在本机）", ok=True)
             self._notify(f"已切换到 {peer}")
             return
         ms = result.set_call_ms
@@ -1050,10 +1063,13 @@ class UiRunner2(QObject):
             return
         self._notify(f"已切换到 {label} · {ms:.1f} ms")
 
+    def _peer_name(self) -> str:
+        return (getattr(self.cfg.clipboard, "peer_name", "") or "").strip() or "对端"
+
     def _refresh_conn_ui(self) -> None:
         """侧栏 footer 的连接状态（底栏 2026-10-22 已删除，状态只在这一处）。"""
         connected = self._remote_ready()
-        peer = "Windows" if self.cfg.other_host() == "windows" else "Mac"
+        peer = self._peer_name()
         if connected:
             self.window.set_side_status(f"已连接 {peer}", ok=True)
         else:

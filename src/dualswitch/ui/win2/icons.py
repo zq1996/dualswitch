@@ -200,13 +200,13 @@ def plate_pixmap(system: str, size: int, radius: float | None = None, dim: float
     return pm
 
 
-def badge_pixmap(system: str, size: int, ring_color: str) -> QPixmap:
+def badge_pixmap(system: str, size: int, ring_color: str, bg: str | None = None) -> QPixmap:
     """缩略图右下角来源系统角标：圆角块 + 2px 卡片色描边 + 白 logo。
 
     全部在一张画布上按逻辑坐标画（先设 DPR），不再嵌一层带 DPR 的 pixmap ——
     之前那版角标只有左上四分之一有内容、其余空白，就是嵌套 pixmap 的 DPR 打架。
     """
-    key = ("badge", system, size, ring_color.lower(), _ratio())
+    key = ("badge", system, size, ring_color.lower(), (bg or "").lower(), _ratio())
     cached = _cache.get(key)
     if cached is not None:
         return cached
@@ -220,7 +220,12 @@ def badge_pixmap(system: str, size: int, ring_color: str) -> QPixmap:
     inner = size - ring * 2
     p.save()
     p.translate(ring, ring)
-    _plate_bg(p, system, inner, inner * 0.26)
+    if bg:
+        p.setPen(Qt.NoPen)
+        p.setBrush(_qc(bg))
+        p.drawRoundedRect(QRectF(0, 0, inner, inner), inner * 0.26, inner * 0.26)
+    else:
+        _plate_bg(p, system, inner, inner * 0.26)
     _draw_logo(p, system, inner, 0.56)
     p.restore()
     p.end()

@@ -204,7 +204,7 @@ def test_keycaps_used_in_menu_and_settings(app, cfg):
     page = SwitchPage(cfg, "Right Option+Space", "Q2790R3")
     assert page.findChildren(KeyCap) == []
     # 2) 菜单
-    entries = statusmenu.build_menu_entries(cfg, "windows", "Right Option+Space", {})
+    entries = statusmenu.build_menu_entries(cfg, "mac", "Right Option+Space", {})
     switch_row = [e for e in entries if e.title.startswith("切换到")][0]
     assert switch_row.keys == ("⌥", "Space")
     # 3/4) 设置页两行键帽
@@ -533,15 +533,16 @@ def test_pin_group_paste_and_backspace(app):
 # 2. 菜单栏菜单结构（INTERACTIONS §1）
 # --------------------------------------------------------------------------- #
 def test_menu_structure_rows(app, cfg):
+    cfg.clipboard.peer_name = "DESKTOP-X"
     entries = statusmenu.build_menu_entries(cfg, "windows", "Right Option+Space", {})
     kinds = [e.kind for e in entries]
     titles = [e.title for e in entries if e.title]
     # 8 行内容 + 5 条分隔线（§1 表格 + §12.3 配对入口；「强制切」已按 2026-10-24 决定删除）
     assert kinds.count("sep") == 5
     assert len(entries) == 13
-    assert titles[0] == "当前画面：Windows"
+    assert titles[0] == "当前画面：DESKTOP-X"     # Mac 本机，current=windows ⇒ 对端
     assert "打开主界面" in titles
-    assert any(t.startswith("切换到 Mac（USB-C）") for t in titles)
+    assert any(t.startswith("切换回这台（USB-C）") for t in titles)
     assert not any("强制" in t for t in titles), "「强制切」已删除，不许回来"
     assert "剪贴板" in titles
     assert "设置…" in titles
@@ -554,9 +555,10 @@ def test_menu_structure_rows(app, cfg):
 
 
 def test_menu_status_flips_with_source(app, cfg):
+    cfg.clipboard.peer_name = "DESKTOP-X"
     for current, expect in (
-        ("windows", "当前画面：Windows"),
-        ("mac", "当前画面：Mac"),
+        ("windows", "当前画面：DESKTOP-X"),
+        ("mac", "当前画面：这台"),
         (SOURCE_UNKNOWN, "当前画面：未检测到"),
     ):
         entries = statusmenu.build_menu_entries(cfg, current, "Right Option+Space", {})
@@ -568,7 +570,7 @@ def test_menu_unknown_uses_remote_text(app, cfg):
     actions = {"remote_ready": lambda: True}
     entries = statusmenu.build_menu_entries(cfg, SOURCE_UNKNOWN, "alt+space", actions)
     switch_row = [e for e in entries if e.kind == "item" and "切过来" in e.title][0]
-    assert switch_row.title == f"从 {PEER_SYS} 切过来"
+    assert switch_row.title == "从 对端 切过来"
     assert switch_row.enabled
     actions_off = {"remote_ready": lambda: False}
     entries2 = statusmenu.build_menu_entries(cfg, SOURCE_UNKNOWN, "alt+space", actions_off)
@@ -894,6 +896,26 @@ def test_switch_page_readout_is_labelled(app, cfg):
     page.set_owner(None)
     assert "未检测" in page.hero.src_text.text()
     assert all(r.btn_local.isEnabled() for r in page.hero.rows)
+
+
+def test_switch_page_owner_role_uses_peer_name(app, cfg):
+    """P3：画面位置按角色展示，双 Windows 也不会写「Mac」。"""
+    page = SwitchPage(cfg, "Right Option+Space", "Q2790R3")
+    page.set_owner_role("local", "DESKTOP-B")
+    assert "画面在这台" in page.hero.src_text.text()
+    page.set_owner_role("peer", "DESKTOP-B")
+    assert "画面在 DESKTOP-B" in page.hero.src_text.text()
+
+
+def test_remote_badge_uses_purple_background(app):
+    """T3.4：对方来源统一紫底；本机保持平台原色。"""
+    from dualswitch.ui.mac2.widgets import badge_pixmap
+
+    local = badge_pixmap("mac", 22, peer=False).toImage()
+    remote = badge_pixmap("mac", 22, peer=True).toImage()
+    assert local.pixelColor(11, 3) != remote.pixelColor(11, 3)
+    r, g, b, _ = remote.pixelColor(11, 3).getRgb()
+    assert b > r > g, (r, g, b)             # 紫 #7C5CFF：蓝最高、红其次、绿最低
 
 
 def test_switch_page_action_rows_geometry(app, cfg):
@@ -2286,8 +2308,33 @@ def test_settings_has_monitor_config_entry(app, cfg):
     page = SettingsPage(cfg, "/tmp/dualswitch-v3-test.json")
     hits = []
     page.monitorConfigRequested.connect(lambda: hits.append(True))
-    assert page.btn_monitor.text() == "显示器配置 ›"
+    assert page.btn_monitor.title.text() == "显示器配置"
     page.btn_monitor.click()
+    assert hits == [True]
+
+
+def test_settings_group_order(app, cfg):
+    """显示器是 V3 的主设置，放最前；「切换模式」已从界面移除。"""
+    from PySide6.QtWidgets import QLabel
+
+    from dualswitch.ui.mac2.settings_page import SettingsPage
+
+    page = SettingsPage(cfg, "/tmp/dualswitch-v3-test.json")
+    titles = [lb.text() for lb in page.findChildren(QLabel) if lb.objectName() == "setSec"]
+    assert titles == ["显示器", "通用", "剪贴板", "热键"]
+    assert not hasattr(page, "seg_policy")
+
+
+def test_mac_window_quit_on_close(app, cfg):
+    """关掉「关闭窗口后仍在菜单栏运行」后，关窗必须走退出流程。"""
+    from dualswitch.ui.mac2.window import MainWindow
+
+    win = MainWindow(cfg, "Right Option+Space", "v0", "Q2790R3")
+    hits = []
+    win.quitRequested.connect(lambda: hits.append(True))
+    win.withdraw_to_tray = False
+    win.quit_on_close = True
+    win.close()
     assert hits == [True]
 
 
@@ -2358,6 +2405,69 @@ def test_calibration_dialog_unknown_screen_defaults_to_three_common_ports(app):
             "hdmi1",
             "dp",
             "usb_c",
+        ]
+    finally:
+        dialog.close()
+
+
+def test_calibration_restart_reenables_start(app):
+    """「重来」回到第一步后，「开始标定」必须还能点（回归：之前永久 disabled）。"""
+    from dualswitch.ddc.mock import MockBackend
+    from dualswitch.ui.mac2.calibrate import CalibrationDialog
+
+    cfg, _ = _cfg_with("AOC:10128")
+    dialog = CalibrationDialog(cfg.active_profile(), MockBackend(current=18), None, None)
+    try:
+        dialog._start()
+        assert not dialog.btn_start.isEnabled()
+        dialog._show_confirm()
+        dialog._restart()
+        assert dialog.btn_start.isEnabled()
+        for choice in dialog._checks.values():
+            choice.setChecked(False)
+        assert not dialog.btn_start.isEnabled()
+        dialog._checks["hdmi1"].setChecked(True)
+        assert dialog.btn_start.isEnabled()
+    finally:
+        dialog.close()
+
+
+def test_calibration_save_failure_stays_open_with_reason(app):
+    """落盘失败时不能「看起来保存成功」：窗口不关，原因写在确认页上。"""
+    from PySide6.QtWidgets import QDialog
+
+    from dualswitch.ddc.mock import MockBackend
+    from dualswitch.ui.mac2.calibrate import CalibrationDialog
+
+    cfg, _ = _cfg_with("AOC:10128")
+    dialog = CalibrationDialog(
+        cfg.active_profile(), MockBackend(current=18), None, lambda _p: False
+    )
+    try:
+        dialog._show_confirm()
+        dialog._save()
+        assert dialog.result() != QDialog.Accepted
+        assert not dialog.confirm_error.isHidden()
+        assert "保存" in dialog.confirm_error.text()
+    finally:
+        dialog.close()
+
+
+def test_calibration_dialog_uses_native_window_chrome(app):
+    """标定窗口必须是系统窗口：红黄绿由系统绘制，不再手绘/右上角 ✕。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel
+
+    from dualswitch.ddc.mock import MockBackend
+    from dualswitch.ui.mac2.calibrate import CalibrationDialog
+
+    cfg, _ = _cfg_with("AOC:10128")
+    dialog = CalibrationDialog(cfg.active_profile(), MockBackend(current=18), None, None)
+    try:
+        assert not (dialog.windowFlags() & Qt.FramelessWindowHint)
+        assert dialog.windowTitle() == "标定显示器"
+        assert not [
+            lb for lb in dialog.findChildren(QLabel) if "✕" in (lb.text() or "")
         ]
     finally:
         dialog.close()

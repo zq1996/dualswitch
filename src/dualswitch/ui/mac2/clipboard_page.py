@@ -104,7 +104,9 @@ class Thumb(QFrame):
         self.setAttribute(Qt.WA_Hover, True)
         self._ui_kind = ui_kind
         self._image: QPixmap | None = None
-        self._badge = badge_pixmap(source_system(record), theme.BADGE)
+        self._badge = badge_pixmap(
+            source_system(record), theme.BADGE, peer=(record.source == "remote")
+        )
         if record.png is not None and len(record.png) <= 8 * 1024 * 1024:
             image = QImage()
             if image.loadFromData(record.png, "PNG"):

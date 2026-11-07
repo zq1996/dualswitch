@@ -31,6 +31,8 @@ from typing import Callable
 
 from PySide6.QtCore import Qt
 
+from ...ddc.profiles import port_label
+
 from . import theme
 
 PORT = {"windows": "HDMI", "mac": "USB-C"}
@@ -51,15 +53,19 @@ class MenuEntry:
 def build_menu_entries(cfg, current: str, hotkey_label: str, actions: dict) -> list[MenuEntry]:
     """生成菜单内容。`current` 是画面归属（windows / mac / unknown）。"""
     known = current in PORT
+    peer = (getattr(cfg.clipboard, "peer_name", "") or "").strip() or "对端"
+    local_port = port_label(cfg.port_for_role("local"))
+    peer_port = port_label(cfg.port_for_role("peer"))
     if known:
-        other = "mac" if current == "windows" else "windows"
-        other_title = "Mac" if other == "mac" else "Windows"
-        self_title = "Windows" if current == "windows" else "Mac"
-        switch_title = f"切换到 {other_title}（{PORT[other]}）"
-        status_title = f"当前画面：{self_title}"
+        role = cfg.role_for_host(current)
+        if role == "peer":
+            switch_title = f"切换回这台（{local_port}）"
+            status_title = f"当前画面：{peer}"
+        else:
+            switch_title = f"切换到 {peer}（{peer_port}）"
+            status_title = "当前画面：这台"
         led = "ok"
     else:
-        peer = "Windows" if cfg.other_host() == "windows" else "Mac"
         remote_ok = bool(actions.get("remote_ready") and actions["remote_ready"]())
         switch_title = f"从 {peer} 切过来" if remote_ok else "切换（未检测到显示器）"
         status_title = "当前画面：未检测到"

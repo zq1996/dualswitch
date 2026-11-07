@@ -327,6 +327,20 @@ class SwitchCard(QFrame):
         self.src_text.setText(text)
         self._polish(self.src_dot)
 
+    def set_owner_role(self, role: str | None, peer_name: str = "", detail: str = "") -> None:
+        """按角色展示画面位置：`local` = 这台，`peer` = 对端机器名。"""
+        peer = (peer_name or "").strip() or "对端"
+        if role in ("local", "peer"):
+            self.src_dot.setObjectName("srcDotOk")
+            text = f"画面在 {peer}" if role == "peer" else "画面在这台"
+            if detail:
+                text += f" · {detail}"
+        else:
+            self.src_dot.setObjectName("srcDotIdle")
+            text = "画面位置未检测" + (f" · {detail}" if detail else "")
+        self.src_text.setText(text)
+        self._polish(self.src_dot)
+
     def set_remote_available(self, available: bool) -> None:
         self._remote_ok = bool(available)
         t = theme.tokens()
@@ -410,6 +424,9 @@ class SwitchPage(QWidget):
     # ------------------------------------------------------------------ 状态
     def set_owner(self, host: str | None, detail: str = "") -> None:
         self.hero.set_owner(host, detail)
+
+    def set_owner_role(self, role: str | None, peer_name: str = "", detail: str = "") -> None:
+        self.hero.set_owner_role(role, peer_name, detail)
 
     def set_monitor_name(self, name: str) -> None:
         self.monitor_name = name or ""

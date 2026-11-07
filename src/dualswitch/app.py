@@ -139,7 +139,8 @@ class SwitchController:
 
         # 远端代发切屏（ISSUE-002）：本机打不到这块屏时，请对端替我们发 DDC Set。
         # 由 CLI 在引擎起来后注入；没注入 / 对端没连上时行为与以前完全一致。
-        self.remote_switch: Callable[[int], tuple[bool, str]] | None = None
+        # 对端代发通道：入参是端口语义名（hdmi1 / dp / usb_c…），不再传码值
+        self.remote_switch: Callable[[str], tuple[bool, str]] | None = None
         self.remote_ready: Callable[[], bool] | None = None
         # 对端「我能不能枚举到这块屏」（T_STATE 0x32 的心跳结果）。
         # 返回 True / False / None（None = 问不出来，当没有这条证据）。
@@ -934,8 +935,11 @@ class SwitchController:
             return result
 
         fn = self.remote_switch
+        port = self.port_of_value(value)
         reason = ""
-        if fn is None:
+        if not port:
+            reason = f"输入源 {value} 没有对应的端口名，无法对端代发"
+        elif fn is None:
             reason = "本机没有挂载同步引擎（剪贴板同步未启用或启动失败）"
         elif self.remote_ready is not None:
             try:
@@ -948,7 +952,7 @@ class SwitchController:
 
         if not reason:
             try:
-                ok, detail = fn(value)
+                ok, detail = fn(port)
             except Exception as exc:  # noqa: BLE001
                 ok, detail = False, f"代发调用异常：{exc}"
             if not ok:
@@ -991,6 +995,11 @@ class SwitchController:
         这是「对端代发不好用」最主要的信息缺口。
         """
         fn = self.remote_switch
+        port = self.cfg.port_for_host(target)
+        if not port:
+            self._last_remote_error = f"目标 {target} 没有对应的端口名，无法对端代发"
+            log.warning("跳过远端代发：%s", self._last_remote_error)
+            return False
         if fn is None:
             self._last_remote_error = "本机没有挂载同步引擎（剪贴板同步未启用或启动失败）"
             log.warning("跳过远端代发：%s", self._last_remote_error)
@@ -1007,7 +1016,7 @@ class SwitchController:
                 return False
         started = self._clock()
         try:
-            ok, detail = fn(value)
+            ok, detail = fn(port)
         except Exception as exc:  # noqa: BLE001
             self._last_remote_error = f"代发调用异常：{exc}"
             log.warning("远端代发切屏异常：%s", exc)

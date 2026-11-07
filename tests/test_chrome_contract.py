@@ -196,5 +196,54 @@ def test_menu_entries_are_platform_agnostic():
     entries = build_menu_entries(Config(), "mac", "Right Option+Space", {})
     assert all(isinstance(e, MenuEntry) for e in entries)
     titles = [e.title for e in entries]
-    assert any("当前画面：Mac" in t for t in titles)
-    assert any("Windows" in t for t in titles)
+    assert any("当前画面：这台" in t for t in titles)
+    assert any("切换到" in t for t in titles)
+
+
+def test_role_and_platform_are_separate():
+    """P3：双 Windows 时平台相同，但本地/对端角色仍能分开。"""
+    from dualswitch.config import Config
+
+    cfg = Config()
+    cfg.this_host = "windows"
+    cfg.wiring = {"local": "hdmi1", "peer": "usb_c"}
+    cfg.clipboard.peer_platform = "windows"
+    cfg.clipboard.peer_name = "DESKTOP-B"
+
+    assert cfg.local_platform() == "windows"
+    assert cfg.peer_platform() == "windows"          # 不再是「相反平台」
+    assert cfg.platform_for_role("local") == "windows"
+    assert cfg.platform_for_role("peer") == "windows"
+    # current 用历史 host 代号（windows=local，mac=peer），不是真实平台
+    assert cfg.role_for_host("windows") == "local"
+    assert cfg.role_for_host("mac") == "peer"
+
+
+def test_double_windows_menu_never_says_mac():
+    from dualswitch.config import Config
+    from dualswitch.ui.mac2.statusmenu import build_menu_entries
+
+    cfg = Config()
+    cfg.this_host = "windows"
+    cfg.wiring = {"local": "hdmi1", "peer": "usb_c"}
+    cfg.clipboard.peer_platform = "windows"
+    cfg.clipboard.peer_name = "DESKTOP-B"
+
+    for current in ("windows", "mac"):
+        titles = [e.title for e in build_menu_entries(
+            cfg, current, "Alt+Space", {"remote_ready": lambda: True}
+        )]
+        assert not any("Mac" in t for t in titles), titles
+
+    current_peer = [e.title for e in build_menu_entries(
+        cfg, "mac", "Alt+Space", {"remote_ready": lambda: True}
+    )]
+    assert "当前画面：DESKTOP-B" in current_peer
+    assert any(t.startswith("切换回这台（HDMI 1）") for t in current_peer)
+
+
+def test_hello_carries_real_platform():
+    from dualswitch.sync import protocol as P
+
+    header = P.hello_header("dev", "host", None, platform="windows")
+    assert header["plat"] == "windows"

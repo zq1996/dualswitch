@@ -105,14 +105,14 @@ def test_transport_send_switch_requires_link():
 # --------------------------------------------------------------------------- #
 def test_request_switch_without_link_fails_fast():
     engine = make_engine(FakeTransport(connected=False))
-    ok, detail = engine.request_switch(18, timeout=0.2)
+    ok, detail = engine.request_switch("usb_c", timeout=0.2)
     assert ok is False
     assert "未连接" in detail
 
 
 def test_request_switch_times_out_without_ack():
     engine = make_engine()
-    ok, detail = engine.request_switch(18, timeout=0.2)
+    ok, detail = engine.request_switch("usb_c", timeout=0.2)
     assert ok is False
     assert "未响应" in detail
 
@@ -123,13 +123,13 @@ def test_request_switch_resolves_on_ack():
     box: dict = {}
 
     def worker():
-        box["result"] = engine.request_switch(18, timeout=2.0)
+        box["result"] = engine.request_switch("usb_c", timeout=2.0)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
     assert wait_for(lambda: bool(transport.switch_frames), 1.0)
     header = transport.switch_frames[0]
-    assert header["vcp"] == 0x60 and header["value"] == 18
+    assert header["port"] == "usb_c"
     engine._on_switch_ack({"req": header["req"], "ok": True, "detail": ""})
     thread.join(timeout=2.0)
     assert box["result"] == (True, "")
@@ -141,7 +141,7 @@ def test_request_switch_reports_peer_rejection():
     box: dict = {}
 
     def worker():
-        box["result"] = engine.request_switch(18, timeout=2.0)
+        box["result"] = engine.request_switch("usb_c", timeout=2.0)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
@@ -158,43 +158,44 @@ def test_request_switch_reports_peer_rejection():
 # --------------------------------------------------------------------------- #
 def test_serve_switch_calls_executor_and_acks():
     transport = FakeTransport()
-    calls: list[int] = []
-    engine = make_engine(transport, executor=lambda value: (calls.append(value) or (True, "")))
+    calls: list[str] = []
+    engine = make_engine(transport, executor=lambda port: (calls.append(port) or (True, "")))
 
-    engine._on_switch_request({"req": "r1", "vcp": 0x60, "value": 18})
+    engine._on_switch_request({"req": "r1", "port": "usb_c"})
     assert wait_for(lambda: bool(transport.switch_acks), 1.0)
     ack = transport.switch_acks[0]
     assert ack == {"req": "r1", "ok": True, "detail": ""}
-    assert calls == [18]
+    assert calls == ["usb_c"]
     assert engine.switch_stats["served"] == 1
 
 
 def test_serve_switch_is_idempotent_per_req():
     transport = FakeTransport()
-    calls: list[int] = []
-    engine = make_engine(transport, executor=lambda value: (calls.append(value) or (True, "")))
+    calls: list[str] = []
+    engine = make_engine(transport, executor=lambda port: (calls.append(port) or (True, "")))
 
-    engine._on_switch_request({"req": "same", "vcp": 0x60, "value": 18})
+    engine._on_switch_request({"req": "same", "port": "usb_c"})
     assert wait_for(lambda: len(transport.switch_acks) == 1, 1.0)
-    engine._on_switch_request({"req": "same", "vcp": 0x60, "value": 18})
+    engine._on_switch_request({"req": "same", "port": "usb_c"})
     assert wait_for(lambda: len(transport.switch_acks) == 2, 1.0)
-    assert calls == [18]                     # 第二次没有重复执行
+    assert calls == ["usb_c"]                # 第二次没有重复执行
     assert transport.switch_acks[1]["ok"] is True
 
 
-def test_serve_switch_rejects_wrong_vcp():
+def test_serve_switch_rejects_legacy_numeric_payload():
+    """旧版数值载荷：不猜码表，回执失败让发送端本地兜底。"""
     transport = FakeTransport()
-    engine = make_engine(transport, executor=lambda value: (True, ""))
-    engine._on_switch_request({"req": "r2", "vcp": 0x10, "value": 18})
+    engine = make_engine(transport, executor=lambda port: (True, ""))
+    engine._on_switch_request({"req": "r2", "vcp": 0x60, "value": 18})
     assert wait_for(lambda: bool(transport.switch_acks), 1.0)
     ack = transport.switch_acks[0]
-    assert ack["ok"] is False and "VCP" in ack["detail"]
+    assert ack["ok"] is False and "旧版协议" in ack["detail"]
 
 
 def test_serve_switch_without_executor_fails_cleanly():
     transport = FakeTransport()
     engine = make_engine(transport, executor=None)
-    engine._on_switch_request({"req": "r3", "vcp": 0x60, "value": 18})
+    engine._on_switch_request({"req": "r3", "port": "usb_c"})
     assert wait_for(lambda: bool(transport.switch_acks), 1.0)
     assert transport.switch_acks[0]["ok"] is False
     assert "未挂载" in transport.switch_acks[0]["detail"]

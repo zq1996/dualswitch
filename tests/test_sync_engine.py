@@ -350,8 +350,8 @@ def test_link_survives_clipboard_disabled():
     )
     engine_a = SyncEngine(cfg_a, host_label="mac", backend=MockBackend())
     engine_b = SyncEngine(cfg_b, host_label="windows", backend=MockBackend())
-    served: list[int] = []
-    engine_b.set_switch_executor(lambda value: (served.append(value), (True, ""))[1])
+    served: list[str] = []
+    engine_b.set_switch_executor(lambda port: (served.append(port), (True, ""))[1])
     engine_a.start()
     engine_b.start()
     try:
@@ -365,9 +365,9 @@ def test_link_survives_clipboard_disabled():
         assert engine_a._clip_on is False
 
         # 但代发链路必须是通的 —— 这正是本次修复的目的
-        ok, detail = engine_a.request_switch(17)
+        ok, detail = engine_a.request_switch("hdmi1")
         assert ok, detail
-        assert served == [17]
+        assert served == ["hdmi1"]
     finally:
         engine_a.stop()
         engine_b.stop()

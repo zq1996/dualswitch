@@ -24,6 +24,7 @@ from pathlib import Path
 from . import __version__, config as config_mod, logging_setup, winenv
 from .app import SwitchController
 from .config import Config, ConfigError
+from .ddc.profiles import normalize_port
 from .ddc import create_backend
 from .ddc.base import DDCError, probe_active_monitors
 from .hotkey import HotkeyError, create_hotkey, parse_hotkey, resolve_backend_name
@@ -756,14 +757,15 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
     try:
         from .sync.engine import SyncEngine
 
-        def _serve_switch(value: int) -> tuple[bool, str]:
-            """对端说「替我切到 value」：校验后用本机后端发 DDC Set。"""
+        def _serve_switch(port: str) -> tuple[bool, str]:
+            """对端说「替我切到 port」：用**本机自己的 profile**解析成码值再发。"""
             if cfg.dry_run:
                 return False, "本机处于演练模式，未真正发送指令"
-            # 允许全部端口码（含 HDMI2 / DP / USB-C），不能只看旧 sources 的两个值
-            allowed = cfg.all_values()
-            if int(value) not in allowed:
-                return False, f"输入源 {value} 不在本机配置里（允许 {sorted(allowed)}）"
+            port_name = normalize_port(port)
+            value = cfg.active_profile().value(port_name) if port_name else None
+            if value is None:
+                known = [p for p, _ in cfg.active_profile().items()]
+                return False, f"端口 {port!r} 不在本机这块屏的配置里（可用 {known}）"
             if backend is None:
                 return False, "本机没有可用的 DDC 后端"
             try:

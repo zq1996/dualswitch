@@ -112,6 +112,7 @@ class ClipboardConfig:
     device_id: str = ""                # 首次运行生成 {host}-{8hex}
     peer_device: str = ""              # 最近一次握手的对端 device_id
     peer_name: str = ""                # 对端主机名（界面上显示）
+    peer_platform: str = ""            # 对端真实平台：mac / windows（HELLO 上报）
     paired_at: float = 0.0             # 完成配对的时间戳（配对页显示）
     psk: str = ""                      # 配对后的共享密钥（hex）
     max_image_mb: int = 32
@@ -269,7 +270,37 @@ class Config:
         return "windows" if sys.platform == "win32" else "mac"
 
     def other_host(self) -> str:
+        """对端的历史「主机名」口径。**只用于旧接口兼容**：双 Windows 时它也会
+        返回 `mac`，这只是「角色代号」，不是真实平台。新代码请用
+        `role_for_host()` + `platform_for_role()`。"""
         return "mac" if self.effective_host() == "windows" else "windows"
+
+    @staticmethod
+    def normalize_platform(value: str) -> str:
+        value = str(value or "").strip().lower()
+        if value in ("mac", "macos", "darwin", "apple"):
+            return "mac"
+        if value in ("win", "windows", "win32"):
+            return "windows"
+        return ""
+
+    def local_platform(self) -> str:
+        """本机真实平台（不是角色）。"""
+        return self.normalize_platform(self.effective_host()) or "mac"
+
+    def peer_platform(self) -> str:
+        """对端真实平台。已知就用 HELLO 上报值；未知按历史假设取相反平台。"""
+        known = self.normalize_platform(getattr(self.clipboard, "peer_platform", ""))
+        if known:
+            return known
+        return "mac" if self.local_platform() == "windows" else "windows"
+
+    def platform_for_role(self, role: str) -> str:
+        if role == "local":
+            return self.local_platform()
+        if role == "peer":
+            return self.peer_platform()
+        return ""
 
     def role_for_host(self, host: str) -> str:
         if host == self.effective_host():
@@ -331,6 +362,17 @@ class Config:
 
     def port_value(self, port: str) -> int | None:
         return self.active_profile().value(port)
+
+    def role_of_value(self, value: int) -> str:
+        """VCP 数值 → 角色。本机/对端码值不同（validate 已拦相同值）。"""
+        try:
+            want = int(value)
+        except (TypeError, ValueError):
+            return ""
+        for role in ROLES:
+            if self.value_for_role(role) == want:
+                return role
+        return ""
 
     def value_for_role(self, role: str) -> int:
         port = self.port_for_role(role)
@@ -778,6 +820,8 @@ def _validate_clipboard(cb: ClipboardConfig) -> None:
         raise ConfigError("clipboard.storage_limit_mb 必须在 1..4096 之间")
     if cb.psk and not _is_hex(cb.psk):
         raise ConfigError("clipboard.psk 必须是十六进制字符串")
+    if cb.peer_platform not in ("", "mac", "macos", "windows"):
+        raise ConfigError("clipboard.peer_platform 只能是 mac / windows（空 = 未知）")
 
 
 def _validate_mouse_switch(ms: MouseSwitchConfig) -> None:

@@ -232,7 +232,7 @@ def test_both_sides_no_monitor_returns_unknown():
     backend.set_input = local_fail
     result = ctl.switch_now()              # 本地 DDCError → 远端也失败
     assert result.ok is False
-    assert asked == [18]                   # 确实问过对端，不是直接放弃
+    assert asked == ["usb_c"]              # 确实问过对端，不是直接放弃（且只传端口名）
     assert ctl.source_state == SOURCE_UNKNOWN
 
 

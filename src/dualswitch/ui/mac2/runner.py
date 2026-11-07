@@ -261,9 +261,13 @@ class UiRunner2(QObject):
         )
         if self.status is not None:
             self.status.set_tooltip(f"屏幕切换 · {self._hotkey_label()}（单击图标打开菜单）")
+            # 设置页「关闭窗口后仍在菜单栏运行」：关 → 关窗即退出；开 → 隐藏到菜单栏
+            self.window.withdraw_to_tray = bool(self.cfg.tray)
+            self.window.quit_on_close = not bool(self.cfg.tray)
         else:
             log.warning("菜单栏状态项不可用（AppKit 缺失），只能从窗口操作")
             self.window.withdraw_to_tray = False
+            self.window.quit_on_close = False
 
     def _build_app_menu(self) -> None:
         """全局菜单栏：设置 ⌘, / 剪贴板 ⌘⇧V / 隐藏 ⌘H / 退出 ⌘Q。"""
@@ -355,23 +359,33 @@ class UiRunner2(QObject):
         )
         dialog.exec()
 
-    def _on_calibrated(self, profile) -> None:  # noqa: ANN001
-        """标定完成：写回 profile、刷新端口行与窗口高度。"""
+    def _on_calibrated(self, profile) -> bool:  # noqa: ANN001
+        """标定完成：写回 profile、刷新端口行与窗口高度。
+
+        返回 False 表示**落盘失败**（本次仍生效）；标定窗口据此不关闭并把原因
+        显示在确认页上，而不是只在主窗口底部闪一条 toast。
+        """
         self.cfg.monitors[profile.key] = profile
         self.cfg.active_monitor = profile.key
         self.cfg.set_active_profile(profile)
+        saved = True
         try:
             save_config(self.cfg, self.cfg_file)
         except Exception as exc:  # noqa: BLE001 - 保存失败也要让本次生效
             log.error("保存标定结果失败：%s", exc)
             self.toast.show_text(f"标定已生效，但保存失败：{exc}")
+            saved = False
         else:
             self.toast.show_text(f"标定已保存：{profile.name or profile.key}")
-        self.controller.cfg = self.cfg
-        self.switch_page.set_config(self.cfg)
-        self.window.apply_port_count(self.cfg)
-        self.switch_page.set_monitor_name(self._monitor_name())
-        self.monitor_page.set_config(self.cfg)
+        try:
+            self.controller.cfg = self.cfg
+            self.switch_page.set_config(self.cfg)
+            self.window.apply_port_count(self.cfg)
+            self.switch_page.set_monitor_name(self._monitor_name())
+            self.monitor_page.set_config(self.cfg)
+        except Exception:  # noqa: BLE001 - 界面刷新失败不该被误报成「保存失败」
+            log.exception("标定后的界面刷新失败")
+        return saved
 
     def reidentify_monitor(self) -> None:
         """重新读身份并重新匹配 profile（换屏后不用重启）。"""
@@ -456,8 +470,7 @@ class UiRunner2(QObject):
         port = self.controller.port_of_value(int(value))
         if port:
             return port_label(port)
-        host = self.controller.host_of_value(int(value))
-        return "Mac" if host == "mac" else ("Windows" if host == "windows" else f"输入源 {value}")
+        return f"输入源 {value}"
 
     def do_switch(self, target: str | None = None) -> None:
         """菜单栏入口：沿用「切到另一台」的老语义（热键走 controller.trigger）。"""
@@ -466,7 +479,10 @@ class UiRunner2(QObject):
         if target not in ("windows", "mac"):
             target = self._next_target()
         self._busy = True
-        label = "Mac" if target == "mac" else "Windows"
+        from ...ddc.profiles import port_label
+
+        port = self.cfg.port_for_host(target)
+        label = port_label(port) if port else "目标输入口"
         self.switch_page.set_busy(True, label)
         self.switch_page.set_note(f"正在发送 DDC Set · 目标 {label}", ok=False)
 
@@ -717,37 +733,61 @@ class UiRunner2(QObject):
         except Exception:  # noqa: BLE001
             return False
 
+    def _peer_name(self) -> str:
+        return (getattr(self.cfg.clipboard, "peer_name", "") or "").strip() or "对端"
+
     def _apply_owner(self) -> None:
-        """把画面归属刷进切换页：windows/mac → 「画面在 X」，否则「未检测」。"""
+        """把画面归属刷进切换页：按**角色**展示，双 Windows 也不会出现「Mac」。"""
         source = self.controller.source_state
-        self.switch_page.set_owner(source if source in ("windows", "mac") else None)
+        role = self.cfg.role_for_host(source) if source in ("windows", "mac") else ""
+        self.switch_page.set_owner_role(role or None, self._peer_name())
+
+    def _foreground(self) -> bool:
+        try:
+            return bool(self.window.isVisible() and self.window.isActiveWindow())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _notify(self, message: str) -> None:
+        """设置页「切换通知」：窗口在前台用窗口内 toast，不在前台走菜单栏通知。"""
+        if self._foreground():
+            self.toast.show_text(message)
+            return
+        if self.status is not None and bool(getattr(self.cfg, "notify", True)):
+            self.status.notify("屏幕切换", message)
+        else:
+            log.info("[通知] %s", message)
 
     def _apply_result(self, result) -> None:  # noqa: ANN001
         label = self._label_for(result.value)
         if not result.ok:
             self.switch_page.set_note(f"{label} 切换失败：{result.error}", ok=False, bad=True)
-            self.toast.show_text(f"切换失败：{result.error}")
+            self._notify(f"切换失败：{result.error}")
             return
         if result.dry_run:
             self.switch_page.set_note("[演练] 未真正发送指令", ok=True)
             return
         if getattr(result, "via", "local") == "remote":
             self.switch_page.set_note(
-                f"已请对端发送 {result.value}（{label}）· 往返 {result.set_call_ms:.0f} ms", ok=True
+                f"已请 {self._peer_name()} 发送 {result.value}（{label}）"
+                f" · 往返 {result.set_call_ms:.0f} ms", ok=True
             )
-        else:
-            ms = result.set_call_ms
-            suffix = {
-                "confirmed": "回读已确认",
-                "unconfirmed": "回读未确认（读通道不可用属已知）",
-                "skipped": "未回读",
-            }.get(result.readback, "指令已下达")
-            self.switch_page.set_note(f"本机发送 {result.value}（{label}）· {ms:.0f} ms · {suffix}", ok=True)
-        self.toast.show_text(f"已发送：切到 {label}")
+            self._notify(f"已切换到 {label} · {self._peer_name()} 代发")
+            return
+        ms = result.set_call_ms
+        suffix = {
+            "confirmed": "回读已确认",
+            "unconfirmed": "回读未确认（读通道不可用属已知）",
+            "skipped": "未回读",
+        }.get(result.readback, "指令已下达")
+        self.switch_page.set_note(
+            f"本机发送 {result.value}（{label}）· {ms:.0f} ms · {suffix}", ok=True
+        )
+        self._notify(f"已切换到 {label} · {ms:.0f} ms")
 
     def _refresh_conn_ui(self) -> None:
         connected = self._remote_ready()
-        peer = "Windows" if self.cfg.other_host() == "windows" else "Mac"
+        peer = self._peer_name()
         if connected:
             self.window.set_side_status(f"已连接 {peer}", ok=True)
         else:
@@ -807,6 +847,10 @@ class UiRunner2(QObject):
             cfg.repair_wiring()
             cfg.sync_sources()
         self.cfg = cfg
+        if self.status is not None:
+            # 设置页改了「关闭窗口后仍在菜单栏运行」→ 立即改变关窗行为
+            self.window.withdraw_to_tray = bool(cfg.tray)
+            self.window.quit_on_close = not bool(cfg.tray)
         # 引擎读的是自己持有的 cfg 引用：换配置要跟着换，否则「保留历史 / 图片开关」
         # 这类设置改了不生效。
         if self.clip_engine is not None:

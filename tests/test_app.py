@@ -313,7 +313,7 @@ def test_remote_channel_does_not_touch_local_backend():
 
     assert result.ok is True
     assert result.via == "remote"
-    assert remote == [18]
+    assert remote == ["usb_c"]
     assert backend.set_calls == [], "代发通道本机一条 DDC 都不该发"
     assert result.readback == "skipped"
 

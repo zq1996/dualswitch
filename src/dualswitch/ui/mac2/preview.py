@@ -111,7 +111,12 @@ def source_label(record) -> str:  # noqa: ANN001
 
 
 def source_system(record) -> str:
-    """来源系统（角标）：本机 → 本机系统；remote → 另一台。"""
+    """来源系统（角标）：优先用记录里携带的真实平台，双 Windows 也不会画错。"""
+    platform = (getattr(record, "source_platform", "") or "").strip().lower()
+    if platform in ("mac", "macos", "apple"):
+        return "apple"
+    if platform in ("windows", "win"):
+        return "windows"
     from ..chrome import current as chrome
 
     local = chrome().PLATFORM_LOGO  # apple | windows

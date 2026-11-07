@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from ...config import Config, ConfigError, from_dict, save as save_config
 from ...hotkey.base import HotkeyError, parse_hotkey
 from . import theme
-from .widgets import KeyCaps, Segmented, ToggleSwitch, label, settings_row
+from .widgets import KeyCaps, ToggleSwitch, label, settings_row
 
 
 # --------------------------------------------------------------------------- #
@@ -138,6 +138,49 @@ class HotkeyKeycaps(QWidget):
 # --------------------------------------------------------------------------- #
 # 设置页
 # --------------------------------------------------------------------------- #
+class MonitorEntry(QFrame):
+    """「显示器配置 ›」整行可点：设计稿 ④ 的 openrow（右侧是说明 + 折角箭头）。"""
+
+    clicked = Signal()
+
+    def __init__(self, title: str, sub: str, parent=None):
+        super().__init__(parent)
+        t = theme.tokens()
+        self.setObjectName("monitorEntry")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setStyleSheet(
+            "QFrame#monitorEntry{background:transparent;border:0;}"
+            f"QFrame#monitorEntry:hover{{background:rgba(78,135,255,0.04);}}"
+        )
+        row = QHBoxLayout(self)
+        row.setContentsMargins(15, 9, 15, 9)
+        row.setSpacing(10)
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(2)
+        self.title = label(title, "setTitle")
+        self.sub = label(sub, "setSub")
+        col.addWidget(self.title)
+        col.addWidget(self.sub)
+        row.addLayout(col, 1)
+        action = label("查看与标定", "setSub")
+        row.addWidget(action, 0, Qt.AlignVCenter)
+        chev = label("›", "setSub")
+        chev.setStyleSheet(f"color:{t.ink3};font-size:13px;background:transparent;")
+        row.addWidget(chev, 0, Qt.AlignVCenter)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def click(self) -> None:  # 与 QPushButton 同名，调用方/测试不用区分
+        self.clicked.emit()
+
+
 class SettingsPage(QWidget):
     saved = Signal(object)            # Config
     clearRequested = Signal()         # 「存储上限」旁边的清理按钮
@@ -163,24 +206,33 @@ class SettingsPage(QWidget):
         scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
         host = QWidget()
         lay = QVBoxLayout(host)
-        lay.setContentsMargins(20, 18, 20, 24)
-        lay.setSpacing(20)
+        lay.setContentsMargins(20, 16, 20, 20)
+        lay.setSpacing(12)
+
+        # ---- 显示器（V3 的主设置，放最前） ----
+        val_match = label(self.cfg.monitor_match or "（自动取第一台）", "setVal")
+        val_backend = label(self.cfg.ddc_backend, "setVal")
+        profile = self.cfg.active_profile()
+        bits = [profile.name or "外接显示器", f"{len(profile.ports)} 个输入口"]
+        calibrated = profile.is_calibrated() or profile.key in self.cfg.monitors
+        bits.append("已标定" if calibrated else "未标定")
+        self.btn_monitor = MonitorEntry("显示器配置", " · ".join(bits))
+        self.btn_monitor.clicked.connect(self.monitorConfigRequested)
+        sec_monitor = self._section("显示器", [
+            self.btn_monitor,
+            settings_row("显示器匹配", "按 m1ddc 列出的显示器名匹配", val_match),
+            settings_row("DDC 后端", "auto 在 mac 上即 m1ddc", val_backend),
+        ])
 
         # ---- 通用 ----
-        self.seg_policy = Segmented(
-            [("standard", "标准"), ("force", "强制")],
-            getattr(self.cfg, "switch_policy", "standard"),
-        )
-        self.seg_policy.changed.connect(self._apply)
         self.sw_notify = ToggleSwitch(self.cfg.notify)
         self.sw_notify.clicked.connect(self._apply)
         self.sw_tray = ToggleSwitch(self.cfg.tray)
         self.sw_tray.clicked.connect(self._apply)
-        lay.addWidget(self._section("通用", [
-            settings_row("切换模式", "标准 = 先本地后请对端代发；强制 = 直接发 Set", self.seg_policy),
-            settings_row("切换完成通知", "切换成功后弹出系统通知", self.sw_notify),
-            settings_row("关闭窗口后仍在菜单栏运行", "mac 端默认开启", self.sw_tray),
-        ]))
+        sec_general = self._section("通用", [
+            settings_row("切换通知", "切换成功或失败时弹出系统通知", self.sw_notify),
+            settings_row("关闭窗口后仍在菜单栏运行", "关闭则关窗即退出应用", self.sw_tray),
+        ])
 
         # ---- 剪贴板 ----
         self.sw_clip = ToggleSwitch(self.cfg.clipboard.enabled)
@@ -196,11 +248,11 @@ class SettingsPage(QWidget):
         self.edit_storage.setValidator(QIntValidator(10, 5000, self))
         self.edit_storage.editingFinished.connect(self._apply)
         self._refresh_storage()
-        lay.addWidget(self._section("剪贴板", [
+        sec_clip = self._section("剪贴板", [
             settings_row("启用跨端剪贴板", "文字与图片自动同步到另一台", self.sw_clip),
             settings_row("悬浮预览", "鼠标悬浮在缩略图上时展开预览窗", self.sw_hover),
             settings_row("存储上限", "超过上限自动丢弃最旧的记录", self._storage_control()),
-        ]))
+        ])
 
         # ---- 热键 ----
         self.hk_main = HotkeyKeycaps(self.cfg.hotkey)
@@ -211,28 +263,14 @@ class SettingsPage(QWidget):
         self.hk_clip.recordingChanged.connect(self.recordingChanged)
         self.sw_strict = ToggleSwitch("ralt" in parse_hotkey(self.cfg.hotkey).modifiers)
         self.sw_strict.clicked.connect(self._apply)
-        lay.addWidget(self._section("热键", [
+        sec_hotkey = self._section("热键", [
             settings_row("全局热键", "点击键帽后按下新组合键", self.hk_main),
             settings_row("剪贴板热键", "呼出剪贴板页", self.hk_clip),
             settings_row("只认右 Option", "打开后左 Option 不触发", self.sw_strict),
-        ]))
+        ])
 
-        # ---- 显示器 ----
-        val_match = label(self.cfg.monitor_match or "（自动取第一台）", "setVal")
-        val_backend = label(self.cfg.ddc_backend, "setVal")
-        self.btn_monitor = QPushButton("显示器配置 ›")
-        self.btn_monitor.setObjectName("ghostBtn")
-        self.btn_monitor.setFixedHeight(28)
-        self.btn_monitor.setMinimumWidth(88)
-        self.btn_monitor.setCursor(Qt.PointingHandCursor)
-        self.btn_monitor.setFocusPolicy(Qt.NoFocus)
-        self.btn_monitor.clicked.connect(self.monitorConfigRequested)
-        lay.addWidget(self._section("显示器", [
-            settings_row("显示器配置", "标定端口码表 / 设置这台与对方接哪个口", self.btn_monitor),
-            settings_row("显示器匹配", "按 m1ddc 列出的显示器名匹配", val_match),
-            settings_row("DDC 后端", "auto 在 mac 上即 m1ddc", val_backend),
-        ]))
-
+        for section in (sec_monitor, sec_general, sec_clip, sec_hotkey):
+            lay.addWidget(section)
         lay.addStretch(1)
         self._refresh_storage()
         scroll.setWidget(host)
@@ -335,7 +373,8 @@ class SettingsPage(QWidget):
             parse_hotkey(hotkey)
             data = self.cfg.to_dict()
             data.update(
-                switch_policy=self.seg_policy.value(),
+                # 「切换模式」已从界面移除：保留盘上原值，不改写用户已有选择。
+                switch_policy=getattr(self.cfg, "switch_policy", "standard"),
                 notify=self.sw_notify.isChecked(),
                 tray=self.sw_tray.isChecked(),
                 # 外观固定浅色（用户 2026-10-21：不要深色模式）

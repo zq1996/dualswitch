@@ -753,7 +753,7 @@ def test_chips_height_and_counts(app, cfg):
 def test_settings_has_five_groups(app, cfg, tmp_path):
     page = SettingsPage(cfg, tmp_path / "config.json")
     titles = [lb.text() for lb in page.findChildren(QLabel) if lb.objectName() == "setSec"]
-    assert titles == ["通用", "剪贴板", "热键", "显示器", "高级"]
+    assert titles == ["显示器", "通用", "剪贴板", "热键", "高级"]
     # 高级组三个调试入口都在设置里（托盘日常菜单不再有它们）
     assert page.probeRequested is not None
     assert page.openLogRequested is not None
@@ -1557,7 +1557,7 @@ def test_settings_has_monitor_config_entry(app, cfg):
     page = SettingsPage(cfg, "C:/dualswitch-v3-test.json")
     hits = []
     page.monitorConfigRequested.connect(lambda: hits.append(True))
-    assert page.btn_monitor.text() == "显示器配置 ›"
+    assert page.btn_monitor.title.text() == "显示器配置"
     page.btn_monitor.click()
     assert hits == [True]
 
@@ -1599,5 +1599,48 @@ def test_calibration_dialog_preselects_known_ports(app):
             "dp",
             "usb_c",
         ]
+    finally:
+        dialog.close()
+
+
+def test_calibration_restart_reenables_start(app):
+    """「重来」回到第一步后，「开始标定」必须还能点（回归：之前永久 disabled）。"""
+    from dualswitch.ddc.mock import MockBackend
+    from dualswitch.ui.win2.calibrate import CalibrationDialog
+
+    cfg, _ = _cfg_with("AOC:10128")
+    dialog = CalibrationDialog(cfg.active_profile(), MockBackend(current=18), None, None)
+    try:
+        dialog._start()
+        assert not dialog.btn_start.isEnabled()
+        dialog._show_confirm()
+        dialog._restart()
+        assert dialog.btn_start.isEnabled()
+        for choice in dialog._checks.values():
+            choice.setChecked(False)
+        assert not dialog.btn_start.isEnabled()
+        dialog._checks["hdmi1"].setChecked(True)
+        assert dialog.btn_start.isEnabled()
+    finally:
+        dialog.close()
+
+
+def test_calibration_save_failure_stays_open_with_reason(app):
+    """落盘失败时不能「看起来保存成功」：窗口不关，原因写在确认页上。"""
+    from PySide6.QtWidgets import QDialog
+
+    from dualswitch.ddc.mock import MockBackend
+    from dualswitch.ui.win2.calibrate import CalibrationDialog
+
+    cfg, _ = _cfg_with("AOC:10128")
+    dialog = CalibrationDialog(
+        cfg.active_profile(), MockBackend(current=18), None, lambda _p: False
+    )
+    try:
+        dialog._show_confirm()
+        dialog._save()
+        assert dialog.result() != QDialog.Accepted
+        assert not dialog.confirm_error.isHidden()
+        assert "保存" in dialog.confirm_error.text()
     finally:
         dialog.close()

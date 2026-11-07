@@ -11,8 +11,8 @@ import socket
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QIntValidator
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QIntValidator, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QStyle,
+    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
@@ -48,30 +50,125 @@ def _ghost(text: str, parent=None) -> QPushButton:
     return btn
 
 
-def _card(parent=None) -> QFrame:
+def _card(parent=None, name: str = "monitorCard") -> QFrame:
+    """**选择器必须带 #objectName**：`QFrame{...}` 会级联到所有子 QLabel
+    （QLabel 继承自 QFrame），表现就是每个文字外面都被画了一圈框线。"""
     t = theme.tokens()
     frame = QFrame(parent)
+    frame.setObjectName(name)
     frame.setStyleSheet(
-        f"QFrame{{background:{t.card2};border:1px solid {t.line_soft};border-radius:10px;}}"
+        f"QFrame#{name}{{background:{t.card2};border:1px solid {t.line_soft};"
+        "border-radius:10px;}"
     )
     return frame
 
 
+class _PortItemDelegate(QStyledItemDelegate):
+    """弹出列表的每一行自己画背景：Qt 的 QComboBox popup 不吃 QSS 的
+    `::item:hover`，所以这里显式处理 hover / selected。"""
+
+    def sizeHint(self, option, index):  # noqa: N802
+        return QSize(0, 26)
+
+    def paint(self, painter, option, index):  # noqa: N802
+        t = theme.tokens()
+        p = painter
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        selected = bool(option.state & QStyle.State_Selected)
+        hover = bool(option.state & QStyle.State_MouseOver)
+        # hover 优先：QComboBox 的 popup 会把鼠标所在行同时标记成 Selected，
+        # 若先判断 selected，鼠标划过去永远是蓝底。用户要的是「悬浮变灰」。
+        bg = t.card3 if hover else (t.accent_soft if selected else "")
+        rect = QRectF(option.rect).adjusted(0.5, 0.5, -0.5, -0.5)
+        if bg:
+            p.setPen(Qt.NoPen)
+            p.setBrush(theme.qcolor(bg))
+            p.drawRoundedRect(rect, 5, 5)
+        p.setFont(theme.qfont(11.5, 600 if selected else 550))
+        p.setPen(theme.qcolor(t.accent_deep if selected else t.ink2))
+        p.drawText(
+            option.rect.adjusted(9, 0, -9, 0),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            str(index.data() or ""),
+        )
+        p.restore()
+
+
+class _PortCombo(QComboBox):
+    """「输入口 USB-C ⌄」：右侧必须画出下拉箭头。
+
+    原生 QComboBox 在无边框样式下只剩一行字，用户根本认不出这是下拉；
+    HIG 对 pop-up button 的要求也是「当前值 + 明确的展开指示」。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(108, 24)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setAttribute(Qt.WA_Hover, True)
+        self._hover = False
+        t = theme.tokens()
+        self.setStyleSheet(
+            f"QComboBox{{background:transparent;border:0;padding:0;}}"
+            f"QComboBox::drop-down{{border:0;width:0;}}"
+        )
+        # 弹出层是独立的 popup 窗口，不继承 QComboBox 自己的样式；必须把
+        # item 的 hover / selected 样式直接写给 view，否则鼠标划过去没反应。
+        view = self.view()
+        view.setMouseTracking(True)
+        view.viewport().setMouseTracking(True)
+        view.setStyleSheet(
+            f"QAbstractItemView{{background:#fff;border:1px solid {t.line};"
+            "border-radius:8px;padding:4px;outline:0;"
+            f"color:{t.ink};font-size:11.5px;}}"
+            "QAbstractItemView::item{min-height:24px;padding:0 8px;"
+            "border-radius:5px;background:transparent;}"
+            # 悬浮必须有反馈：HIG / 系统菜单项都靠底色变化表达可点
+            f"QAbstractItemView::item:hover{{background:{t.card3};color:{t.ink};}}"
+            f"QAbstractItemView::item:selected{{background:{t.accent_soft};"
+            f"color:{t.accent_deep};}}"
+        )
+
+    def enterEvent(self, event):  # noqa: N802
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802
+        t = theme.tokens()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        rect = self.rect()
+        if self._hover:
+            p.setPen(Qt.NoPen)
+            p.setBrush(theme.qcolor(t.card3))
+            p.drawRoundedRect(QRectF(rect), 6, 6)
+        p.setFont(theme.qfont(11, 600))
+        p.setPen(theme.qcolor(t.ink))
+        p.drawText(
+            rect.adjusted(0, 0, -18, 0),
+            Qt.AlignRight | Qt.AlignVCenter,
+            self.currentText(),
+        )
+        # 右侧的小折线箭头：下拉必须有可见的 affordance
+        cx = rect.right() - 8
+        cy = rect.center().y() + 1
+        p.setPen(QPen(theme.qcolor(t.ink2 if self._hover else t.ink3), 1.4,
+                      Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawLine(cx - 4, cy - 2, cx, cy + 2)
+        p.drawLine(cx, cy + 2, cx + 4, cy - 2)
+        p.end()
+
+
 def _port_combo(parent=None) -> QComboBox:
-    """接线卡里的「输入口 USB-C ⌄」：关闭态无边框，边框由外层 `.wv` 提供。"""
-    t = theme.tokens()
-    combo = QComboBox(parent)
-    combo.setFixedSize(96, 22)
-    combo.setCursor(Qt.PointingHandCursor)
-    combo.setFocusPolicy(Qt.NoFocus)
-    combo.setStyleSheet(
-        f"QComboBox{{background:transparent;border:0;color:{t.ink};font-size:11px;"
-        f"font-weight:550;padding:0 2px;}}"
-        f"QComboBox::drop-down{{border:0;width:16px;}}"
-        f"QComboBox QAbstractItemView{{background:#fff;border:1px solid {t.line};"
-        f"selection-background-color:{t.accent_soft};color:{t.ink};font-size:11.5px;}}"
-    )
-    return combo
+    return _PortCombo(parent)
 
 
 class _Clickable(QFrame):
@@ -90,13 +187,15 @@ class SavedRow(_Clickable):
                  on_use, on_delete, parent=None):
         super().__init__(parent)
         self._open = False
-        t = theme.tokens()
-        self.setStyleSheet(f"QFrame{{background:transparent;border:0;}}")
+        self.setObjectName("savedRow")
+        self.setStyleSheet("QFrame#savedRow{background:transparent;border:0;}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
         head = _Clickable()
+        head.setObjectName("savedHead")
+        head.setStyleSheet("QFrame#savedHead{background:transparent;border:0;}")
         head.clicked.connect(self._toggle)
         head_lay = QHBoxLayout(head)
         head_lay.setContentsMargins(15, 8, 15, 8)
@@ -256,7 +355,7 @@ class MonitorPage(QWidget):
         head.setContentsMargins(0, 5, 0, 2)
         head.addWidget(label("端口码表", "setSec"))
         head.addStretch(1)
-        head.addWidget(label("读回成功率约 50%，抓到可疑值请改", "setSub"))
+        head.addWidget(label("成功率约 50% · 数字可直接点击修改", "setSub"))
         lay.addLayout(head)
         self.port_host = QWidget()
         self.port_grid = QGridLayout(self.port_host)
@@ -277,8 +376,10 @@ class MonitorPage(QWidget):
     def _wire_card(self, caption: str, name: str, role: str):
         t = theme.tokens()
         frame = QFrame()
+        frame.setObjectName("wireCard")
         frame.setStyleSheet(
-            f"QFrame{{background:#fff;border:1px solid {t.line_soft};border-radius:10px;}}"
+            f"QFrame#wireCard{{background:#fff;border:1px solid {t.line_soft};"
+            "border-radius:10px;}"
         )
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(11, 9, 11, 9)
@@ -290,8 +391,10 @@ class MonitorPage(QWidget):
         combo = _port_combo()
         combo.currentIndexChanged.connect(self._save_wiring)
         row = QFrame()
+        row.setObjectName("wireValue")
         row.setStyleSheet(
-            f"QFrame{{background:#fff;border:1px solid {t.line};border-radius:7px;}}"
+            f"QFrame#wireValue{{background:#fff;border:1px solid {t.line};"
+            "border-radius:7px;}"
         )
         row_lay = QHBoxLayout(row)
         row_lay.setContentsMargins(8, 3, 5, 3)
@@ -368,11 +471,13 @@ class MonitorPage(QWidget):
         current = self.cfg.port_for_role("local")
         for i, port in enumerate(ports):
             cell = QFrame()
+            cell.setObjectName("portCell")
             selected = port == current
             bg = "rgba(78,135,255,0.05)" if selected else "#fff"
             border = "rgba(78,135,255,0.5)" if selected else t.line_soft
             cell.setStyleSheet(
-                f"QFrame{{background:{bg};border:1px solid {border};border-radius:9px;}}"
+                f"QFrame#portCell{{background:{bg};border:1px solid {border};"
+                "border-radius:9px;}"
             )
             cell.setFixedHeight(38)
             cell_lay = QHBoxLayout(cell)
@@ -381,13 +486,20 @@ class MonitorPage(QWidget):
             cell_lay.addWidget(label(port_label(port), "actPort"), 0, Qt.AlignVCenter)
             cell_lay.addStretch(1)
             edit = QLineEdit("" if profile.value(port) is None else str(profile.value(port)))
-            edit.setFixedWidth(58)
+            edit.setFixedWidth(64)
             edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             edit.setValidator(QIntValidator(0, 255, self))
             edit.setFont(theme.qfont(15, 600, mono=True))
+            edit.setToolTip("点击数字可直接修改这个端口的码值")
+            # 可编辑必须有视觉线索：虚线底边 = 可改；悬浮/聚焦变成实线高亮
             edit.setStyleSheet(
-                f"QLineEdit{{background:transparent;border:0;color:{t.ink};"
-                f"font-family:'{theme.MONO_FAMILIES[0]}';font-size:15px;font-weight:600;}}"
+                f"QLineEdit{{background:transparent;border:0;"
+                f"border-bottom:1px dashed {t.ink3};border-radius:0;"
+                f"color:{t.ink};font-family:'{theme.MONO_FAMILIES[0]}';"
+                "font-size:15px;font-weight:600;padding:0 4px;}"
+                f"QLineEdit:hover{{background:{t.card2};border-bottom-color:{t.accent};}}"
+                f"QLineEdit:focus{{background:{t.accent_soft};"
+                f"border-bottom:1px solid {t.accent};}}"
             )
             edit.editingFinished.connect(self._save_ports)
             cell_lay.addWidget(edit, 0, Qt.AlignVCenter)

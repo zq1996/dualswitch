@@ -126,10 +126,11 @@ def type_pixmap(kind: str, size: int = theme.THUMB, path: str = "") -> QPixmap:
     return icons.type_tile_pixmap(kind, size, bg, None, fg, glyph_override=glyph)
 
 
-def badge_pixmap(source_system: str, size: int = theme.BADGE) -> QPixmap:
-    """来源系统角标：Mac=灰底白苹果 / Windows=蓝底白四格（缩略图右下角）。"""
+def badge_pixmap(source_system: str, size: int = theme.BADGE, peer: bool = False) -> QPixmap:
+    """来源系统角标：本机用平台原色；对方统一紫底 + 平台 logo（T3.4）。"""
     system = "apple" if source_system in ("apple", "mac") else "windows"
-    return icons.badge_pixmap(system, size, theme.tokens().card)
+    bg = "#7C5CFF" if peer else None
+    return icons.badge_pixmap(system, size, theme.tokens().card, bg=bg)
 
 
 def plate_pixmap(system: str, size: int, dim: float = 1.0) -> QPixmap:

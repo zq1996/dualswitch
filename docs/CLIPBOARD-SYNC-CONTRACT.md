@@ -587,6 +587,7 @@ dualswitch clip selftest               # 本机格式矩阵
 | 2026-10-22 | macOS | 发现广播补 `plat` / `ver` / `pairing` / `paired` 四个**可选**字段；`host` 改为电脑名；接收端 20s TTL；发现始终开启 | 配对页要显示「附近有哪台电脑、什么平台、对方是否正在显示配对码」。原来 `host` 填的是 `mac`/`windows`（开发机名），拿不到真名字；原来手填 `clipboard.peer` 就永久关掉发现，换 IP 后必须重填 | 已实现（mac，§4.6）。字段纯增量，旧实现忽略即可 |
 | 2026-10-22 | macOS | `clipboard` 配置段新增 `paired_at`（float，配对完成时间戳） | 配对页要显示「上次配对时间」；`_merge_clipboard` 原来只把 int/bool 强转，float 会被当成未知类型跳过 | 已实现（mac）。**Windows 端只读**，pull 后 `config.py` 自动带上；自己写配置时别丢这个字段 |
 | 2026-11-06 | macOS | 新增三个帧类型：`0x40 T_KEY`（单键，header `e,s,u,d,m[,t]`）、`0x41 T_KEYSTATE`（10Hz 心跳 + 按下位图 `down[]` 对账 + `rtt`）、`0x42 T_FOCUS`（头 `e,target[,caps]`）；链路补 `TCP_NODELAY` | 键盘跟随切屏：键盘挂在 Windows，画面切到 Mac 时把按键转发过去。旧版本收到 0x40–0x42 走「忽略未知帧」分支、不会断连，有序升级。**`e`（epoch）只由键盘所在端推进**，接收端不自增 —— 各数各的会让所有帧被判过期，现场表现是「连得上但不打字」 | 已实现 **Mac 注入端**（`keyboard/`）。**Windows 端要实现捕获端**：LL hook + 吞键闸门 + Raw Input 互证，连同 `T_KEYSTATE` 的发送侧。线格式见 `docs/KEYBOARD-BRIDGE.md` §6，那三个 header 只许用 `protocol.key_header/key_state_header/focus_header` 拼 |
+| 2026-11-07 | macOS | P3：`T_SWITCH` 载荷从 `{"vcp","value"}` 改为 `{"port":"hdmi1","req"}`；执行方用**自己的 profile** 把端口名解析成码值，解析不到就 ACK 失败。`HELLO`/`HELLO_OK` 增加**可选** `plat`（真实平台 mac/windows） | 两端 profile 可能不同（同型号不同批次、标定值不同），传数值会让对端发错码且双方都察觉不到；传端口名后由执行方按自己的码表解析。`plat` 让双 Windows 也能正确选角色图标/文案 | 已实现（mac/win 共用）。旧数值载荷会被新执行方 ACK 失败，发起方随后回退本机 DDC；`plat` 缺失时按历史「相反平台」兜底，属兼容扩展 |
 
 格式：`| 2026-10-19 | windows | ClipItem 增加 files 字段 | P2 需要传目录 | 待 macOS 端评估 |`
 

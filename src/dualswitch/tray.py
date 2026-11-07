@@ -133,9 +133,11 @@ class TrayApp:
     def _build_menu(self):
         import pystray
 
-        other = self.cfg.other_host()
-        other_label = "Mac (USB-C)" if other == "mac" else "Windows (HDMI)"
-        this_label = "Windows (HDMI)" if other == "mac" else "Mac (USB-C)"
+        from .ddc.profiles import port_label
+
+        peer = (getattr(self.cfg.clipboard, "peer_name", "") or "").strip() or "对端"
+        other_label = f"{peer}（{port_label(self.cfg.port_for_role('peer'))}）"
+        this_label = f"这台（{port_label(self.cfg.port_for_role('local'))}）"
 
         return pystray.Menu(
             pystray.MenuItem(f"切换到 {other_label}", self._switch_other, default=True),

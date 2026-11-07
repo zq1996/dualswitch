@@ -12,19 +12,18 @@ import threading
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QIntValidator
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QIntValidator, QPainter, QPen
 from PySide6.QtWidgets import (
-    QCheckBox,
     QDialog,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -71,28 +70,87 @@ def _pill(text: str = "") -> QLabel:
     return lb
 
 
-class _Gbar(QWidget):
-    """顶部拖动条（无边框窗口也要能拖）。"""
+class _PortChoice(QFrame):
+    """端口选择卡：整卡可点，右侧是勾选圆点（设计稿的格子，而不是原生 QCheckBox）。"""
 
-    def __init__(self, dialog: QDialog, parent=None):
+    toggled = Signal()
+
+    def __init__(self, port: str, checked: bool, parent=None):
         super().__init__(parent)
-        self._dialog = dialog
-        self._pos: QPoint | None = None
-        self.setFixedHeight(34)
+        self.port = port
+        self._checked = bool(checked)
+        self._hover = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(44)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setToolTip(f"只标定勾选的口：{port_label(port)}")
+
+    def isChecked(self) -> bool:  # noqa: N802 - 与 QCheckBox 保持同名，测试/调用方不用改
+        return self._checked
+
+    def setChecked(self, checked: bool) -> None:  # noqa: N802
+        checked = bool(checked)
+        if checked == self._checked:
+            return
+        self._checked = checked
+        self.update()
+        self.toggled.emit()
 
     def mousePressEvent(self, event):  # noqa: N802
         if event.button() == Qt.LeftButton:
-            self._pos = event.globalPosition().toPoint() - self._dialog.frameGeometry().topLeft()
+            self.setChecked(not self._checked)
+            event.accept()
+            return
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):  # noqa: N802
-        if self._pos is not None and event.buttons() & Qt.LeftButton:
-            self._dialog.move(event.globalPosition().toPoint() - self._pos)
-        super().mouseMoveEvent(event)
+    def enterEvent(self, event):  # noqa: N802
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
 
-    def mouseReleaseEvent(self, event):  # noqa: N802
-        self._pos = None
-        super().mouseReleaseEvent(event)
+    def leaveEvent(self, event):  # noqa: N802
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802
+        t = theme.tokens()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        # 0.5px 内缩把 1px 描边对齐到设备像素栅格。否则 Retina 屏上圆角处的
+        # 抗锯齿会把边线叠成 2–3 个像素，看起来就是「四个角特别重」。
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        bg = t.accent_soft if self._checked else t.card
+        if self._hover and not self._checked:
+            bg = t.card2
+        border = t.accent if self._checked else t.line
+        pen = QPen(theme.qcolor(border), 1)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(theme.qcolor(bg))
+        p.drawRoundedRect(rect, 9, 9)
+
+        p.setFont(theme.qfont(11.5, 650 if self._checked else 550))
+        p.setPen(theme.qcolor(t.accent_deep if self._checked else t.ink2))
+        p.drawText(
+            rect.adjusted(12, 0, -34, 0),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            port_label(self.port),
+        )
+
+        # 右侧勾选圆点：选中 = 蓝底白勾；未选 = 白底灰圈
+        box = 16
+        x = rect.right() - 12 - box
+        y = rect.center().y() - box / 2
+        p.setPen(QPen(theme.qcolor(t.accent if self._checked else t.line), 1))
+        p.setBrush(theme.qcolor(t.accent if self._checked else t.card))
+        p.drawEllipse(QRectF(x + 0.5, y + 0.5, box - 1, box - 1))
+        if self._checked:
+            p.setPen(QPen(QColor("#FFFFFF"), 1.7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.drawLine(int(x + 4), int(y + 8), int(x + 7), int(y + 11))
+            p.drawLine(int(x + 7), int(y + 11), int(x + 12), int(y + 5))
+        p.end()
 
 
 class CalibrationDialog(QDialog):
@@ -112,10 +170,12 @@ class CalibrationDialog(QDialog):
         self._selected: list[str] = []
         self._kv_rows: dict[str, tuple[QLabel, QLabel]] = {}
 
-        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        # 用系统标题栏：macOS 左上角是真正的红黄绿三个窗口键，Windows 是系统标题栏。
+        # 不再手绘红绿灯，也不再在右上角额外放一个 ✕ —— 关闭由系统窗口按钮负责。
+        self.setWindowFlags(Qt.Dialog)
+        self.setWindowTitle("标定显示器")
         self.setModal(True)
-        self.setFixedSize(560, 500)
+        self.setFixedSize(560, 420)
 
         self._poll = QTimer(self)
         self._poll.setInterval(500)
@@ -130,51 +190,23 @@ class CalibrationDialog(QDialog):
     def _build(self) -> None:
         t = theme.tokens()
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
         self.root = QFrame()
         self.root.setObjectName("calibRoot")
         self.root.setStyleSheet(
-            "QFrame#calibRoot{background:#fff;border-radius:14px;border:0;}"
+            f"QFrame#calibRoot{{background:{t.card};border-radius:0;border:0;}}"
         )
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(28)
-        shadow.setOffset(0, 8)
-        shadow.setColor(theme.qcolor(t.shadow))
-        self.root.setGraphicsEffect(shadow)
         outer.addWidget(self.root)
 
         lay = QVBoxLayout(self.root)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        bar = _Gbar(self, self.root)
-        bar.setStyleSheet(f"background:transparent;border-bottom:1px solid {t.line_soft};")
-        bar_lay = QHBoxLayout(bar)
-        bar_lay.setContentsMargins(12, 0, 8, 0)
-        bar_lay.setSpacing(6)
-        for color in ("#FF5F57", "#FEBC2E", "#28C840"):
-            dot = QLabel()
-            dot.setFixedSize(10, 10)
-            dot.setStyleSheet(f"background:{color};border-radius:5px;")
-            bar_lay.addWidget(dot, 0, Qt.AlignVCenter)
-        bar_lay.addSpacing(6)
-        bar_lay.addWidget(label("标定显示器", "setSub"))
-        bar_lay.addStretch(1)
-        btn_close = QPushButton("✕")
-        btn_close.setFixedSize(20, 20)
-        btn_close.setCursor(Qt.PointingHandCursor)
-        btn_close.setFocusPolicy(Qt.NoFocus)
-        btn_close.setStyleSheet(
-            f"QPushButton{{background:transparent;border:0;color:{t.ink3};font-size:12px;}}"
-            f"QPushButton:hover{{color:{t.ink};}}"
-        )
-        btn_close.clicked.connect(self.reject)
-        bar_lay.addWidget(btn_close)
-        lay.addWidget(bar)
 
         body = QWidget()
         self._body = QVBoxLayout(body)
-        self._body.setContentsMargins(20, 16, 20, 16)
-        self._body.setSpacing(10)
+        self._body.setContentsMargins(22, 18, 22, 18)
+        self._body.setSpacing(12)
         lay.addWidget(body, 1)
         self._build_steps()
         self._build_select()
@@ -245,35 +277,31 @@ class CalibrationDialog(QDialog):
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
-        card = QFrame()
-        t = theme.tokens()
-        card.setStyleSheet(
-            f"QFrame{{background:{t.card2};border:1px solid {t.line_soft};"
-            "border-radius:10px;}"
-        )
-        grid = QGridLayout(card)
-        grid.setContentsMargins(13, 10, 13, 10)
-        grid.setHorizontalSpacing(18)
+        grid_host = QWidget()
+        grid = QGridLayout(grid_host)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
-        self._checks: dict[str, QCheckBox] = {}
+        self._checks: dict[str, _PortChoice] = {}
         if self.profile.key == "default":
             defaults = {"hdmi1", "dp", "usb_c"}
         else:
             defaults = set(self.profile.ports)
         for i, port in enumerate(PORT_ORDER):
-            box = QCheckBox(port_label(port))
-            box.setChecked(port in defaults)
-            box.setCursor(Qt.PointingHandCursor)
-            box.setStyleSheet(
-                f"QCheckBox{{color:{t.ink};font-size:11.5px;spacing:8px;}}"
-                f"QCheckBox::indicator{{width:14px;height:14px;border:1px solid {t.line};"
-                "border-radius:4px;background:#fff;}"
-                f"QCheckBox::indicator:checked{{background:{t.accent};"
-                f"border-color:{t.accent};}}"
-            )
-            self._checks[port] = box
-            grid.addWidget(box, i // 2, i % 2)
-        lay.addWidget(card)
+            choice = _PortChoice(port, port in defaults)
+            choice.toggled.connect(self._update_select_state)
+            self._checks[port] = choice
+            grid.addWidget(choice, i // 2, i % 2)
+        lay.addWidget(grid_host)
+
+        self.select_hint = label("", "setSub")
+        lay.addWidget(self.select_hint)
+        self.select_error = label("", "setSub")
+        self.select_error.setStyleSheet(
+            f"color:{theme.tokens().danger};font-size:10.5px;background:transparent;"
+        )
+        self.select_error.setVisible(False)
+        lay.addWidget(self.select_error)
         lay.addStretch(1)
 
         row = QHBoxLayout()
@@ -286,6 +314,7 @@ class CalibrationDialog(QDialog):
         row.addWidget(self.btn_start)
         lay.addLayout(row)
         self._body.addWidget(self.page_select)
+        self._update_select_state()
 
     def _build_run(self) -> None:
         self.page_run = QWidget()
@@ -294,10 +323,11 @@ class CalibrationDialog(QDialog):
         lay.setSpacing(9)
 
         mcard = QFrame()
+        mcard.setObjectName("calibMonitorCard")
         t = theme.tokens()
         mcard.setStyleSheet(
-            f"QFrame{{background:{t.card2};border:1px solid {t.line_soft};"
-            "border-radius:10px;}"
+            f"QFrame#calibMonitorCard{{background:{t.card2};"
+            f"border:1px solid {t.line_soft};border-radius:10px;}}"
         )
         mc = QHBoxLayout(mcard)
         mc.setContentsMargins(13, 9, 13, 9)
@@ -316,8 +346,10 @@ class CalibrationDialog(QDialog):
         lay.addWidget(mcard)
 
         self.bluebox = QFrame()
+        self.bluebox.setObjectName("calibBlue")
         self.bluebox.setStyleSheet(
-            f"QFrame{{background:{t.accent_soft};border-radius:9px;border:0;}}"
+            f"QFrame#calibBlue{{background:{t.accent_soft};"
+            "border-radius:9px;border:0;}"
         )
         bb = QVBoxLayout(self.bluebox)
         bb.setContentsMargins(12, 9, 12, 9)
@@ -402,6 +434,13 @@ class CalibrationDialog(QDialog):
         self.confirm_lay.setSpacing(0)
         lay.addWidget(self.confirm_host)
         lay.addStretch(1)
+        self.confirm_error = label("", "setSub")
+        self.confirm_error.setWordWrap(True)
+        self.confirm_error.setStyleSheet(
+            f"color:{theme.tokens().danger};font-size:10.5px;background:transparent;"
+        )
+        self.confirm_error.setVisible(False)
+        lay.addWidget(self.confirm_error)
         row = QHBoxLayout()
         row.addStretch(1)
         again = _btn("重来")
@@ -418,10 +457,25 @@ class CalibrationDialog(QDialog):
     def _selected_ports(self) -> list[str]:
         return [port for port, box in self._checks.items() if box.isChecked()]
 
+    def _update_select_state(self) -> None:
+        count = len(self._selected_ports())
+        if hasattr(self, "select_hint"):
+            self.select_hint.setText(
+                f"已选 {count} 个输入口 · 只标定勾选的口" if count else "至少勾选一个输入口"
+            )
+        if hasattr(self, "select_error"):
+            self.select_error.setVisible(False)
+        if hasattr(self, "btn_start"):
+            self.btn_start.setEnabled(count > 0)
+
     def _start(self) -> None:
         selected = self._selected_ports()
         if not selected:
+            self.select_error.setText("请先勾选至少一个输入口，再开始标定。")
+            self.select_error.setVisible(True)
+            self.btn_start.setEnabled(False)
             return
+        self.select_error.setVisible(False)
         self.btn_start.setEnabled(False)
         self._selected = selected
         self._set_step(2)
@@ -454,6 +508,9 @@ class CalibrationDialog(QDialog):
             name = label(port_label(port), "actPort")
             value = label("未开始", "setSub")
             value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            # 读数/状态文案会变长（「18 · 起始口，最后跳过」）；不给最小宽度
+            # 时 QLabel 会沿用初始 33px，文字直接被裁在右边缘。
+            value.setMinimumWidth(150)
             value.setFont(theme.qfont(11, 400, mono=True))
             rl.addWidget(name)
             rl.addStretch(1)
@@ -634,6 +691,7 @@ class CalibrationDialog(QDialog):
         self._poll.stop()
         self._set_step(3)
         self._show_only(self.page_confirm)
+        self.confirm_error.setVisible(False)
         while self.confirm_lay.count():
             item = self.confirm_lay.takeAt(0)
             widget = item.widget()
@@ -645,10 +703,11 @@ class CalibrationDialog(QDialog):
             values.update(self._plan.result())
         ports = self._plan.selected_ports if self._plan is not None else list(values)
         card = QFrame()
+        card.setObjectName("calibConfirmCard")
         t = theme.tokens()
         card.setStyleSheet(
-            f"QFrame{{background:{t.card2};border:1px solid {t.line_soft};"
-            "border-radius:10px;}"
+            f"QFrame#calibConfirmCard{{background:{t.card2};"
+            f"border:1px solid {t.line_soft};border-radius:10px;}}"
         )
         cl = QVBoxLayout(card)
         cl.setContentsMargins(13, 4, 13, 4)
@@ -679,12 +738,19 @@ class CalibrationDialog(QDialog):
         self.confirm_lay.addWidget(card)
 
     def _restart(self) -> None:
+        """回到第一步：必须把「开始标定」重新放开，否则重来一次就再也点不动了。"""
+        self._poll.stop()
         self._plan = None
         self._read_failures = 0
+        self.caught_pill.setText("已抓到 0 个")
+        self.progress.setValue(0)
+        self.confirm_error.setVisible(False)
         self._set_step(1)
         self._show_only(self.page_select)
+        self._update_select_state()
 
     def _save(self) -> None:
+        self.confirm_error.setVisible(False)
         ports: dict[str, int] = {}
         for port, edit in self._confirm_edits.items():
             text = str(edit.text()).strip()
@@ -693,19 +759,35 @@ class CalibrationDialog(QDialog):
             try:
                 value = int(text)
             except ValueError:
+                self._show_save_error(f"{port_label(port)} 的码值不是数字")
                 return
-            if 0 <= value <= 0xFF:
-                ports[port] = value
-        if ports:
-            self.profile.ports = ports
-            self.profile.calibrated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
-            self.profile.builtin = False
-            if self._on_saved is not None:
-                try:
-                    self._on_saved(self.profile)
-                except (ConfigError, OSError):
-                    pass
+            if not 0 <= value <= 0xFF:
+                self._show_save_error(f"{port_label(port)} 的码值必须在 0..255")
+                return
+            ports[port] = value
+        if not ports:
+            self._show_save_error("至少保留一个端口的码值")
+            return
+        self.profile.ports = ports
+        self.profile.calibrated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+        self.profile.builtin = False
+        if self._on_saved is not None:
+            try:
+                result = self._on_saved(self.profile)
+            except (ConfigError, OSError) as exc:
+                self._show_save_error(f"保存失败：{exc}")
+                return
+            except Exception as exc:  # noqa: BLE001 - 别把异常吞成「看起来没事」
+                self._show_save_error(f"保存失败：{exc}")
+                return
+            if result is False:
+                self._show_save_error("配置没有保存成功，本次只在内存生效；请检查配置文件权限。")
+                return
         self.accept()
+
+    def _show_save_error(self, text: str) -> None:
+        self.confirm_error.setText(text)
+        self.confirm_error.setVisible(True)
 
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)

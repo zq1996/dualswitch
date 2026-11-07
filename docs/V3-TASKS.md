@@ -107,6 +107,17 @@ v1 theme**，一并修掉。测试从 490 passed / 25 skipped → **500 passed /
 | **T3.4** | 剪贴板角标 | `ui/*/clipboard_page.py`、icons（~80 行） | 本机系统原色、对方紫底；**图标沿用 `icons.py`，不自绘** |
 | **T3.5** | 测试 | ~350 行 | 双 Windows / Mac+Win / 双 Mac 三种组合的文案断言 |
 
+**实际结果（2026-11-07，v3 分支）**：
+
+- `T_SWITCH` 已改为 `{"port":"hdmi1","req":...}`；执行方用本机 profile 解析端口名，
+  解析不到回 ACK 失败，发起方回退本机 DDC。契约与 `REMOTE-SWITCH.md` 已同步。
+- `HELLO` / `HELLO_OK` 增加可选 `plat`；`clipboard.peer_platform` 记录对端真实平台，
+  双 Windows 下不再按「相反平台」猜。
+- 切换页 / 菜单栏 / 托盘文案改为「这台 / 对端机器名 + 端口名」，不再硬编码 Mac/Windows；
+  `Config` 新增 `local_platform() / peer_platform() / platform_for_role() / role_of_value()`。
+- 剪贴板角标：本机平台原色，对方统一紫底 + 平台 logo；记录带 `source_platform`，双 Windows 不会画错。
+- 测试：**548 passed / 16 skipped**，新增双 Windows 菜单/角色、HELLO `plat`、紫底角标用例。
+
 ---
 
 ## 全局验收（每个阶段结束都要跑）
