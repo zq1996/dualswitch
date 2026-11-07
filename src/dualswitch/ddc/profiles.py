@@ -25,7 +25,7 @@ PORT_ORDER = ("hdmi1", "hdmi2", "dp", "usb_c", "dvi", "vga")
 PORT_LABELS = {
     "hdmi1": "HDMI 1",
     "hdmi2": "HDMI 2",
-    "dp": "DisplayPort",
+    "dp": "DP",
     "usb_c": "USB-C",
     "dvi": "DVI",
     "vga": "VGA",

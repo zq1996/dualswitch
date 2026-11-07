@@ -18,7 +18,7 @@ def test_port_aliases_and_labels():
     assert profiles.normalize_port("DisplayPort") == "dp"
     assert profiles.normalize_port("nope") == ""
     assert profiles.port_label("usb_c") == "USB-C"
-    assert profiles.port_label("dp") == "DisplayPort"
+    assert profiles.port_label("dp") == "DP"
 
 
 def test_builtin_aoc_10128_is_a_three_port_screen():

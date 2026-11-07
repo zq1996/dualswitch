@@ -893,6 +893,36 @@ def _log_source_evidence(backend, controller) -> None:  # noqa: ANN001
     )
 
 
+def _install_term_handler() -> None:
+    """把 SIGTERM 变成正常退出，好让 `finally` 里的收尾真的跑到。
+
+    为什么在意：省电模块会把外接屏从 WindowServer 停掉，**必须**在退出时恢复。
+    `killall` / 注销 / 关机发的都是 SIGTERM，而 Python 默认是直接死掉，
+    `finally` 与 atexit 都不执行 —— 那就会留下一块黑着的外接屏。
+    """
+    if sys.platform == "win32":
+        return
+    import signal
+
+    def _raise(signum, _frame):  # noqa: ANN001
+        log.info("收到信号 %s，按正常退出处理（会恢复外接屏）", signum)
+        # Qt 的事件循环会把 SystemExit 吞掉（实测 2026-11-06：日志打了，finally 没跑），
+        # 所以恢复动作必须在这里就地做完，别指望上层 finally。
+        try:
+            from . import display_power
+
+            display_power.restore_pending()
+        except Exception:  # noqa: BLE001 - 救命动作失败也要继续退出
+            log.exception("退出前恢复外接屏失败")
+        raise SystemExit(128 + signum)
+
+    try:
+        signal.signal(signal.SIGTERM, _raise)
+        signal.signal(signal.SIGHUP, _raise)
+    except (ValueError, OSError):  # 非主线程 / 平台不支持
+        pass
+
+
 def cmd_ui2(args) -> int:
     """v2 图形界面（宽窗口 + 侧栏三页）—— 与 `ui` 并行的新树，验收后旧树才删。"""
     from .ui import available as ui_available
