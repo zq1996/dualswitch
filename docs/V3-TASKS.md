@@ -56,7 +56,10 @@ v1 theme**，一并修掉。测试从 490 passed / 25 skipped → **500 passed /
 
 ## P1 · 显示器识别 + profile + 动态端口（mac 3–4 天 / Windows 1–1.5 天）
 
-**前置阻塞**：Windows 端必须先交 `WINDOWS-VERIFY.md` 的 W1（能否读到 `mfg:productCode`）。
+**前置阻塞：✅ 已解除（2026-11-07 Windows 端实跑）** —— W1 通过：Windows 能拿到 `厂商:PID`，
+跨端主键 `AOC:9987` 一致；但 WMI 的 `ProductCodeID` 是 **十六进制 ASCII 数组**，必须 `int(s,16)` 才是 EDID 数值，
+且注册表 EDID 有历史堆积，只认 `Active` 实例。细节与「型号↔DDC 句柄」的 PnP 绑定键见
+[`WINDOWS-VERIFY.md`](WINDOWS-VERIFY.md) §0.2 / §0.3。
 
 | # | 任务 | 改哪些文件 | 验收 |
 |---|---|---|---|
@@ -127,4 +130,6 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python tools/shots_v2.py    # 出图核对�
 | 端口名枚举全集（除 hdmi/dp/usb_c 还有 vga/dvi？） | ⚠️ 待定 | T1.2 前定 |
 | P3 协议帧的具体字段 | ⚠️ 待补 | T3.2 前先改契约 §11 |
 
-> 结论：**P1 可以开工**（唯一硬阻塞是 Windows 的 W1）。上面 4 个 ⚠️ 都是"开工第一天的第一件事"，不需要提前补文档。
+> 结论：**P1 可以开工**（Windows 的 W1 已于 2026-11-07 回收并通过）。上面 4 个 ⚠️ 都是"开工第一天的第一件事"，不需要提前补文档。
+> 另：W3 实测发现双 Windows 下「平台被当角色用」会撞车（`WINDOWS-VERIFY.md` §0.5），**P3 不只是改名**，
+> 建议 T1.3 定 `wiring`/profile 结构时就把 `platform / role / port` 三者分开，别等 P3 返工。

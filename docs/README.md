@@ -44,7 +44,7 @@
 | 文档 | 内容 |
 |---|---|
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 按症状查：托盘图标不显示、DDC 读不到、热键不响应、鼠标联动不生效… |
-| [WINDOWS-VERIFY.md](WINDOWS-VERIFY.md) | **给 Windows 端的验证券**：能否读到 `厂商:产品号`（阻塞项）、`0x60` 读取能力、双 Windows 现状确认 | Windows 端接手验证时 |
+| [WINDOWS-VERIFY.md](WINDOWS-VERIFY.md) | **Windows 端验证报告（2026-11-07 已回收）**：`厂商:产品号` 的 Windows 口径、`0x60` 读取实测、双 Windows 角色撞车、型号↔DDC 句柄绑定键 | 决定 P1 能否开工、P3 怎么解耦时 |
 | [ISSUES.md](ISSUES.md) | 任务台账（未关闭的问题） |
 
 ## 历史

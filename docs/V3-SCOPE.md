@@ -12,7 +12,7 @@
 | [`MONITOR-PROFILE.md`](MONITOR-PROFILE.md) | **实测事实**：型号怎么读、型号↔句柄怎么关联、码表为什么读不出来 | 已完成 |
 | [`PROFILE-AND-ROLES-DESIGN.md`](PROFILE-AND-ROLES-DESIGN.md) | **结构设计**：平台/角色/端口三维解耦、profile + wiring 结构、文件级改动清单 | 已完成 |
 | [`V3-PLAN.md`](V3-PLAN.md) | **落地方案**：V2/V3 并存隔离、标定自动切回、图标策略、页面设计说明、缺口 G1–G10 | 已完成 |
-| [`WINDOWS-VERIFY.md`](WINDOWS-VERIFY.md) | **给 Windows 端的验证券**（EDID 身份、`0x60` 读取、双 Windows 现状） | 待 Windows 端执行 |
+| [`WINDOWS-VERIFY.md`](WINDOWS-VERIFY.md) | **Windows 端验证报告**（EDID 身份、`0x60` 读取、双 Windows 现状） | ✅ 2026-11-07 已回收，W1 通过 |
 | [`design/v3/index-v3.html`](../design/v3/index-v3.html) | **可点设计稿**五屏 | 待你确认 |
 
 本文（`V3-SCOPE.md`）补的是**范围、工期、键盘**三件前面没覆盖的事。
@@ -63,7 +63,7 @@
 
 | 阶段 | 工作量 | 风险点 |
 |---|---|---|
-| P1 | 1–1.5 天 | **能不能读到 EDID 的 `mfg:productCode` 是前置阻塞项**（`WINDOWS-VERIFY.md` W1） |
+| P1 | 1–1.5 天 | ~~EDID 身份读不到~~ → **2026-11-07 W1 已通过**（`WINDOWS-VERIFY.md` §0.2）；剩下要注意 WMI 的 PID 是十六进制 ASCII 串，别当十进制 |
 | P2 | 1.5–2 天 | 界面要和 mac 端对称，容易走样 |
 | P3 | 1–1.5 天 | 协议改传端口名，要同步改 |
 | P4 | 2–3 天 | **要新写 Windows 注入**（SendInput），且要处理"两台 Windows 谁抓键" |

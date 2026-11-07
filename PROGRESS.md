@@ -519,6 +519,25 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-07 16:10 **Windows 端验证券 W1/W2/W3 回收，P1 阻塞解除**（`docs/WINDOWS-VERIFY.md`）。
+  · 合并远端 `0937dbc` / `4af40bf`（V3 四份文档 + 删 v1 界面树 8,059 行 + 8 个垫片）。
+  · W1：Windows 能拿到 `厂商:PID`。`WmiMonitorID` 四个身份字段全是 `uint16[]`，
+    `ProductCodeID` 给的是**十六进制 ASCII 串**（本机活动屏 `"2790" → 0x2790 = 10128`），
+    注册表 EDID 给十进制 10128，**换算后才一致**；注册表里另有 `AOC2703 = AOC/9987/SN 14094`，
+    与 mac 端新屏 `U27N3G6R4B` 三项吻合 ⇒ 跨端主键 `AOC:9987` 成立。WMI 只列 Active 屏，
+    注册表有 6 条历史/重复实例，生产代码只认活动实例。
+  · 附赠：`EnumDisplayDevicesW(EDD_GET_DEVICE_INTERFACE_NAME)` 给出
+    `\\?\DISPLAY#AOC2790#7&3ae6a500&1&UID524#{...}`，中间的 PnP 实例 ID 与 WMI InstanceName、
+    注册表 EDID 键名逐字相同 ⇒ Windows 版「型号↔DDC 句柄」确定性绑定，P1 T1.4 不用试错。
+  · W2：`probe` 读到 `0x60=17`（Windows 路 HDMI）；同进程连读 **10/10** 成功（57–69ms），
+    冷启动首次读偶发 `0xC0262585`（`get_input()` 无重试，`set_input()` 有）。原任务的
+    `dualswitch list` 子命令已不存在；`max=14` 旧屏也有，不是新屏特征。
+  · W3：文案/图标错的现象逐处核对成立（`PEER_LOGO="apple"`、托盘 `Mac (USB-C)` 等），
+    但 `effective_host()/other_host()` 把平台当角色用，双 Windows 会撞车 ⇒ **P3 不只是改名**。
+  · 代码：按 P0 留下的 Windows TODO 修 `packaging/windows/install_autostart.ps1`（`ui`→`ui2`，
+    保留 BOM）与 `build.ps1` 的用法提示；未动生产 Python 代码。
+  · 自检：全量 **567 tests / 557 passed / 0 failed / 10 skipped**（本机 Windows 基线）；
+    两个 ps1 语法解析 0 错、BOM 保留；合并后同名定义扫描无重复遮蔽。
 - 2026-11-07 10:40 **键盘转发的「对端就绪」盲区补上**（用户报：切到 Mac 后键盘完全
   不好使，昨晚还好好的）。
   · 现场日志只有「显示器直报 → mac」，**看不出键盘端点有没有跟上、更看不出键到底
