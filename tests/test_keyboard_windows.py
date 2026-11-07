@@ -36,12 +36,17 @@ class FakeKB:
 
 
 class FakeEngine:
-    def __init__(self, ready: bool = True) -> None:
+    def __init__(self, ready: bool = True, peer_kb: bool | None = None) -> None:
         self.switch_ready = ready
+        #: 对端键盘注入端就绪吗（None = 问不出来 / 对端版本旧）
+        self.peer_kb = peer_kb
         self.keys: list[dict] = []
         self.states: list[dict] = []
         self.focus: list[dict] = []
         self.fail = False
+
+    def peer_keyboard_ready(self) -> bool | None:
+        return self.peer_kb
 
     def send_key(self, header):
         if self.fail:
@@ -373,3 +378,55 @@ def test_hotkey_backend_registers_into_the_shared_hook(monkeypatch):
 
     backend.stop()
     assert fake.handlers == []
+
+
+# --------------------------------------------------------------------------- #
+# 第五条闸门：对端接不住键就绝不吞（2026-11-07）
+# --------------------------------------------------------------------------- #
+def test_gate_closes_when_peer_cannot_inject():
+    """Mac 端关着开关 / 没辅助功能授权 ⇒ Windows 必须放行，不能静默丢键。
+
+    这是「切到 Mac 后键盘完全不好使」那条现场问题的根因防线：以前吞不吞只看
+    本端四条，对端接不接得住完全不可见，键就掉进黑洞了。
+    """
+    engine = FakeEngine(peer_kb=False)
+    cap, _, _, clock = make_capture(engine=engine, enabled=True)
+    arm(cap, clock)
+    assert cap.forwarding is True
+    assert cap._gate_open() is False                        # noqa: SLF001
+    assert cap.on_hook_event(0x41, True, FakeKB()) is False  # A 放行给本机
+    flush(cap)
+    assert engine.keys == []
+
+
+def test_gate_stays_open_when_peer_readiness_unknown():
+    """问不出来（对端版本旧 / 不是注入端）保持老行为：不额外拦。
+
+    这条是兼容性底线 —— 新版 Windows 配旧版 Mac 时行为不能变差。
+    """
+    engine = FakeEngine(peer_kb=None)
+    cap, _, _, clock = make_capture(engine=engine, enabled=True)
+    arm(cap, clock)
+    assert cap._gate_open() is True                         # noqa: SLF001
+    assert cap.on_hook_event(0x41, True, FakeKB()) is True
+
+
+def test_gate_opens_when_peer_ready():
+    engine = FakeEngine(peer_kb=True)
+    cap, _, _, clock = make_capture(engine=engine, enabled=True)
+    arm(cap, clock)
+    assert cap.on_hook_event(0x41, True, FakeKB()) is True
+    flush(cap)
+    assert [k["u"] for k in engine.keys] == [0x04]
+
+
+def test_gate_block_reason_names_the_failing_condition():
+    """闸门失败必须能一句话说清（现场日志全靠它）。"""
+    engine = FakeEngine(peer_kb=False)
+    cap, _, _, clock = make_capture(engine=engine, enabled=True)
+    arm(cap, clock)
+    assert "对端" in cap._gate_block_reason()                # noqa: SLF001
+    engine.peer_kb = True
+    assert cap._gate_block_reason() == ""                    # noqa: SLF001
+    engine.switch_ready = False
+    assert "链路" in cap._gate_block_reason()                # noqa: SLF001

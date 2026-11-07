@@ -68,6 +68,25 @@ class KeyboardReceiver:
     def available(self) -> tuple[bool, str]:
         return self._injector.available()
 
+    def ready_for_injection(self) -> bool:
+        """本端现在**真的**能把按键注进系统吗（开关开着 + 注入器可用 + 有授权）。
+
+        这是给**对端**看的一条证据（随 `T_STATE_ACK` 上报）：Windows 据此决定
+        要不要吞键。2026-11-07 之前这条信息完全不存在 —— 对端关了开关、没给
+        辅助功能授权、或者没装 pyobjc 时，Windows 照样吞键，用户的按键就静默
+        掉进一个不存在的窗口里。现场表现是「键盘完全不好使，界面却显示转发中」，
+        而且两端日志都干干净净（`dropped_disabled` 只是 Mac 端的一个计数器）。
+
+        `trusted()` 返回 None（老 pyobjc 查不出来）**不**当作未授权：那种机器上
+        注入本来可能是好的，把它判成不可用等于凭空禁掉键盘。
+        """
+        if not self._enabled:
+            return False
+        ok, _why = self._injector.available()
+        if not ok:
+            return False
+        return self._injector.trusted() is not False
+
     @property
     def injector(self) -> MacInjector:
         """给工具脚本用（探针要读授权 / CapsLock 状态）。"""

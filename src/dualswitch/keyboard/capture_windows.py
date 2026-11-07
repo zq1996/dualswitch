@@ -141,6 +141,12 @@ class KeyboardCapture:
         self._rtt_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._last_ok_at = 0.0
+        self._last_fail_log_at = 0.0
+        #: 闸门当前为什么不开（空串 = 全绿）。只用来做「变化时记一条日志」。
+        self._gate_reason = ""
+        self._gate_reason_at = 0.0
+        #: 本 epoch 里发出去的第一个按键记过一次没有（一次 INFO 就能证明链路通了）
+        self._first_key_logged_epoch = -1
         self._caps = False
         self._hook_ok = False
         self._error: str | None = None
@@ -294,9 +300,19 @@ class KeyboardCapture:
             return 0
         with self._lock:
             released = self._release_all()
+            before = self._target
             self._target = self.local_host if host == self.local_host else self.peer_host
-        self._bump_epoch()
+            changed = self._target != before
+        epoch = self._bump_epoch()
         self._push_focus()
+        if changed:
+            # 这条日志以前没有，2026-11-07 排查"切过去键盘没反应"时吃了大亏：
+            # 日志里只有「显示器直报 → mac」，看不出键盘端点到底有没有跟上。
+            log.info(
+                "键盘焦点 → %s（画面在 %s，epoch=%d，%s）",
+                self._target, host, epoch,
+                "开始转发按键" if self.forwarding else "按键留在本机",
+            )
         if released:
             log.debug("切屏（→%s）释放 %d 个按下的键", host, released)
         return released
@@ -438,20 +454,64 @@ class KeyboardCapture:
 
     # ------------------------------------------------------------------ 闸门
     def _gate_open(self) -> bool:
-        """四条全绿才允许吞（§8.5）。任何一条不满足就放行。"""
-        if not self.forwarding or not self._hook_ok:
+        """闸门全绿才允许吞（§8.5）。任何一条不满足就放行。"""
+        reason = self._gate_block_reason()
+        if reason:
+            self._note_gate_block(reason)
             return False
+        self._note_gate_block("")
+        return True
+
+    def _gate_block_reason(self) -> str:
+        """第一条不满足的闸门条件（空串 = 全绿）。**只读内存，不做 I/O。**
+
+        拆成"返回原因"而不是一串 `return False`，是为了让现场日志能一句话说清
+        「为什么这个键没被转发」—— 以前闸门失败是完全静默的，两端日志都干净，
+        只能靠猜（2026-11-07 就是这么卡住的）。
+        """
+        if not self.forwarding:
+            return "不在转发中"
+        if not self._hook_ok:
+            return "键盘钩子未就绪"
         engine = self._engine
         if engine is None:
-            return False
+            return "同步引擎未挂载"
         try:
             if not bool(getattr(engine, "switch_ready", False)):
-                return False
+                return "链路未就绪（未连接 / 未配对）"
         except Exception:  # noqa: BLE001
-            return False
+            return "链路未就绪（读取失败）"
+        # 第五条（2026-11-07）：**对端接不住键就绝不吞**。对端关着开关、没给
+        # 辅助功能授权、没装 pyobjc 时，吞下去等于把按键丢进黑洞。
+        # None = 问不出来（对端版本旧 / 不是注入端），此时保持老行为不额外拦。
+        probe = getattr(engine, "peer_keyboard_ready", None)
+        if callable(probe):
+            try:
+                ready = probe()
+            except Exception:  # noqa: BLE001
+                ready = None
+            if ready is False:
+                return "对端键盘注入未就绪（未开开关 / 未授权）"
         if self._clock() - self._last_ok_at > LINK_FRESH_S:
-            return False              # 最近 300ms 没有成功发送 ⇒ 链路不活
-        return True
+            return "链路不活（300ms 内没有成功发送）"
+        return ""
+
+    def _note_gate_block(self, reason: str) -> None:
+        """闸门原因变化时记一条 INFO（同一个原因 10 秒内不重复刷）。
+
+        钩子线程里调用，所以只做一次比较 + 最多一次 log。
+        """
+        if reason == self._gate_reason:
+            return
+        now = self._clock()
+        if reason and now - self._gate_reason_at < 10.0:
+            return
+        self._gate_reason = reason
+        self._gate_reason_at = now
+        if reason:
+            log.info("键盘不转发：%s（按键已放行给本机）", reason)
+        else:
+            log.info("键盘闸门全绿：开始转发按键 → %s", self.peer_host)
 
     # ------------------------------------------------------------------ 发送
     def _next_seq(self) -> int:
@@ -514,11 +574,34 @@ class KeyboardCapture:
             ok = False
         if ok:
             self._last_ok_at = self._clock()
+            if kind == "key":
+                self._note_first_key()
             return True
         self.stats["send_failures"] += 1
+        # 发送失败以前完全静默（只进 stats），现场就是"键被吞了但对面没反应"。
+        # 5 秒一条，够定位又不刷屏。
+        now = self._clock()
+        if now - self._last_fail_log_at >= 5.0:
+            self._last_fail_log_at = now
+            log.warning(
+                "键盘帧发送失败（累计 %d 次）：链路可能已断，按键已改回放行本机",
+                self.stats["send_failures"],
+            )
         # 送不出去就别再囤：这些键已经吞掉了，继续排队只会让状态更旧
         self._drain()
         return False
+
+    def _note_first_key(self) -> None:
+        """本 epoch 第一个成功发出的按键记一条 INFO。
+
+        这是「转发真的通了」的唯一正面证据：以前成功路径一个日志都没有，
+        出问题时无法区分"根本没转发"和"转发了但对面没注入"。
+        """
+        epoch = int(self._epoch)
+        if self._first_key_logged_epoch == epoch:
+            return
+        self._first_key_logged_epoch = epoch
+        log.info("键盘按键已开始转发 → %s（epoch=%d）", self.peer_host, epoch)
 
     def _drain(self) -> None:
         while True:

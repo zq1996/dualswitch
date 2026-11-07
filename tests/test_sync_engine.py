@@ -465,3 +465,56 @@ def test_peer_state_unknown_when_no_probe():
     finally:
         engine_a.stop()
         engine_b.stop()
+
+
+class _FakeInjectorEndpoint:
+    """注入端的最小替身：只实现 `ready_for_injection`（T_STATE_ACK 的 `kb` 来源）。"""
+
+    def __init__(self, ready: bool) -> None:
+        self._ready = ready
+
+    def ready_for_injection(self) -> bool:
+        return self._ready
+
+
+def test_state_ack_carries_peer_keyboard_readiness():
+    """对端随 T_STATE_ACK 报「键盘注入端就绪吗」，捕获端据此决定吞不吞键。
+
+    2026-11-07 现场：Mac 端接不住键（开关关 / 没授权），Windows 照样吞，
+    按键静默消失，两端日志都干净。这条字段就是那个盲区的补丁。
+    """
+    port_a, port_b = _free_port(), _free_port()
+    key_hex = P.derive_key("123456").hex()
+    cfg_a = ClipboardConfig(
+        port=port_a, peer=f"127.0.0.1:{port_b}", psk=key_hex, device_id="mac-aaaa"
+    )
+    cfg_b = ClipboardConfig(
+        port=port_b, peer=f"127.0.0.1:{port_a}", psk=key_hex, device_id="win-bbbb"
+    )
+    engine_a = SyncEngine(cfg_a, host_label="mac", backend=MockBackend())
+    engine_b = SyncEngine(cfg_b, host_label="windows", backend=MockBackend())
+    engine_a.set_monitor_probe(lambda: True)
+    # A 是注入端，但接不住键（开关关着 / 没给辅助功能授权）
+    engine_a.keyboard = _FakeInjectorEndpoint(False)
+    # B 是捕获端：它没有 ready_for_injection，所以 B 的 ack 不带 kb
+    engine_a.start()
+    engine_b.start()
+    try:
+        assert _wait_until(
+            lambda: engine_a.switch_ready and engine_b.switch_ready, timeout=6.0
+        ), f"链路没起来：A={engine_a.state} B={engine_b.state}"
+
+        assert engine_b.request_peer_state(timeout=3.0) is True
+        assert engine_b.peer_keyboard_ready() is False
+
+        # 对端就绪后下一次询问要跟着变（缓存不能粘住旧值）
+        engine_a.keyboard = _FakeInjectorEndpoint(True)
+        assert engine_b.request_peer_state(timeout=3.0) is True
+        assert engine_b.peer_keyboard_ready() is True
+
+        # 反向：B 不是注入端，A 问不出 B 的键盘状态 → None（不是 False）
+        assert engine_a.request_peer_state(timeout=3.0) is False
+        assert engine_a.peer_keyboard_ready() is None
+    finally:
+        engine_a.stop()
+        engine_b.stop()

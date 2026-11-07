@@ -519,6 +519,27 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-07 10:40 **键盘转发的「对端就绪」盲区补上**（用户报：切到 Mac 后键盘完全
+  不好使，昨晚还好好的）。
+  · 现场日志只有「显示器直报 → mac」，**看不出键盘端点有没有跟上、更看不出键到底
+    有没有被吞**：成功路径一条日志都没有，闸门失败也完全静默。
+  · 根因（设计缺口，不是某一行写错）：吞不吞键只看本端四条闸门。对端关着开关 /
+    没给辅助功能授权 / 没装 pyobjc 时，Windows 照样吞键 —— 按键掉进黑洞，两端日志
+    都干净。`dropped_disabled` 只是 Mac 端一个没人看的计数器。
+  · 修法：`T_STATE_ACK`（0x33）新增 `kb` 字段（对端注入端就绪吗），引擎缓存为
+    `_peer_kb` 并暴露 `peer_keyboard_ready()`；捕获端加**第五条闸门** ——
+    **明确知道对端接不住（False）就绝不吞键**，`None`（旧版本 / 非注入端）保持老行为，
+    跨版本不劣化。`KeyboardReceiver.ready_for_injection()` = 开关开 + 注入器可用 + 有授权。
+  · 顺手修 `MacInjector.trusted()`：以前把 `False` 也缓存了，用户去系统设置里勾上
+    辅助功能后**不重启程序就永远读到旧值**（界面一直挂「未授权」）。现在只缓存 True。
+  · 可观测性：`on_focus` 变化记一条 INFO（含 target/epoch/是否开始转发）；闸门失败
+    按原因记 INFO（10s 限流）；本 epoch 首个成功发出的按键记 INFO；发送失败 5s 一条
+    WARNING。win2 切换页新增「Mac 端键盘注入未就绪 · 按键已留在本机」。
+  · 守卫：`test_keyboard_windows.py` 四条（对端 False 不吞 / None 不拦 / True 照吞 /
+    原因可读）、`test_sync_engine.py::test_state_ack_carries_peer_keyboard_readiness`。
+  · 全量 **630 tests / 0 failed / 12 skipped**。
+  · ⚠️ **`kb` 字段两端都要新版才生效**：Mac 端不 pull 就仍是旧行为（问不出来 → 不拦）。
+
 - 2026-11-06 22:40 **右侧修饰键错位修正**（用户：键盘没有右 Win，只有右 Alt / 右 Ctrl）。
   要求：右 Alt → Mac 右⌘、右 Ctrl → Mac 右⌥（用来打 Option 组合）。
   · 改前 position 是「右侧镜像」：右 Alt→右⌘、右 Win→右⌥、右 Ctrl→右⌃。

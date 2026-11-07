@@ -94,8 +94,13 @@ class MacInjector:
         if ok is None:
             log.debug("这个 pyobjc 版本没有权限查询接口，无法确认授权状态")
             return None
-        self._trusted = ok
-        if not ok:
+        # **只在"有授权"时缓存**（2026-11-07）：把 False 也缓存的话，用户去系统设置
+        # 里勾上辅助功能之后，不重启程序就永远读到旧的 False —— 现场表现是"明明
+        # 授权了还是打不出字"，而界面一直挂着"未授权"。False 每次重查（调用方 5 秒
+        # 一次，CGPreflightPostEventAccess 是纯本地查询，不弹窗不阻塞）。
+        if ok:
+            self._trusted = True
+        elif self._trusted is None:
             log.warning(
                 "没有「辅助功能」授权，按键注入不会生效："
                 "系统设置 → 隐私与安全性 → 辅助功能"

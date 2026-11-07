@@ -804,9 +804,24 @@ class UiRunner2(QObject):
         elif not remote_ok:
             page.set_keyboard_follow(True, "链路断开 · 已自动回到本机", "idle")
         else:
-            rtt = getattr(self.keyboard, "last_rtt_ms", None)
-            text = "转发中 → Mac" + (f" · 往返 {rtt:.0f}ms" if rtt else "")
-            page.set_keyboard_follow(True, text, "run")
+            # 对端接不接得住键（T_STATE_ACK 的 `kb`）：接不住时捕获端已经**不再吞键**，
+            # 这里必须说出来，否则用户只看到「键盘没反应」却不知道去 Mac 上开开关 /
+            # 给辅助功能授权。None = 问不出来（对端版本旧），照旧显示转发中。
+            peer_kb: bool | None = None
+            probe = getattr(self.clip_engine, "peer_keyboard_ready", None)
+            if callable(probe):
+                try:
+                    peer_kb = probe()
+                except Exception:  # noqa: BLE001 - 显示用，读不到就当不知道
+                    peer_kb = None
+            if peer_kb is False:
+                page.set_keyboard_follow(
+                    True, "Mac 端键盘注入未就绪 · 按键已留在本机", "warn"
+                )
+            else:
+                rtt = getattr(self.keyboard, "last_rtt_ms", None)
+                text = "转发中 → Mac" + (f" · 往返 {rtt:.0f}ms" if rtt else "")
+                page.set_keyboard_follow(True, text, "run")
 
         # ---- 鼠标 ----
         ms = getattr(cfg, "mouse_switch", None)

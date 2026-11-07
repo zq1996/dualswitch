@@ -133,6 +133,11 @@ class SyncEngine:
         self._monitor_probe: Callable[[], bool] | None = None
         self._peer_sees: bool | None = None      # None = 没问过 / 对端太旧 / 已失效
         self._peer_sees_at = 0.0
+        #: 对端「键盘注入端就绪吗」（随 T_STATE_ACK 的 `kb` 字段回来）。
+        #: None = 没问过 / 对端不是注入端（Windows 自己）/ 对端版本旧。
+        #: 捕获端拿它当吞键闸门的第五条：对端接不住键就绝不吞。
+        self._peer_kb: bool | None = None
+        self._peer_kb_at = 0.0
         self._peer_state_waiters: dict[str, tuple[threading.Event, dict[str, Any]]] = {}
         self._peer_state_asked = 0.0
 
@@ -856,6 +861,19 @@ class SyncEngine:
             return None
         return self._peer_sees
 
+    def peer_keyboard_ready(self, *, max_age: float = 20.0) -> bool | None:
+        """对端键盘注入端现在接不接得住键。`None` = 问不出来（不是注入端 / 版本旧）。
+
+        捕获端把它当吞键闸门的第五条：**明确知道对端接不住（False）就绝不吞键**。
+        以前没有这条，Mac 端关着开关或没授权时 Windows 照样吞，按键静默消失 ——
+        用户看到的是「键盘完全不好使」，而两端都认为一切正常。
+        """
+        if not self.switch_ready or self._peer_kb is None:
+            return None
+        if self._clock() - self._peer_kb_at > max_age:
+            return None
+        return self._peer_kb
+
     def request_peer_state(self, *, timeout: float = 1.0) -> bool | None:
         """主动问一次对端（阻塞到回执或超时）。超时 / 旧版本一律返回 None。"""
         transport = self._transport
@@ -897,7 +915,24 @@ class SyncEngine:
             except Exception:  # noqa: BLE001 - 探测失败按「看不到」处理
                 sees = False
         if self._transport is not None:
-            self._transport.send_state_ack({"req": req, "sees": sees})
+            header: dict[str, Any] = {"req": req, "sees": sees}
+            # 顺手报一句「我这边的键盘注入端就绪吗」：捕获端靠它决定吞不吞键。
+            # 不是注入端（Windows）就不带这个字段，对端会当成"问不出来"。
+            kb = self._keyboard_ready_flag()
+            if kb is not None:
+                header["kb"] = 1 if kb else 0
+            self._transport.send_state_ack(header)
+
+    def _keyboard_ready_flag(self) -> bool | None:
+        """本端键盘端点自报"能不能注入"。没有这个方法（捕获端）= None。"""
+        kb = getattr(self, "keyboard", None)
+        probe = getattr(kb, "ready_for_injection", None)
+        if not callable(probe):
+            return None
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001 - 自报失败按"问不出来"处理
+            return None
 
     def _on_peer_state_ack(self, header: dict[str, Any]) -> None:
         req = str(header.get("req") or "")
@@ -906,6 +941,14 @@ class SyncEngine:
             if sees is not None:
                 self._peer_sees = bool(sees)
                 self._peer_sees_at = self._clock()
+            kb = header.get("kb")
+            if kb is not None:
+                # 旧版本对端不发这个字段：只更新不推断，问不出来就是 None
+                try:
+                    self._peer_kb = bool(int(kb))
+                except (TypeError, ValueError):
+                    self._peer_kb = bool(kb)
+                self._peer_kb_at = self._clock()
             entry = self._peer_state_waiters.get(req)
         if entry is None:
             return                      # 心跳式询问没人等，正常
