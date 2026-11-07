@@ -215,9 +215,6 @@ class SettingsPage(QWidget):
     clearRequested = Signal()              # 「存储上限」旁边的清理按钮
     recordingChanged = Signal(bool)        # 热键录制中 → 调用方暂停全局热键
     toastRequested = Signal(str)
-    probeRequested = Signal()              # 高级：探测显示器 / 读取输入源
-    openLogRequested = Signal()            # 高级：查看日志
-    openConfigDirRequested = Signal()      # 高级：打开配置目录
     monitorConfigRequested = Signal()      # 「显示器配置 ›」子页入口
 
     def __init__(self, cfg: Config, config_file: Path, parent=None):
@@ -258,7 +255,6 @@ class SettingsPage(QWidget):
             self.btn_monitor,
             settings_row("显示器匹配", "按设备名或 device_id 的片段定位这台屏", self.edit_match),
             settings_row("DDC 后端", "auto / dxva2 / command / mock", val_backend),
-            settings_row("输入源映射", "27 会被这块屏拒绝，别照抄网上的值", self._sources_control()),
         ])
 
         # ---- 通用（§7.2）----
@@ -299,31 +295,13 @@ class SettingsPage(QWidget):
         self.hk_clip.recordingChanged.connect(self.recordingChanged)
         self.sw_strict = ToggleSwitch("ralt" in parse_hotkey(self.cfg.hotkey).modifiers)
         self.sw_strict.clicked.connect(self._apply)
-        self.sw_swallow = ToggleSwitch(getattr(self.cfg, "swallow_hotkey", True))
-        self.sw_swallow.clicked.connect(self._apply)
         sec_hotkey = self._section("热键", [
             settings_row("全局热键", "按下即切换画面", self.hk_main),
             settings_row("剪贴板热键", "呼出剪贴板页并聚焦搜索", self.hk_clip),
             settings_row("严格区分左右 Alt", "打开后左 Alt 不触发（改用低级键盘钩子）", self.sw_strict),
-            settings_row(
-                "阻止 Alt+Space 弹出系统菜单",
-                "只在钩子后端生效；关掉会先弹系统菜单再切换",
-                self.sw_swallow,
-            ),
         ])
 
-        # ---- 高级（§7.5，Windows2 新增组）----
-        sec_advanced = self._section("高级", [
-            settings_row(
-                "探测显示器 / 读取输入源",
-                "结果写进日志，并在窗口里提示",
-                self._action_button("运行", self.probeRequested),
-            ),
-            settings_row("查看日志", "用默认编辑器打开当前日志文件", self._action_button("打开", self.openLogRequested)),
-            settings_row("打开配置目录", "在资源管理器中定位配置文件", self._action_button("打开", self.openConfigDirRequested)),
-        ])
-
-        for section in (sec_monitor, sec_general, sec_clip, sec_hotkey, sec_advanced):
+        for section in (sec_monitor, sec_general, sec_clip, sec_hotkey):
             lay.addWidget(section)
         lay.addStretch(1)
         self._refresh_storage()
@@ -354,57 +332,17 @@ class SettingsPage(QWidget):
         col.addWidget(card)
         return wrap
 
-    @staticmethod
-    def _action_button(text: str, signal) -> QPushButton:  # noqa: ANN001
-        """ghost 小按钮：只卡高，宽度交给 sizeHint（见 `_storage_control` 的注释）。"""
-        btn = QPushButton(text)
-        btn.setObjectName("ghostBtn")
-        btn.setFixedHeight(28)
-        btn.setMinimumWidth(56)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setFocusPolicy(Qt.NoFocus)
-        btn.clicked.connect(signal)
-        return btn
-
-    def _sources_control(self) -> QWidget:
-        """输入源映射：`Windows [17]  Mac [18]` 两个数字框（§7.5）。"""
-        box = QWidget()
-        row = QHBoxLayout(box)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
-        self.edit_win_src = QLineEdit(str(int(self.cfg.sources["windows"])))
-        self.edit_mac_src = QLineEdit(str(int(self.cfg.sources["mac"])))
-        for edit in (self.edit_win_src, self.edit_mac_src):
-            edit.setObjectName("numEdit")
-            edit.setFixedSize(48, 28)
-            edit.setAlignment(Qt.AlignCenter)
-            edit.setValidator(QIntValidator(0, 255, self))
-            edit.editingFinished.connect(self._apply)
-        row.addWidget(label("Windows", "setSub"), 0, Qt.AlignVCenter)
-        row.addWidget(self.edit_win_src, 0, Qt.AlignVCenter)
-        row.addSpacing(6)
-        row.addWidget(label("Mac", "setSub"), 0, Qt.AlignVCenter)
-        row.addWidget(self.edit_mac_src, 0, Qt.AlignVCenter)
-        return box
-
     def _persist_active_profile(self, data: dict) -> None:
-        """把「输入源映射」的两个值写进当前屏的 profile，而不是只写旧 sources。
+        """把当前屏的 profile 一起落盘。
 
-        P1 起切换走 `profile.ports + wiring`；只改 sources 会在 from_dict 里被
-        profile 的真值覆盖掉，用户会觉得“改了没生效”。这里同时把 profile 落盘，
-        并把 `active_monitor` 指到它，保证保存后仍是这块屏的码表。
+        P1 起切换走 `profile.ports + wiring`；只写旧 sources 会在 from_dict 里被
+        profile 的真值覆盖掉，用户会觉得“改了没生效”。端口码值的编辑入口在
+        「显示器配置」子页，这里只负责保存时把它写回，并把 `active_monitor`
+        指到这块屏。
         """
         profile = getattr(self.cfg, "_active_profile", None)
         if profile is None:
             return
-        win_value = self._source_value(self.edit_win_src, "windows")
-        mac_value = self._source_value(self.edit_mac_src, "mac")
-        value_by_host = {"windows": win_value, "mac": mac_value}
-        for role in ("local", "peer"):
-            port = self.cfg.port_for_role(role)
-            host = self.cfg.host_for_role(role)
-            if port and host in value_by_host:
-                profile.ports[port] = value_by_host[host]
         data["active_monitor"] = profile.key
         monitors = data.setdefault("monitors", {})
         monitors[profile.key] = {
@@ -428,13 +366,6 @@ class SettingsPage(QWidget):
         except ValueError:
             value = getattr(self.cfg.clipboard, "storage_limit_mb", 200)
         return max(10, min(5000, value))
-
-    def _source_value(self, edit: QLineEdit, host: str) -> int:
-        try:
-            value = int(str(edit.text()).strip() or 0)
-        except ValueError:
-            value = int(self.cfg.sources[host])
-        return max(0, min(255, value))
 
     def _storage_control(self) -> QWidget:
         """存储上限：可编辑的数字框 + 旁边一个「清理」按钮。
@@ -522,13 +453,12 @@ class SettingsPage(QWidget):
                 hotkey=hotkey,
                 # 严格左右 Alt 只有低级键盘钩子后端做得到
                 hotkey_backend="hook" if strict else "auto",
-                swallow_hotkey=self.sw_swallow.isChecked(),
+                # 设置页不再暴露这两项（与 mac 端对齐）：沿用盘上现值，不改写。
+                swallow_hotkey=bool(getattr(self.cfg, "swallow_hotkey", True)),
                 clipboard_hotkey=clip_hotkey,
                 monitor_match=self.edit_match.text().strip(),
-                sources={
-                    "windows": self._source_value(self.edit_win_src, "windows"),
-                    "mac": self._source_value(self.edit_mac_src, "mac"),
-                },
+                # 输入源码值只在「显示器配置」里改；这里原样保留（已由 profile+wiring 同步）
+                sources=dict(self.cfg.sources),
             )
             self._persist_active_profile(data)
             clip = dict(data.get("clipboard") or {})

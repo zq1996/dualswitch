@@ -27,7 +27,7 @@ pytest.importorskip("PySide6", reason="未安装 PySide6，跳过界面测试")
 from PySide6.QtCore import QEvent, Qt  # noqa: E402
 from PySide6.QtGui import QKeyEvent  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QWidget  # noqa: E402
 
 from dualswitch.config import SOURCE_UNKNOWN, platform_defaults  # noqa: E402
 from dualswitch.sync.engine import ClipRecord  # noqa: E402
@@ -748,16 +748,42 @@ def test_chips_height_and_counts(app, cfg):
 
 
 # --------------------------------------------------------------------------- #
-# 8. 设置页五组（§7 / §11.11）
+# 8. 设置页四组（与 mac2 同构：显示器 / 通用 / 剪贴板 / 热键）
 # --------------------------------------------------------------------------- #
-def test_settings_has_five_groups(app, cfg, tmp_path):
+def test_settings_has_four_groups_like_mac(app, cfg, tmp_path):
+    """2026-11-07 用户：设置页内容以 mac 端为准。
+
+    Windows 端曾经多一个「高级」组（探测显示器 / 查看日志 / 打开配置目录），
+    mac2 早已按需求删掉这三个调试入口，这里对齐 —— 组数、组名、组内行数都一致。
+    """
     page = SettingsPage(cfg, tmp_path / "config.json")
     titles = [lb.text() for lb in page.findChildren(QLabel) if lb.objectName() == "setSec"]
-    assert titles == ["显示器", "通用", "剪贴板", "热键", "高级"]
-    # 高级组三个调试入口都在设置里（托盘日常菜单不再有它们）
-    assert page.probeRequested is not None
-    assert page.openLogRequested is not None
-    assert page.openConfigDirRequested is not None
+    assert titles == ["显示器", "通用", "剪贴板", "热键"]
+    # 三个调试入口不许回来（要查环境用 CLI：dualswitch probe / doctor）
+    assert not hasattr(page, "probeRequested")
+    assert not hasattr(page, "openLogRequested")
+    assert not hasattr(page, "openConfigDirRequested")
+
+
+def test_settings_row_counts_match_mac(app, cfg, tmp_path):
+    """每组行数也要和 mac2 一致：显示器 3 / 通用 2 / 剪贴板 3 / 热键 3。"""
+    page = SettingsPage(cfg, tmp_path / "config.json")
+
+    def rows_of(title: str) -> int:
+        head = [lb for lb in page.findChildren(QLabel)
+                if lb.objectName() == "setSec" and lb.text() == title][0]
+        card = [c for c in head.parentWidget().findChildren(QFrame)
+                if c.objectName() == "setCard"][0]
+        lay = card.layout()
+        return sum(
+            1 for i in range(lay.count())
+            if lay.itemAt(i).widget() is not None
+            and lay.itemAt(i).widget().objectName() != "setSep"
+        )
+
+    assert {t: rows_of(t) for t in ("显示器", "通用", "剪贴板", "热键")} == {
+        "显示器": 3, "通用": 2, "剪贴板": 3, "热键": 3,
+    }
 
 
 def test_settings_writes_config(app, cfg, tmp_path):
@@ -766,21 +792,18 @@ def test_settings_writes_config(app, cfg, tmp_path):
     saved = []
     page.saved.connect(saved.append)
     page.sw_notify.setChecked(not cfg.notify)
-    page.sw_swallow.setChecked(False)
     page.edit_storage.setText("350")
     page.edit_match.setText("AOC Q2790PC")
-    page.edit_win_src.setText("17")
-    page.edit_mac_src.setText("18")
     page._apply()
 
     assert saved, "改动应触发 saved"
     data = json.loads(target.read_text(encoding="utf-8"))
     assert data["notify"] == (not cfg.notify)
-    assert data["swallow_hotkey"] is False
     assert data["appearance"] == "light"
     assert data["clipboard"]["storage_limit_mb"] == 350
     assert data["monitor_match"] == "AOC Q2790PC"
-    assert data["sources"] == {"windows": 17, "mac": 18}
+    # 输入源映射行已移除：sources 保持 profile+wiring 同步出来的值，不被设置页改写
+    assert data["sources"] == dict(cfg.sources)
     assert data["clipboard_hotkey"] == "ctrl+shift+v", "Windows 用 Ctrl+Shift+V"
 
 
@@ -814,12 +837,16 @@ def test_settings_storage_clamped_and_clean_button(app, cfg, tmp_path):
 
 
 def test_settings_sources_must_differ(app, cfg, tmp_path):
-    """两端输入源相同 → 校验拦下并 toast，不落盘。"""
+    """两端输入源相同 → 校验拦下并 toast，不落盘。
+
+    输入源映射行已从设置页移除，这里直接改 wiring 走同一条校验路径。
+    """
     target = tmp_path / "config.json"
     page = SettingsPage(cfg, target)
     toasts = []
     page.toastRequested.connect(toasts.append)
-    page.edit_mac_src.setText("17")
+    local = cfg.port_for_role("local")
+    cfg.wiring = {"local": local, "peer": local}
     page._apply()
     assert toasts and toasts[0].startswith("保存失败")
     assert not target.exists()
@@ -1580,6 +1607,60 @@ def test_monitor_page_shows_three_ports_for_current_screen(app):
     assert page.combo_local.count() == 3
     assert page.combo_peer.count() == 3
     assert page.pill.text() == "已标定"
+
+
+def test_monitor_page_saved_row_expands_without_clipping(app):
+    """展开「已保存的显示器」时，详情必须整个落在卡片里。
+
+    2026-11-07 用户截图：展开后详情被卡片底边裁掉一截。原因是页面没有滚动区，
+    固定高度的窗口把卡片压到 176px（需要 190px）。修法 = 内容进 QScrollArea。
+    """
+    from dualswitch.ui.win2.monitor_page import MonitorPage, SavedRow
+
+    cfg, _ = _cfg_with("AOC:10128")
+    page = MonitorPage(cfg, "C:/dualswitch-v3-test.json")
+    page.resize(624, 568)
+    page.show()
+    app.processEvents()
+
+    rows = page.findChildren(SavedRow)
+    assert rows, "至少有一条已保存的显示器"
+    row = rows[-1]
+    row._toggle()
+    for _ in range(3):
+        app.processEvents()
+
+    assert row.detail.isVisible()
+    bottom = row.y() + row.detail.y() + row.detail.height()
+    assert bottom <= page.saved_card.height(), (
+        f"详情底边 {bottom} 超出卡片 {page.saved_card.height()}（又裁了）"
+    )
+    page.close()
+
+
+def test_monitor_page_scrolls_when_expanded(app):
+    """页面必须有滚动区：窗口高度写死，展开后只能靠滚动看全。"""
+    from PySide6.QtWidgets import QScrollArea
+
+    from dualswitch.ui.win2.monitor_page import MonitorPage
+
+    cfg, _ = _cfg_with("AOC:10128")
+    page = MonitorPage(cfg, "C:/dualswitch-v3-test.json")
+    scrolls = [w for w in page.findChildren(QScrollArea) if w.objectName() == ""]
+    assert scrolls, "显示器配置页没有滚动区"
+    assert scrolls[0].widgetResizable()
+
+
+def test_monitor_page_combo_popup_is_square(app):
+    """下拉浮层用直角：Qt 的 combo popup 不按 view 的圆角裁剪，圆角外就是黑角。"""
+    from dualswitch.ui.win2.monitor_page import MonitorPage
+
+    cfg, _ = _cfg_with("AOC:10128")
+    page = MonitorPage(cfg, "C:/dualswitch-v3-test.json")
+    style = page.combo_local.view().styleSheet()
+    assert "border-radius:0" in style, style
+    # 条目自己的圆角要留着（hover 高亮）
+    assert "QAbstractItemView::item{" in style and "border-radius:5px" in style
 
 
 def test_monitor_page_saves_edited_port_table(app, tmp_path):

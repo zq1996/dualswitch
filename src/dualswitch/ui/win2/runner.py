@@ -14,7 +14,6 @@ Windows 特有的三件事都在这里：
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from pathlib import Path
 
@@ -333,9 +332,7 @@ class UiRunner2(QObject):
             self.clipboard_page.clear_records_with_confirm
         )
         self.settings_page.recordingChanged.connect(self._on_recording_changed)
-        self.settings_page.probeRequested.connect(self.do_probe)
-        self.settings_page.openLogRequested.connect(self.open_log)
-        self.settings_page.openConfigDirRequested.connect(self.open_config_dir)
+        self.settings_page.monitorConfigRequested.connect(self.show_monitor_page)
         self.settings_page.monitorConfigRequested.connect(self.open_monitor_page)
         self.monitor_page.backRequested.connect(lambda: self.show_page(PAGE_SETTINGS))
         self.monitor_page.saved.connect(self.on_config_saved)
@@ -746,45 +743,9 @@ class UiRunner2(QObject):
             self.clipboard_page.clear_confirmed,
         )
 
-    def do_probe(self) -> None:
-        """探测显示器 / 读取输入源：结果进日志 + toast（不阻塞界面）。"""
-        def work() -> None:
-            lines: list[str] = []
-            try:
-                monitors = self.backend.list_monitors()
-                for mon in monitors:
-                    lines.append(f"{getattr(mon, 'description', '') or '显示器'} "
-                                 f"({getattr(mon, 'device_id', '') or '-'})")
-                if not monitors:
-                    lines.append("未枚举到外接显示器")
-            except Exception as exc:  # noqa: BLE001
-                log.exception("探测显示器失败")
-                lines.append(f"探测失败：{exc}")
-            try:
-                current = self.backend.get_input()
-                lines.append(f"当前输入源 {current}")
-            except Exception as exc:  # noqa: BLE001
-                lines.append(f"读取输入源失败：{exc}")
-            for line in lines:
-                log.info("[探测] %s", line)
-            text = "；".join(lines) if lines else "没有结果"
-            self.uiCall.emit(lambda: self.toast.show_text(f"探测完成：{text}", 3200))
-
-        threading.Thread(target=work, name="ui-probe", daemon=True).start()
-
-    def open_log(self) -> None:
-        self._open_path(self.log_file, "日志")
-
-    def open_config_dir(self) -> None:
-        self._open_path(self.cfg_file.parent, "配置目录")
-
-    def _open_path(self, path: Path, what: str) -> None:
-        try:
-            os.startfile(str(path))  # type: ignore[attr-defined]
-            self.toast.show_text(f"已打开{what}")
-        except Exception as exc:  # noqa: BLE001
-            log.exception("打开%s失败：%s", what, path)
-            self.toast.show_text(f"打开{what}失败：{exc}")
+    # 「探测显示器 / 查看日志 / 打开配置目录」三个调试入口已随设置页对齐 mac 端移除
+    # （2026-11-07 用户：设置页内容以 mac 为准）。需要时用 CLI：
+    # `dualswitch probe` / `dualswitch doctor`，日志在 %APPDATA%\dualswitch-v3\logs。
 
     # ------------------------------------------------------------------ 状态同步
     def eventFilter(self, obj, event):  # noqa: N802

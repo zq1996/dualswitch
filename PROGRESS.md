@@ -519,6 +519,22 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-07 22:55 **V3 界面三处修正（用户截图）：下拉黑角 / 展开被裁 / 设置页对齐 mac**
+  · **下拉浮层黑角**：`_PortCombo` 给 view 加了 `border-radius:8px`，而 popup 是独立顶层窗口，
+    圆角外面那块没人绘制 → 屏幕上就是四个黑角。实测 QSS / `palette(Window)` / viewport 底色 /
+    `WA_NoSystemBackground` **全都压不住**（Qt 的 combo popup 不按 view 的圆角裁剪）。
+    改为**直角 + 1px 边框**（条目自己的 5px 圆角保留）。真圆角要自己写 popup，不值。
+  · **展开被裁**：显示器配置页没有滚动区，固定高度窗口把「已保存的显示器」卡片压到 176px
+    （内容需要 190px），展开的详情被卡片底边切掉。修法：整页内容进 `QScrollArea`，
+    展开时 `ensureWidgetVisible` 滚到刚展开那条（延后一帧，否则用展开前的几何滚不到位）。
+  · **设置页对齐 mac**：删「输入源映射」行、删整个「高级」组（探测显示器 / 查看日志 /
+    打开配置目录）、删「阻止 Alt+Space 弹出系统菜单」开关 → 四组、行数 3/2/3/3 与 mac2 一致。
+    `_apply` 不再改写 `sources` / `swallow_hotkey`（沿用盘上值）；runner 里三个对应方法与
+    `_open_path` 一并删除（排障改走 `dualswitch probe` / `doctor`）。
+  · 新增 4 条守卫：展开详情不越卡片底边、页面有滚动区、浮层是直角、设置页四组且行数对齐。
+  · 基线：**615 tests / 605 passed / 0 failed / 10 skipped**。
+  · 双 Windows 现状复核（用户问）写进 `docs/PROFILE-AND-ROLES-DESIGN.md`：切屏/归属/剪贴板/
+    配对/设置页可用；键盘转发不可用（注入端只有 macOS）、托盘 tooltip 与对端图标仍写死 Mac。
 - 2026-11-07 22:30 **切到 `v3` 分支做 Windows 复核，修掉「Windows 读不到显示器身份」**
   （`docs/WINDOWS-VERIFY.md` §0.8）。
   · 分支：`main` 快进到 `e87a9d3`；新建本地 `v3` 跟踪 `origin/v3`（`d24b4bf`，P1–P3 全量）。

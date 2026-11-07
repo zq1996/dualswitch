@@ -62,6 +62,24 @@ other_label = "Mac (USB-C)" if other == "mac" else "Windows (HDMI)"
 
 **结论：双 Windows 不需要「新功能」才能跑，但需要「改名 + 拆概念」才能用得不别扭。** 而这个拆分恰好就是 profile 方案本来就需要的结构，两件事一起做最省。
 
+### P3 之后的状态（2026-11-07 Windows 端复核）
+
+| 环节 | 现在的行为 | 状态 |
+|---|---|---|
+| 切屏（四条显式通道） | 走 `wiring + profile.ports`，端口名过协议、码值由执行方自己的 profile 解析 | ✅ 可用 |
+| 本机/对端判定 | `effective_host()` / `other_host()` 已明确是**角色代号**（`windows`=本机、`mac`=对端），不再是真实平台 | ✅ 可用 |
+| 归属判定 | 「能枚举到 → 本机 / 对端看得到 → 对面 / 都看不到 → 未知」与平台无关 | ✅ 可用 |
+| 剪贴板同步 | 记录只带 `source_platform` 做展示，载荷是 UTF-8 / PNG，与平台无关 | ✅ 可用 |
+| 配对 | 用 HELLO 的 `plat`（真实平台） | ✅ 可用 |
+| 设置页 / 显示器配置页 | 文案与行数按 mac2 对齐；「输入源映射」已删（码值只在端口码表里改） | ✅ 可用 |
+| 托盘菜单文案 | 「这台 / 对端名字」 | ✅ 可用 |
+| 托盘 **tooltip** | `tooltip_text()` 仍把角色代号映射成 `Windows` / `Mac` → 双 Windows 时会说「当前画面：Mac」 | ❌ 待修 |
+| 对端 **图标** | `chrome.PEER_LOGO` 写死 `apple`（平台常量，不跟 `peer_platform` 走） | ❌ 待修 |
+| **键盘转发** | 注入端只有 macOS（`keyboard/inject_macos.py` + `receiver.py` 直接 import `MacInjector`）；Windows 没有注入实现 | ❌ **不可用**（闸门第 5 条保证不吞键，只是转发不生效） |
+
+> 键盘转发要支持双 Windows，得补一个 `inject_windows.py`（`SendInput` + `dwExtraInfo` 标记防回环）
+> 并在 `receiver.py` 里按平台选注入器。属 P4 范围，未做。
+
 > 补充：`sync/engine.py:292` 上报的 `platform` 用的是 `host_label`，双 Windows 时两台都正确上报 `windows`——**这里本来就该用平台，碰巧没错**。说明「平台」这个概念在协议层是存在的，只是配置层把它和角色混了。
 
 ---

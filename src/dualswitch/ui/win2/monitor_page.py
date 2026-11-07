@@ -11,7 +11,7 @@ import socket
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIntValidator, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QStyle,
     QStyledItemDelegate,
     QVBoxLayout,
@@ -119,9 +120,14 @@ class _PortCombo(QComboBox):
         view = self.view()
         view.setMouseTracking(True)
         view.viewport().setMouseTracking(True)
+        # 弹出层用**直角**。2026-11-07 实测：给 view 加 border-radius 后，圆角外面
+        # 那块没人绘制，而 popup 是独立顶层窗口，屏幕上就是四个黑角；QSS / 调色板 /
+        # viewport 底色 / WA_NoSystemBackground 全都压不住（Qt 的 combo popup 不按
+        # view 的圆角裁剪）。真圆角得自己写 popup，代价不值 —— 直角 + 1px 边框更接近
+        # Windows 原生下拉。条目自己的 5px 圆角保留（hover 高亮才是用户天天看的）。
         view.setStyleSheet(
             f"QAbstractItemView{{background:#fff;border:1px solid {t.line};"
-            "border-radius:8px;padding:4px;outline:0;"
+            "border-radius:0;padding:4px;outline:0;"
             f"color:{t.ink};font-size:11.5px;}}"
             "QAbstractItemView::item{min-height:24px;padding:0 8px;"
             "border-radius:5px;background:transparent;}"
@@ -130,6 +136,26 @@ class _PortCombo(QComboBox):
             f"QAbstractItemView::item:selected{{background:{t.accent_soft};"
             f"color:{t.accent_deep};}}"
         )
+        self._prepare_popup()
+
+    def _prepare_popup(self) -> None:
+        """给弹出层开透明底，兜住「view 没铺满窗口」的那几个像素。
+
+        popup 窗口默认不透明，没被绘制的区域在屏幕上就是纯黑。设成半透明后，
+        露出来的是后面的界面而不是黑块。
+        """
+        popup = self.view().window()
+        if popup is self:
+            return
+        popup.setAttribute(Qt.WA_TranslucentBackground, True)
+        popup.setObjectName("comboPopup")
+        # 用 objectName 选择器：裸 setStyleSheet 会连子控件（QListView 也是 QFrame）
+        # 的白底一起吃掉。
+        popup.setStyleSheet("QFrame#comboPopup{background:transparent;border:0;}")
+
+    def showPopup(self) -> None:  # noqa: N802
+        self._prepare_popup()
+        super().showPopup()
 
     def enterEvent(self, event):  # noqa: N802
         self._hover = True
@@ -182,6 +208,8 @@ class _Clickable(QFrame):
 
 class SavedRow(_Clickable):
     """一条已保存的显示器：头部两行文字 + 展开/收起 + 折叠详情。"""
+
+    toggled = Signal(bool)   # True = 刚展开；页面据此把详情滚进可视区
 
     def __init__(self, profile: MonitorProfile, *, current: bool, removable: bool,
                  on_use, on_delete, parent=None):
@@ -254,6 +282,7 @@ class SavedRow(_Clickable):
         self.detail.setVisible(self._open)
         self._hint.setText("收起" if self._open else "展开")
         self._chev.setText("▾" if self._open else "▸")
+        self.toggled.emit(self._open)
 
 
 class MonitorPage(QWidget):
@@ -272,7 +301,21 @@ class MonitorPage(QWidget):
 
     # ------------------------------------------------------------------ 版面
     def _build(self) -> None:
-        lay = QVBoxLayout(self)
+        # 内容整体放进滚动区：展开「已保存的显示器」时卡片会长高，
+        # 页面高度是固定的（窗口尺寸写死），没有滚动区就只能把卡片压扁 ——
+        # 表现就是展开的详情被卡片底边裁掉一截。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        self._scroll = scroll
+
+        host = QWidget()
+        lay = QVBoxLayout(host)
         lay.setContentsMargins(20, 14, 20, 12)
         lay.setSpacing(8)
 
@@ -372,6 +415,8 @@ class MonitorPage(QWidget):
         self.saved_lay.setSpacing(0)
         lay.addWidget(self.saved_card)
         lay.addStretch(1)
+        scroll.setWidget(host)
+        outer.addWidget(scroll, 1)
 
     def _wire_card(self, caption: str, name: str, role: str):
         t = theme.tokens()
@@ -542,7 +587,16 @@ class MonitorPage(QWidget):
                 on_use=self._use_saved,
                 on_delete=self._delete_saved,
             )
+            row.toggled.connect(lambda opened, r=row: opened and self._reveal(r))
             self.saved_lay.addWidget(row)
+
+    def _reveal(self, row: QWidget) -> None:
+        """把刚展开的那条滚进可视区。
+
+        布局要等下一轮事件循环才会重新分配高度，所以延后一帧再滚 ——
+        直接调 `ensureWidgetVisible` 用的是展开前的几何，会滚不到位。
+        """
+        QTimer.singleShot(0, lambda: self._scroll.ensureWidgetVisible(row, 0, 16))
 
     # ------------------------------------------------------------------ 保存
     def _save_wiring(self, *_args) -> None:
