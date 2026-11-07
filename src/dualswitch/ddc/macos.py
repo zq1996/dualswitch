@@ -124,12 +124,21 @@ class M1ddcBackend(BaseBackend):
         m1ddc_path: str = "m1ddc",
         display_index: int | None = None,
         timeout: float = 3.0,
+        slot: str = "",
     ):
         super().__init__(vcp_code=vcp_code, monitor_match=monitor_match, monitor_index=monitor_index)
         self.m1ddc_path = m1ddc_path or "m1ddc"
         self.display_index = display_index
         self.timeout = timeout
+        #: 身份识别给出的 slot（如 dispext0），用于精确挑外接屏的 I2C 句柄。
+        self.slot = str(slot or "")
         self._av: AVServiceI2C | None = None
+
+    def _av_service(self) -> AVServiceI2C:
+        if self._av is None:
+            self._av = AVServiceI2C()
+            self._av.set_preferred_slot(self.slot or None)
+        return self._av
 
     # ------------------------------------------------------------------ 内部
     def _resolve_binary(self) -> str:
@@ -317,11 +326,10 @@ class M1ddcBackend(BaseBackend):
         m1ddc 子进程。两条都在 I2C 锁内，中间不会被回读/检测线程的读插进来。
         """
         value = int(value)
-        if self._av is None:
-            self._av = AVServiceI2C()
+        av = self._av_service()
 
         def _send() -> None:
-            if self._av is not None and self._av.set_vcp(self.vcp_code, value):
+            if av.set_vcp(self.vcp_code, value):
                 return
             self._run(["set", "input", str(value)], display_args=self._display_args())
 
@@ -330,15 +338,13 @@ class M1ddcBackend(BaseBackend):
             time.sleep(SET_REPEAT_GAP_S)
             _send()                      # 第二条：一定生效
 
-        self._av.run_exclusive(_send_group)
+        av.run_exclusive(_send_group)
 
     def get_input(self) -> int:
         # 先走 IOAVService 直读：m1ddc 的 Get-VCP 校验和有 bug（漏 0x51），
         # 严格显示器会拒绝 → -118。直读在画面切到对端时照样能读到当前输入
         # （USB-C 的 DP AUX 链路不随画面切换断），实测 17/18 两态 1~2 次成功。
-        if self._av is None:
-            self._av = AVServiceI2C()
-        value = self._av.get_vcp(self.vcp_code)
+        value = self._av_service().get_vcp(self.vcp_code)
         if value is not None:
             return value
 

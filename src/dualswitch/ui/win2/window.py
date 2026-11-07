@@ -344,10 +344,16 @@ class MainWindow(QWidget):
         self.quit_on_close = False
         self._collapsed = False
 
-        self.setWindowTitle("屏幕切换")
+        from ...config import APP_DISPLAY_NAME
+
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(theme.WIN_W, theme.WIN_H)
+        # 端口行按屏动态生成：4 口屏比 2 口屏多两行，窗口跟着长高（理由同 mac2）。
+        from ...ddc.profiles import ROW_H as _PORT_ROW_H
+
+        _extra = max(0, len(cfg.active_ports()) - 2) * _PORT_ROW_H
+        self.setFixedSize(theme.WIN_W, theme.WIN_H + _extra)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -361,7 +367,9 @@ class MainWindow(QWidget):
         root_lay.setSpacing(0)
 
         # ---- 标题栏 ----
-        self.titlebar = TitleBar("屏幕切换")
+        from ...config import APP_DISPLAY_NAME
+
+        self.titlebar = TitleBar(APP_DISPLAY_NAME)
         self.titlebar.minimizeClicked.connect(self.showMinimized)
         self.titlebar.closeClicked.connect(self.close)
         root_lay.addWidget(self.titlebar)
@@ -498,8 +506,12 @@ class MainWindow(QWidget):
         for btn in (self.nav_switch, self.nav_clip, self.nav_pair, self.nav_settings):
             btn.update()
         title = PAGE_TITLES.get(index, "屏幕切换")
-        self.setWindowTitle(f"屏幕切换 · {title}" if index != PAGE_SWITCH else "屏幕切换")
-        self.titlebar.set_title("屏幕切换")
+        from ...config import APP_DISPLAY_NAME
+
+        self.setWindowTitle(
+            f"{APP_DISPLAY_NAME} · {title}" if index != PAGE_SWITCH else APP_DISPLAY_NAME
+        )
+        self.titlebar.set_title(APP_DISPLAY_NAME)
         if index != PAGE_CLIP:
             clip = getattr(self, "clip_page", None)
             if clip is not None:

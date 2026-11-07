@@ -834,7 +834,11 @@ def test_switch_page_four_explicit_actions(app, cfg):
     """四条显式通道：2 个目标 × 本机/对端。归属未知时按钮照样可用。"""
     page = SwitchPage(cfg, "alt+space", "Q2790R3")
     rows = page.hero.rows
-    assert [(r.host, r.value) for r in rows] == [("windows", 17), ("mac", 18)]
+    # 端口行按 profile 生成：默认 profile 是 HDMI 1 + USB-C，role 由 wiring 决定
+    assert [(r.port_name, r.role, r.value) for r in rows] == [
+        ("hdmi1", "peer", 17),
+        ("usb_c", "local", 18),
+    ]
     assert [r.btn_local.text() for r in rows] == ["本机发送 17", "本机发送 18"]
     # 「请对端发送」是兜底，降级为行尾小图标钮（2026-10-24 定案）：
     # 文案进 tooltip + accessibleName，按钮本体无文字。
@@ -859,6 +863,26 @@ def test_switch_page_four_explicit_actions(app, cfg):
     assert not any(r.btn_local.isEnabled() or r.btn_peer.isEnabled() for r in rows)
     page.set_busy(False)
     assert all(r.btn_local.isEnabled() for r in rows)
+
+
+def test_switch_page_follows_screen_port_count(app):
+    """4 口屏显示 4 行；窗口按多出来的行数长高，不许压扁页面。"""
+    from dualswitch.ddc.identity import DisplayIdentity
+    from dualswitch.ddc.profiles import ROW_H, resolve_active
+
+    cfg = platform_defaults()
+    resolve_active(
+        cfg,
+        DisplayIdentity("AOC", 9987, name="U27N3G6R4B", slot="dispext0"),
+    )
+    page = SwitchPage(cfg, "alt+space", "U27N3G6R4B")
+    assert [r.port_name for r in page.hero.rows] == ["hdmi1", "hdmi2", "dp", "usb_c"]
+    assert [r.value for r in page.hero.rows] == [17, 17, 15, 100]
+    assert page.hero.rows[3].role == "local"      # 本机 USB-C
+    assert page.hero.rows[0].role == "peer"       # 对端 HDMI 1
+
+    win = MainWindow(cfg, "alt+space", "v3", "U27N3G6R4B")
+    assert win.height() == theme.WIN_H + 2 * ROW_H
 
 
 def test_switch_page_readout_is_labelled(app, cfg):

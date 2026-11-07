@@ -25,7 +25,7 @@ PYTHON="$(ds_python)" || {
     echo "    python3 -m venv .venv && .venv/bin/pip install -e \".[dev,mouse,macos,gui,tray]\"" >&2
     exit 1
 }
-APP="dist/dualswitch.app"
+APP="dist/dualswitch-v3.app"
 ICNS="design/icon/screen-switch.icns"
 
 # 先体检再动手：把"缺依赖"报在这里，别让它变成 PyInstaller 深处一句看不懂的 ImportError。
@@ -81,9 +81,9 @@ ICON_ARGS=()
 # 解析成「相对 spec 所在目录」，所以这里一律用绝对路径，避免 build/src/... 找不到。
 "$PYTHON" -m PyInstaller \
     --noconfirm ${CLEAN_ARGS[@]+"${CLEAN_ARGS[@]}"} \
-    --name dualswitch \
+    --name dualswitch-v3 \
     --windowed \
-    --osx-bundle-identifier com.dualswitch.app \
+    --osx-bundle-identifier com.dualswitch.app.v3 \
     --paths "$ROOT/src" \
     --hidden-import "pystray._darwin" \
     --hidden-import "Quartz" \
@@ -135,8 +135,8 @@ echo "[ok] 翻译只保留中文（zh_CN），已删除 $PRUNED 个其它语言�
 # Dock / 菜单栏「关于」里显示中文名；LSUIElement=false 保留 Dock 图标（主窗口是真实窗口）
 PLIST="$APP/Contents/Info.plist"
 if [[ -f "$PLIST" ]]; then
-    /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 屏幕切换" "$PLIST" 2>/dev/null \
-        || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 屏幕切换" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 屏幕切换 V3" "$PLIST" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 屏幕切换 V3" "$PLIST"
     /usr/libexec/PlistBuddy -c "Add :LSUIElement bool false" "$PLIST" 2>/dev/null || true
     /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 11.0" "$PLIST" 2>/dev/null || true
     /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$PLIST" 2>/dev/null || true
@@ -178,12 +178,12 @@ fi
 # 源码跑得好好的、双击 .app 却立刻闪退，日志里只有一句 ModuleNotFoundError。
 # 这里让产物自己 import 一遍界面栈（--selfcheck），缺模块就构建失败。
 # 注意别用 strings 查模块名：PYZ 是压缩的，正常产物也查不到。
-if ! "$APP/Contents/MacOS/dualswitch" --selfcheck; then
+if ! "$APP/Contents/MacOS/dualswitch-v3" --selfcheck; then
     echo "[error] 打包产物缺少界面模块，多半是 chrome/__init__.py 又用了动态导入" >&2
     exit 1
 fi
 
 echo ""
 echo "产物：$ROOT/$APP"
-echo "首次运行后请到 系统设置 → 隐私与安全性 → 辅助功能 勾选 屏幕切换.app。"
-echo "加入登录项：系统设置 → 通用 → 登录项 → 添加 屏幕切换.app"
+echo "首次运行后请到 系统设置 → 隐私与安全性 → 辅助功能 勾选 屏幕切换 V3.app。"
+echo "加入登录项：系统设置 → 通用 → 登录项 → 添加 屏幕切换 V3.app"

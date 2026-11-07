@@ -321,3 +321,76 @@ def test_strict_load_raises_on_invalid_value_without_backup(tmp_path):
         config_mod.load(path)
     assert not list(tmp_path.glob("config.json.unreadable-*"))
     assert config_mod.take_load_warnings() == []
+
+
+# --------------------------------------------------------------------------- #
+# V3：旧 sources → profile + wiring
+# --------------------------------------------------------------------------- #
+def test_legacy_sources_migrate_to_default_profile():
+    cfg = from_dict({"sources": {"windows": 17, "mac": 18}})
+    assert cfg.monitors["default"].ports == {"hdmi1": 17, "usb_c": 18}
+    local_port = "hdmi1" if cfg.effective_host() == "windows" else "usb_c"
+    assert cfg.wiring["local"] == local_port
+    assert cfg.target_value(cfg.effective_host()) == 18
+    assert cfg.target_value(cfg.other_host()) == 17
+
+
+def test_new_profile_allows_same_code_on_different_ports():
+    """AOC U27N3G6R4B 的 HDMI1/HDMI2 都是 17，旧校验不能误伤 profile。"""
+    cfg = from_dict(
+        {
+            "monitors": {
+                "AOC:9987": {"ports": {"hdmi1": 17, "hdmi2": 17, "usb_c": 100}},
+            },
+            "wiring": {"local": "usb_c", "peer": "hdmi1"},
+        }
+    )
+    assert cfg.active_profile().ports["hdmi2"] == 17
+    assert cfg.target_value(cfg.other_host()) == 17
+
+
+def test_profile_unknown_subfield_survives_save_and_load(tmp_path):
+    path = tmp_path / "config.json"
+    raw = {
+        "monitors": {
+            "AOC:9987": {
+                "name": "U27N3G6R4B",
+                "ports": {"usb_c": 100, "hdmi1": 17},
+                "future_profile_field": 7,
+            }
+        },
+        "wiring": {"local": "usb_c", "peer": "hdmi1"},
+    }
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    cfg = config_mod.load(path)
+    assert cfg.monitors["AOC:9987"].ports["usb_c"] == 100
+    assert cfg._extra["monitors"]["AOC:9987"] == {"future_profile_field": 7}
+
+    config_mod.save(cfg, path)
+    back = json.loads(path.read_text(encoding="utf-8"))
+    assert back["monitors"]["AOC:9987"]["future_profile_field"] == 7
+
+
+def test_to_dict_keeps_legacy_sources_in_sync():
+    cfg = from_dict(
+        {
+            "monitors": {"AOC:9987": {"ports": {"hdmi1": 17, "usb_c": 100}}},
+            "wiring": {"local": "usb_c", "peer": "hdmi1"},
+        }
+    )
+    data = cfg.to_dict()
+    assert data["sources"] == {
+        cfg.effective_host(): 100,
+        cfg.other_host(): 17,
+    }
+
+
+def test_same_effective_values_rejected():
+    with pytest.raises(ConfigError, match="切换无效果"):
+        from_dict(
+            {
+                "monitors": {"AOC:9987": {"ports": {"hdmi1": 17, "hdmi2": 17}}},
+                "wiring": {"local": "hdmi1", "peer": "hdmi2"},
+            }
+        )

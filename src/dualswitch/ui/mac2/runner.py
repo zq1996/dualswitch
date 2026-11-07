@@ -84,8 +84,11 @@ class UiRunner2(QObject):
         self.clip_engine = clip_engine
 
         self.app = QApplication.instance() or QApplication([])
-        self.app.setApplicationName("屏幕切换")
-        self.app.setApplicationDisplayName("屏幕切换")
+        from ...config import APP_DISPLAY_NAME
+
+        self._app_display_name = APP_DISPLAY_NAME
+        self.app.setApplicationName(APP_DISPLAY_NAME)
+        self.app.setApplicationDisplayName(APP_DISPLAY_NAME)
         self.app.setQuitOnLastWindowClosed(False)
 
         font = QFont()
@@ -218,6 +221,9 @@ class UiRunner2(QObject):
         )
 
     def _monitor_name(self) -> str:
+        profile = self.cfg.active_profile()
+        if getattr(profile, "is_calibrated", lambda: False)() and profile.name:
+            return profile.name
         if self.cfg.monitor_match:
             return self.cfg.monitor_match
         try:
@@ -360,6 +366,11 @@ class UiRunner2(QObject):
         )
 
     def _label_for(self, value: int) -> str:
+        from ...ddc.profiles import port_label
+
+        port = self.controller.port_of_value(int(value))
+        if port:
+            return port_label(port)
         host = self.controller.host_of_value(int(value))
         return "Mac" if host == "mac" else ("Windows" if host == "windows" else f"输入源 {value}")
 
@@ -627,8 +638,7 @@ class UiRunner2(QObject):
         self.switch_page.set_owner(source if source in ("windows", "mac") else None)
 
     def _apply_result(self, result) -> None:  # noqa: ANN001
-        host = self.controller.host_of_value(result.value)
-        label = "Mac" if host == "mac" else ("Windows" if host == "windows" else f"输入源 {result.value}")
+        label = self._label_for(result.value)
         if not result.ok:
             self.switch_page.set_note(f"{label} 切换失败：{result.error}", ok=False, bad=True)
             self.toast.show_text(f"切换失败：{result.error}")
@@ -704,6 +714,13 @@ class UiRunner2(QObject):
         old_clip_on = bool(
             getattr(getattr(self.cfg, "clipboard", None), "enabled", True)
         )
+        # 设置页保存出来的是新 Config 对象，运行期识别到的 profile 不会自动带过来；
+        # 丢了它会让切换页从「4 口屏」退回 default 的 2 口。这里沿用上一次的身份。
+        if getattr(cfg, "_active_profile", None) is None and getattr(self.cfg, "_active_profile", None) is not None:
+            cfg._active_profile = self.cfg._active_profile
+            cfg._active_identity = self.cfg._active_identity
+            cfg.repair_wiring()
+            cfg.sync_sources()
         self.cfg = cfg
         # 引擎读的是自己持有的 cfg 引用：换配置要跟着换，否则「保留历史 / 图片开关」
         # 这类设置改了不生效。

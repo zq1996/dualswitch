@@ -207,9 +207,16 @@ class MainWindow(QWidget):
         self._allow_close = False
         self.withdraw_to_tray = True
 
-        self.setWindowTitle("屏幕切换")
+        from ...config import APP_DISPLAY_NAME
+
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.setAttribute(Qt.WA_MacShowFocusRect, False)
-        self.setFixedSize(theme.WIN_W, theme.WIN_H)
+        # 端口行按屏动态生成：4 口屏比 2 口屏多两行，窗口必须跟着长高，
+        # 否则 setFixedSize 会把页面压扁（v2 的教训：放不下不会滚动，只会互相压住）。
+        from ...ddc.profiles import ROW_H as _PORT_ROW_H
+
+        _extra = max(0, len(cfg.active_ports()) - 2) * _PORT_ROW_H
+        self.setFixedSize(theme.WIN_W, theme.WIN_H + _extra)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -360,7 +367,11 @@ class MainWindow(QWidget):
             PAGE_PAIR: "配对电脑",
             PAGE_SETTINGS: "设置",
         }[index]
-        self.setWindowTitle(f"屏幕切换 · {title}" if index != PAGE_SWITCH else "屏幕切换")
+        from ...config import APP_DISPLAY_NAME
+
+        self.setWindowTitle(
+            f"{APP_DISPLAY_NAME} · {title}" if index != PAGE_SWITCH else APP_DISPLAY_NAME
+        )
         if index != PAGE_CLIP:
             clip = getattr(self, "clip_page", None)
             if clip is not None:

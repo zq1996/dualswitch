@@ -114,8 +114,11 @@ class AVServiceI2C:
         # 再调 set_vcp → 用普通 Lock 会把自己锁死（2026-10-24 真机上就这么挂了一次）。
         self._lock = threading.RLock()
         self._handles: list[object] | None = None   # None = 还没枚举过
+        self._handle_slots: list[tuple[str, object]] | None = None  # (slot, 句柄)
         self._good: object | None = None            # 上次给出有效回复的句柄
         self._lib = None
+        #: 身份识别给出的外接屏 slot（macOS: dispext0）。None = 自动挑外接句柄。
+        self.preferred_slot: str | None = None
 
     # ------------------------------------------------------------------ 底层
     def invalidate(self) -> None:
@@ -128,7 +131,16 @@ class AVServiceI2C:
         """
         with self._lock:
             self._handles = None
+            self._handle_slots = None
             self._good = None
+
+    def set_preferred_slot(self, slot: str | None) -> None:
+        """按身份识别结果锁定外接屏 slot；None = 自动挑所有 dispext 句柄。"""
+        with self._lock:
+            slot = str(slot or "").strip() or None
+            if slot != self.preferred_slot:
+                self.preferred_slot = slot
+                self._good = None
 
     def _ensure_lib(self) -> bool:
         """惰性加载 CoreDisplay / IOKit 并绑好签名。非 macOS 直接 False。"""
@@ -177,6 +189,14 @@ class AVServiceI2C:
             iok.IOIteratorNext.argtypes = [ctypes.c_uint32]
             iok.IOObjectRelease.restype = ctypes.c_int
             iok.IOObjectRelease.argtypes = [ctypes.c_uint32]
+            iok.IORegistryEntryGetName.restype = ctypes.c_int
+            iok.IORegistryEntryGetName.argtypes = [ctypes.c_uint32, ctypes.c_char_p]
+            iok.IORegistryEntryGetParentEntry.restype = ctypes.c_int
+            iok.IORegistryEntryGetParentEntry.argtypes = [
+                ctypes.c_uint32,
+                ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_uint32),
+            ]
 
             self._lib = (ctypes, cd, cf, iok)
             return True
@@ -185,38 +205,85 @@ class AVServiceI2C:
             self._lib = False
             return False
 
+    @staticmethod
+    def _service_slot(iok, service: int) -> str:
+        """DCPAVServiceProxy 的父节点名就是 `dispN:` / `dispextN:` 前缀。"""
+        import ctypes
+
+        parent = ctypes.c_uint32(0)
+        if iok.IORegistryEntryGetParentEntry(
+            service, b"IOService", ctypes.byref(parent)
+        ) != 0 or not parent.value:
+            return ""
+        try:
+            buf = ctypes.create_string_buffer(256)
+            if iok.IORegistryEntryGetName(parent, buf) != 0:
+                return ""
+            return buf.value.decode("utf-8", "ignore")
+        finally:
+            iok.IOObjectRelease(parent.value)
+
     def _enumerate_handles(self) -> list[object]:
-        """枚举 DCPAVServiceProxy 并各建一个 IOAVService 句柄。"""
+        """枚举 DCPAVServiceProxy 并各建一个 IOAVService 句柄。
+
+        同时记下句柄的 slot（`disp0` / `dispext0`）：身份识别已经证明
+        型号与句柄共用这个前缀，因此「内建屏永远不选」不再需要 VCP 试错。
+        """
         ctypes, cd, cf, iok = self._lib
         handles: list[object] = []
+        slots: list[tuple[str, object]] = []
         matching = iok.IOServiceNameMatching(b"DCPAVServiceProxy")
         iterator = ctypes.c_uint32(0)
         if iok.IOServiceGetMatchingServices(0, matching, ctypes.byref(iterator)) != 0:
+            self._handles = handles
+            self._handle_slots = slots
             return handles
         while True:
             service = iok.IOIteratorNext(iterator)
             if not service:
                 break
+            slot = self._service_slot(iok, service)
             handle = cd.IOAVServiceCreateWithService(
                 cf.CFAllocatorGetDefault(), ctypes.c_void_p(service)
             )
             iok.IOObjectRelease(service)
             if handle:
                 handles.append(handle)
+                slots.append((slot, handle))
+        self._handles = handles
+        self._handle_slots = slots
         return handles
 
+    def _external_slots(self) -> list[tuple[str, object]]:
+        """只保留外接屏（`dispextN`）；内建屏 `dispN` 连候选都不进。"""
+        if self._handle_slots is None:
+            return []
+        return [(slot, h) for slot, h in self._handle_slots if slot.startswith("dispext")]
+
     def _candidates(self) -> list[object]:
-        """候选句柄：上次成功的排最前。"""
+        """候选句柄：外接屏优先；上次成功的排最前。"""
         if self._lib is False:
             return []
         if self._handles is None:
-            self._handles = self._enumerate_handles() if self._ensure_lib() else []
+            self._enumerate_handles() if self._ensure_lib() else None
             if not self._handles:
                 log.debug("IORegistry 里没有 DCPAVServiceProxy（Intel 机 / 老系统）")
-        if self._good is not None and self._good in self._handles:
-            rest = [h for h in self._handles if h is not self._good]
+        # 旧测试 / 手动注入只给了 _handles：没有 slot 信息时退回全量。
+        if self._handle_slots is None:
+            pool = list(self._handles or [])
+        else:
+            pool = [h for _, h in self._external_slots()]
+            if self.preferred_slot:
+                preferred = [
+                    h for slot, h in self._external_slots()
+                    if slot == self.preferred_slot
+                ]
+                if preferred:
+                    pool = preferred
+        if self._good is not None and self._good in pool:
+            rest = [h for h in pool if h is not self._good]
             return [self._good] + rest
-        return list(self._handles)
+        return pool
 
     @staticmethod
     def _i2c_read(lib, handle, length: int) -> tuple[int, bytes]:

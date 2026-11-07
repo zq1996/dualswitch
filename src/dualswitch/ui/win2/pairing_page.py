@@ -315,7 +315,7 @@ class PairingPage(QWidget):
     #: 需要用户确认时发出去，由 runner 的 ConfirmOverlay 接（§14.1）
     confirmRequested = Signal(object)
 
-    def __init__(self, engine=None, parent=None, default_port: int = 47823):  # noqa: ANN001
+    def __init__(self, engine=None, parent=None, default_port: int = 47833):  # noqa: ANN001
         super().__init__(parent)
         self._engine = engine
         self._default_port = int(default_port)
@@ -497,7 +497,7 @@ class PairingPage(QWidget):
         self.edit_ip = QLineEdit()
         self.edit_ip.setObjectName("pairIp")
         self.edit_ip.setFixedHeight(32)
-        self.edit_ip.setPlaceholderText("例如 192.168.1.31 或 192.168.1.31:47823")
+        self.edit_ip.setPlaceholderText("例如 192.168.1.31 或 192.168.1.31:47833")
         self.edit_ip.returnPressed.connect(self._manual_connect)
         b_connect = QPushButton("连接")
         b_connect.setObjectName("peerBtn")

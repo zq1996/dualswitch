@@ -60,9 +60,11 @@ def create_backend(cfg) -> DisplayBackend:  # noqa: ANN001 - 避免循环导入
             raise DDCError("m1ddc 后端只能在 macOS 上使用")
         from .macos import M1ddcBackend
 
+        identity = getattr(cfg, "_active_identity", None)
         return M1ddcBackend(
             m1ddc_path=cfg.m1ddc_path,
             display_index=cfg.m1ddc_display_index,
+            slot=str(getattr(identity, "slot", "") or ""),
             **common,
         )
 

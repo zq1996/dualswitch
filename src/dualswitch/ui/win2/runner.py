@@ -234,8 +234,10 @@ class UiRunner2(QObject):
         self._first_switch_hint_shown = False
 
         self.app = QApplication.instance() or QApplication([])
-        self.app.setApplicationName("屏幕切换")
-        self.app.setApplicationDisplayName("屏幕切换")
+        from ...config import APP_DISPLAY_NAME
+
+        self.app.setApplicationName(APP_DISPLAY_NAME)
+        self.app.setApplicationDisplayName(APP_DISPLAY_NAME)
         self.app.setQuitOnLastWindowClosed(False)
 
         font = QFont()
@@ -395,6 +397,9 @@ class UiRunner2(QObject):
         )
 
     def _monitor_name(self) -> str:
+        profile = self.cfg.active_profile()
+        if getattr(profile, "is_calibrated", lambda: False)() and profile.name:
+            return profile.name
         if self.cfg.monitor_match:
             return self.cfg.monitor_match
         try:
@@ -558,6 +563,11 @@ class UiRunner2(QObject):
 
     # ------------------------------------------------------------------ 两条显式通道
     def _label_for(self, value: int) -> str:
+        from ...ddc.profiles import port_label
+
+        port = self.controller.port_of_value(int(value))
+        if port:
+            return port_label(port)
         host = self.controller.host_of_value(int(value))
         return "Mac" if host == "mac" else ("Windows" if host == "windows" else f"输入源 {value}")
 
@@ -947,7 +957,7 @@ class UiRunner2(QObject):
             "unconfirmed": "回读未确认（已知现象）",
         }.get(result.readback, "指令已发送")
         self.switch_page.set_note(f"上次切换 {ms:.1f} ms · {suffix}", ok=True)
-        label = "Mac" if result.target == "mac" else "Windows"
+        label = self._label_for(result.value)
         if not self._first_switch_hint_shown:
             # §13.3 默认不弹确认，只在首次切换后提示一次「怎么切回来」
             self._first_switch_hint_shown = True
@@ -1020,6 +1030,13 @@ class UiRunner2(QObject):
         old_clip_on = bool(
             getattr(getattr(self.cfg, "clipboard", None), "enabled", True)
         )
+        # 设置页保存出来的是新 Config 对象，运行期识别到的 profile 不会自动带过来；
+        # 丢了它会让切换页从「4 口屏」退回 default 的 2 口。这里沿用上一次的身份。
+        if getattr(cfg, "_active_profile", None) is None and getattr(self.cfg, "_active_profile", None) is not None:
+            cfg._active_profile = self.cfg._active_profile
+            cfg._active_identity = self.cfg._active_identity
+            cfg.repair_wiring()
+            cfg.sync_sources()
         self.cfg = cfg
         # 引擎读的是自己持有的 cfg 引用：换配置要跟着换，否则「保留历史 / 图片开关」
         # 这类设置改了不生效。

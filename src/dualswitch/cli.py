@@ -58,6 +58,31 @@ def _load_config(args, *, create: bool = False) -> tuple[Config, Path]:
     return cfg, path
 
 
+def _attach_monitor_profile(cfg: Config):
+    """识别当前外接屏并挂上 profile（识别不到就退回 default，绝不阻断）。
+
+    P1 的核心：换屏后不需要改 config.json —— 这里读到 `mfg:pid`，
+    在用户表/内置表里查到对应的端口码表，再把 wiring 修成这块屏真实存在的口。
+    """
+    from .ddc import identity, profiles
+
+    ident = None
+    try:
+        ident = identity.read_current()
+    except Exception:  # noqa: BLE001 - 身份识别失败按未识别处理
+        log.debug("读取显示器身份失败（按未识别处理）", exc_info=True)
+    profile = profiles.resolve_active(cfg, ident)
+    log.info(
+        "显示器身份：%s；profile=%s（%s）端口=%s 接线=%s",
+        ident.label() if ident is not None else "未识别",
+        profile.key,
+        "内置" if profile.builtin else ("用户" if profile.key in cfg.monitors else "默认"),
+        profile.items(),
+        cfg.wiring,
+    )
+    return profile
+
+
 def _setup_logging(cfg: Config, console: bool = True) -> Path:
     path = config_mod.log_path()
     logging_setup.setup(cfg.log_level, path, console=console)
@@ -96,6 +121,7 @@ def _print_result(result) -> None:  # noqa: ANN001
 def cmd_run(args) -> int:
     cfg, cfg_file = _load_config(args, create=True)
     log_file = _setup_logging(cfg, console=not args.no_console)
+    _attach_monitor_profile(cfg)
 
     log.info("=" * 62)
     log.info("dualswitch %s 启动 | %s %s", __version__, platform.system(), platform.release())
@@ -212,6 +238,7 @@ def cmd_run(args) -> int:
 def cmd_switch(args) -> int:
     cfg, _ = _load_config(args)
     _setup_logging(cfg, console=False)
+    _attach_monitor_profile(cfg)
     try:
         backend = create_backend(cfg)
     except Exception as exc:
@@ -250,8 +277,27 @@ def cmd_probe(args) -> int:
         "monitors": [],
         "active": None,          # None = 本后端分不出「挂着」和「在用」
         "input": None,
+        "identity": None,
+        "profile": None,
+        "wiring": None,
         "error": None,
     }
+    # 只读身份 + profile：换屏后 probe 一眼能看出「有没有命中这块屏的码表」
+    try:
+        from .ddc import identity, profiles
+
+        ident = identity.read_current()
+        profile = profiles.resolve_active(cfg, ident)
+        payload["identity"] = ident.label() if ident is not None else None
+        payload["profile"] = {
+            "key": profile.key,
+            "name": profile.name,
+            "ports": profile.items(),
+            "source": "内置" if profile.builtin else ("用户" if profile.key in cfg.monitors else "默认"),
+        }
+        payload["wiring"] = dict(cfg.wiring)
+    except Exception as exc:  # noqa: BLE001 - 身份读取失败不阻断 DDC 探测
+        payload["error"] = f"读取显示器身份失败：{exc}"
     try:
         backend = create_backend(cfg)
         payload["backend"] = backend.name
@@ -281,6 +327,13 @@ def cmd_probe(args) -> int:
 
     print(f"平台      : {payload['platform']}")
     print(f"配置      : {payload['config']}")
+    if payload["identity"]:
+        print(f"显示器身份: {payload['identity']}")
+    if payload["profile"]:
+        ports = "，".join(f"{p}={v}" for p, v in payload["profile"]["ports"])
+        print(f"Profile   : {payload['profile']['key']}（{payload['profile']['source']}）{ports}")
+    if payload["wiring"]:
+        print(f"接线      : {payload['wiring']}")
     print(f"DDC 后端  : {payload['backend']}")
     print("物理显示器:")
     if payload["monitors"]:
@@ -300,6 +353,49 @@ def cmd_probe(args) -> int:
         print(f"读取提示  : {payload['error']}")
     print("\n提示：probe 只读，不会切换画面。")
     return 0 if payload["monitors"] else 1
+
+
+# --------------------------------------------------------------------------- #
+# monitor（身份 / profile）
+# --------------------------------------------------------------------------- #
+def cmd_monitor(args) -> int:
+    from .ddc import identity, profiles
+
+    displays = identity.read_displays()
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                [
+                    {
+                        "key": d.key(),
+                        "mfg": d.mfg,
+                        "product_code": d.product_code,
+                        "name": d.name,
+                        "serial": d.serial,
+                        "year": d.year,
+                        "week": d.week,
+                        "slot": d.slot,
+                        "pnp_instance": d.pnp_instance,
+                    }
+                    for d in displays
+                ],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0 if displays else 1
+    if not displays:
+        print("未发现外接显示器（内建屏没有 ProductName，按设计不列）。")
+        return 1
+    for item in displays:
+        print(item.label())
+    # 当前屏用哪个 profile，一眼能看出换屏后有没有命中
+    cfg, _ = _load_config(args)
+    profile = profiles.resolve_active(cfg, identity.read_current())
+    source = "内置" if profile.builtin else ("用户" if profile.key in cfg.monitors else "默认")
+    print(f"profile  : {profile.key}（{source}）{profile.items()}")
+    print(f"wiring   : {cfg.wiring}")
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -327,6 +423,22 @@ def cmd_doctor(args) -> int:
     # 「有字段我不认识」不是错，但要让人看得见 —— 否则拼错的键会静默失效
     for msg in dict.fromkeys(config_mod.take_load_warnings()):
         add("配置字段", "warn", msg)
+
+    try:
+        from .ddc import identity, profiles
+
+        displays = identity.read_displays()
+        if displays:
+            profile = profiles.resolve_active(cfg, identity.read_current())
+            add(
+                "显示器身份",
+                "ok",
+                f"{displays[0].label()} → profile {profile.key} {profile.items()}",
+            )
+        else:
+            add("显示器身份", "warn", "未发现外接屏（内建屏按设计不列）；切屏走 default profile")
+    except Exception as exc:  # noqa: BLE001
+        add("显示器身份", "warn", f"读取失败：{exc}（切屏仍可用 default profile）")
 
     try:
         parse_hotkey(cfg.hotkey)
@@ -648,7 +760,8 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
             """对端说「替我切到 value」：校验后用本机后端发 DDC Set。"""
             if cfg.dry_run:
                 return False, "本机处于演练模式，未真正发送指令"
-            allowed = {int(v) for v in cfg.sources.values()}
+            # 允许全部端口码（含 HDMI2 / DP / USB-C），不能只看旧 sources 的两个值
+            allowed = cfg.all_values()
             if int(value) not in allowed:
                 return False, f"输入源 {value} 不在本机配置里（允许 {sorted(allowed)}）"
             if backend is None:
@@ -791,8 +904,9 @@ def cmd_ui2(args) -> int:
 
     cfg, cfg_file = _load_config(args, create=True)
     log_file = _setup_logging(cfg, console=bool(getattr(args, "console", False)))
+    _attach_monitor_profile(cfg)
     log.info("=" * 62)
-    log.info("dualswitch %s v2 图形界面启动（ui2）", __version__)
+    log.info("dualswitch %s V3 图形界面启动（配置目录 dualswitch-v3，端口 47833/47834）", __version__)
     log.info("可执行文件：%s", _exe_stamp())
     log.info("日志：%s", log_file)
     winenv.log_environment(log)
@@ -932,6 +1046,13 @@ def build_parser() -> argparse.ArgumentParser:
     ui2_p.add_argument("--log-level", default=None, help="DEBUG/INFO/WARNING/ERROR")
     ui2_p.set_defaults(func=cmd_ui2)
 
+    # V3 与 V2 是独立 worktree：界面实现同一份，但入口单独叫 ui3，避免误启动成 V2。
+    ui3_p = sub.add_parser("ui3", help="V3 图形界面（独立配置/端口）", parents=[common])
+    ui3_p.add_argument("--dry-run", action="store_true", help="只记录，不真正发送 Set")
+    ui3_p.add_argument("--console", action="store_true", help="把日志同时输出到控制台")
+    ui3_p.add_argument("--log-level", default=None, help="DEBUG/INFO/WARNING/ERROR")
+    ui3_p.set_defaults(func=cmd_ui2)
+
     sw_p = sub.add_parser("switch", help="立刻切换一次", parents=[common])
     sw_p.add_argument("--to", choices=["other", "windows", "mac", "toggle"], default="other")
     sw_p.add_argument("--dry-run", action="store_true")
@@ -941,6 +1062,13 @@ def build_parser() -> argparse.ArgumentParser:
     pr_p = sub.add_parser("probe", help="只读探测显示器与当前输入源", parents=[common])
     pr_p.add_argument("--json", action="store_true")
     pr_p.set_defaults(func=cmd_probe)
+
+    mon_p = sub.add_parser("monitor", help="显示器身份 / profile（只读）", parents=[common])
+    mon_sub = mon_p.add_subparsers(dest="action")
+    mon_p.set_defaults(func=cmd_monitor, action="identity", json=False)
+    mon_id = mon_sub.add_parser("identity", help="打印厂商/产品号/slot 与命中的 profile", parents=[common])
+    mon_id.add_argument("--json", action="store_true")
+    mon_id.set_defaults(func=cmd_monitor, action="identity")
 
     dr_p = sub.add_parser("doctor", help="环境自检", parents=[common])
     dr_p.add_argument("--json", action="store_true")

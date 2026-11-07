@@ -20,7 +20,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-APP_NAME = "dualswitch"
+from .ddc.profiles import (
+    DEFAULT_KEY,
+    ROLES,
+    MonitorProfile,
+    default_profile,
+    default_wiring,
+    normalize_port,
+    profile_from_dict,
+)
+
+#: V3 独立配置目录：绝不与 V2 的 `dualswitch` 共用 config.json（2026-11-06 事故）。
+APP_NAME = "dualswitch-v3"
+APP_DISPLAY_NAME = "屏幕切换 V3"
 CONFIG_FILENAME = "config.json"
 #: 每次落盘前，把上一份「能解析」的配置留成这个后缀（同目录）
 BACKUP_SUFFIX = ".bak"
@@ -93,9 +105,9 @@ class ClipboardConfig:
     image_enabled: bool = True
     # on_switch: 只在切屏那一刻同步（本次实现）；always: 常驻同步（预留，不实现）
     mode: str = "on_switch"
-    port: int = 47823                  # 本机监听端口
+    port: int = 47833                  # V3 专用端口（V2 是 47823，混用会互相抢连接）
     peer_port: int = 0                 # 对端监听端口；0 = 与 port 相同（单机自测时才需要不同）
-    discover_port: int = 47824
+    discover_port: int = 47834         # V3 专用发现端口（V2 是 47824）
     peer: str = ""                     # 手填对端地址 "192.168.1.5" 或 "192.168.1.5:47823"
     device_id: str = ""                # 首次运行生成 {host}-{8hex}
     peer_device: str = ""              # 最近一次握手的对端 device_id
@@ -196,9 +208,13 @@ class Config:
 
     # ---- 显示器 ----
     vcp_code: int = 0x60          # MCCS: Input Source Select
-    # AOC Q2790PC 实测值：17 = HDMI（Windows），18 = USB-C（Mac），15 = DP。
-    # 注意：27 是常见 MCCS 里 USB-C 的取值，但这块屏直接拒绝 27（实测），不要照抄网上的 27。
+    # 旧结构：{windows: 17, mac: 18}。V3 起由 monitors/wiring 派生，但仍原样落盘，
+    # 让旧版本程序（和本版本的兼容路径）继续读得懂。
     sources: dict[str, int] = field(default_factory=lambda: {"windows": 17, "mac": 18})
+    # V3：按屏的码表 + 按人的接线。`monitors` 只存用户表，内置表在 ddc/profiles.py。
+    monitors: dict[str, MonitorProfile] = field(default_factory=dict)
+    wiring: dict[str, str] = field(default_factory=dict)   # local/peer → 端口名
+    active_monitor: str = "auto"                           # auto | profile key
     this_host: str = "auto"       # auto | windows | mac
     switch_mode: str = "other"    # other: 按一次切到另一台；toggle: 在两侧之间翻转
     monitor_match: str = "AOC"    # 物理显示器匹配子串（匹配 device_id / 设备名 / 描述）
@@ -239,10 +255,15 @@ class Config:
     _extra: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
     #: 载入时整份配置读不懂、已降到默认值。这个状态下 `save()` 拒绝覆盖原文件。
     _degraded: bool = field(default=False, repr=False, compare=False)
+    #: 本次运行识别到的 profile / 身份（不落盘）。识别不到时为 None，走 default。
+    _active_profile: MonitorProfile | None = field(default=None, repr=False, compare=False)
+    _active_identity: Any = field(default=None, repr=False, compare=False)
+    #: 载入的是「只有旧 sources」的配置：保留旧的「两个值不能相同」校验。
+    _legacy_sources_only: bool = field(default=True, repr=False, compare=False)
 
     # ---- 派生属性 ----
     def effective_host(self) -> str:
-        """本机在 sources 中的身份。"""
+        """本机在旧 sources 中的身份（P1 仍用于归属/键盘；P3 再拆 role）。"""
         if self.this_host in ("windows", "mac"):
             return self.this_host
         return "windows" if sys.platform == "win32" else "mac"
@@ -250,16 +271,190 @@ class Config:
     def other_host(self) -> str:
         return "mac" if self.effective_host() == "windows" else "windows"
 
+    def role_for_host(self, host: str) -> str:
+        if host == self.effective_host():
+            return "local"
+        if host == self.other_host():
+            return "peer"
+        return ""
+
+    def host_for_role(self, role: str) -> str:
+        return self.effective_host() if role == "local" else (
+            self.other_host() if role == "peer" else ""
+        )
+
+    # ---- profile / wiring ----
+    def active_profile(self) -> MonitorProfile:
+        """当前屏的 profile：运行期识别结果 > 用户表 > default。"""
+        if self._active_profile is not None:
+            return self._active_profile
+        key = str(self.active_monitor or "auto")
+        if key not in ("", "auto") and key in self.monitors:
+            return self.monitors[key]
+        # 只保存了一块屏的 profile（没写 active_monitor）时，它就是当前屏。
+        # 否则 resolve_active 之前配置会错误地退回 default 的 17/18。
+        user_keys = [k for k in self.monitors if k != DEFAULT_KEY]
+        if len(user_keys) == 1:
+            return self.monitors[user_keys[0]]
+        if DEFAULT_KEY in self.monitors:
+            return self.monitors[DEFAULT_KEY]
+        return default_profile(self.sources, self.effective_host())
+
+    def set_active_profile(self, profile: MonitorProfile) -> MonitorProfile:
+        self._active_profile = profile
+        self.repair_wiring()
+        self.sync_sources()
+        return profile
+
+    def port_for_role(self, role: str) -> str:
+        """role → 端口名。wiring 失效时按 default 接线兜底（不阻断切屏）。"""
+        if role not in ROLES:
+            return ""
+        profile = self.active_profile()
+        port = normalize_port(self.wiring.get(role, ""))
+        if port and port in profile.ports:
+            return port
+        fallback = default_wiring(self.effective_host()).get(role, "")
+        if fallback in profile.ports:
+            return fallback
+        return ""
+
+    def port_for_host(self, host: str) -> str:
+        return self.port_for_role(self.role_for_host(host))
+
+    def port_role(self, port: str) -> str:
+        port = normalize_port(port)
+        for role in ROLES:
+            if self.port_for_role(role) == port:
+                return role
+        return ""
+
+    def port_value(self, port: str) -> int | None:
+        return self.active_profile().value(port)
+
+    def value_for_role(self, role: str) -> int:
+        port = self.port_for_role(role)
+        value = self.active_profile().value(port) if port else None
+        if value is not None:
+            return int(value)
+        # 最后兜底：旧 sources（校验阶段已保证两个 key 都存在）
+        host = self.host_for_role(role)
+        try:
+            return int(self.sources[host])
+        except KeyError as exc:  # pragma: no cover - 校验阶段已拦截
+            raise ConfigError(f"没有可用的输入源配置（role={role!r}）") from exc
+
     def target_value(self, target: str) -> int:
+        role = self.role_for_host(target)
+        if role:
+            return self.value_for_role(role)
         try:
             return int(self.sources[target])
         except KeyError as exc:  # pragma: no cover - 校验阶段已拦截
             raise ConfigError(f"sources 中缺少 {target!r}") from exc
 
+    def host_of_value(self, value: int) -> str:
+        """VCP 读数反查主机（兼容 P1 的 host 语义）。"""
+        try:
+            want = int(value)
+        except (TypeError, ValueError):
+            return ""
+        for role in ROLES:
+            if self.value_for_role(role) == want:
+                return self.host_for_role(role)
+        return ""
+
+    def port_of_value(self, value: int) -> str:
+        try:
+            want = int(value)
+        except (TypeError, ValueError):
+            return ""
+        for role in ROLES:
+            port = self.port_for_role(role)
+            if port and self.active_profile().value(port) == want:
+                return port
+        for port, code in self.active_profile().items():
+            if int(code) == want:
+                return port
+        return ""
+
+    def active_ports(self) -> list[tuple[str, int]]:
+        """切换页要显示的端口行（按 PORT_ORDER）。"""
+        return self.active_profile().items()
+
+    def all_values(self) -> set[int]:
+        values = {int(v) for v in self.sources.values()}
+        values.update(int(v) for _, v in self.active_port_items())
+        return values
+
+    def active_port_items(self) -> list[tuple[str, int]]:
+        extra = getattr(self, "_active_profile", None)
+        pools = [self.active_profile()]
+        if extra is not None and extra is not self.active_profile():
+            pools.insert(0, extra)
+        items: dict[str, int] = {}
+        for profile in pools:
+            for port, value in profile.items():
+                items.setdefault(port, int(value))
+        return list(items.items())
+
+    def repair_wiring(self) -> None:
+        """把 wiring 里「这块屏没有的端口」修成可用端口，并避免两端接同一个口。"""
+        profile = self.active_profile()
+        available = profile.ordered_ports()
+        if not available:
+            return
+        base = default_wiring(self.effective_host())
+        for role in ROLES:
+            port = normalize_port(self.wiring.get(role, ""))
+            if port not in available:
+                port = base.get(role, "")
+            if port not in available:
+                used = {
+                    normalize_port(self.wiring.get(other, ""))
+                    for other in ROLES
+                    if other != role
+                }
+                port = next((p for p in available if p not in used), available[0])
+            self.wiring[role] = port
+        if len(available) >= 2 and self.wiring["local"] == self.wiring["peer"]:
+            self.wiring["peer"] = next(
+                p for p in available if p != self.wiring["local"]
+            )
+
+    def sync_sources(self) -> None:
+        """把 profile+wiring 派生回旧 sources，保证旧版本程序读到的就是真值。"""
+        self.sources = {
+            self.effective_host(): int(self.value_for_role("local")),
+            self.other_host(): int(self.value_for_role("peer")),
+        }
+
+    def _ensure_profile_structure(self) -> None:
+        if not self.wiring:
+            self.wiring = default_wiring(self.effective_host())
+        if DEFAULT_KEY not in self.monitors:
+            self.monitors[DEFAULT_KEY] = default_profile(
+                self.sources, self.effective_host()
+            )
+
     def to_dict(self) -> dict[str, Any]:
+        self.sync_sources()
         data = asdict(self)
         extra = data.pop("_extra", {}) or {}
-        data.pop("_degraded", None)
+        for key in ("_degraded", "_active_profile", "_active_identity", "_legacy_sources_only"):
+            data.pop(key, None)
+        # profile 里本版本不认识的子字段（保留规则同顶层 `_extra`）
+        monitor_extra = extra.pop("monitors", None)
+        if isinstance(monitor_extra, dict):
+            merged = data.get("monitors")
+            if not isinstance(merged, dict):
+                merged = data["monitors"] = {}
+            for key, sub in monitor_extra.items():
+                if isinstance(sub, dict) and isinstance(merged.get(key), dict):
+                    for sub_key, sub_value in sub.items():
+                        merged[key].setdefault(sub_key, sub_value)
+                else:
+                    merged.setdefault(key, sub)
         for key, value in extra.items():
             current = data.get(key)
             if isinstance(current, dict) and isinstance(value, dict):
@@ -292,6 +487,7 @@ def platform_defaults() -> Config:
         # 那条路径会把 hotkey 改写成 ralt+space（见 settings._with_strict_modifier）
         cfg.hotkey = "alt+space"
         cfg.monitor_match = ""
+    cfg._ensure_profile_structure()
     return cfg
 
 
@@ -455,8 +651,41 @@ def from_dict(
         raise ConfigError("配置文件顶层必须是 JSON 对象")
     cfg = copy.deepcopy(base or DEFAULTS)
     extras: dict[str, Any] = {}
+    saw_new_structure = any(k in raw for k in ("monitors", "wiring", "active_monitor"))
 
     for key, value in raw.items():
+        if key == "monitors":
+            if not isinstance(value, dict):
+                raise ConfigError("monitors 必须是对象：{主键: profile}")
+            parsed: dict[str, MonitorProfile] = {}
+            for name, item in value.items():
+                try:
+                    profile, unknown = profile_from_dict(str(name), item)
+                except (TypeError, ValueError) as exc:
+                    raise ConfigError(f"monitors.{name}: {exc}") from exc
+                parsed[str(name)] = profile
+                if unknown:
+                    extras.setdefault("monitors", {})[str(name)] = unknown
+            cfg.monitors = parsed
+            continue
+        if key == "wiring":
+            if not isinstance(value, dict):
+                raise ConfigError("wiring 必须是对象，如 {\"local\": \"usb_c\"}")
+            wiring: dict[str, str] = {}
+            for role, port in value.items():
+                if role not in ROLES:
+                    # 未来角色 / 拼错的键：保留，不让整份配置失效
+                    extras.setdefault("wiring", {})[role] = port
+                    continue
+                normalized = normalize_port(port)
+                if not normalized:
+                    raise ConfigError(f"wiring.{role} 不是合法端口: {port!r}")
+                wiring[role] = normalized
+            cfg.wiring = wiring
+            continue
+        if key == "active_monitor":
+            cfg.active_monitor = str(value or "auto")
+            continue
         if key in ("readback", "clipboard", "mouse_switch", "keyboard_follow", "display_power"):
             section: dict[str, Any] = {}
             slot = None if not keep_unknown else section
@@ -505,6 +734,27 @@ def from_dict(
             setattr(cfg, key, value)
 
     cfg._extra = extras
+    cfg._legacy_sources_only = not saw_new_structure
+    if saw_new_structure:
+        cfg._ensure_profile_structure()
+        cfg.repair_wiring()
+        # 旧设置页仍然只写 sources（Windows 端「输入源映射」两个数字框）：
+        # 把它映射到当前 profile 的两个接线端口，别让用户的修改被静默丢掉。
+        if "sources" in raw:
+            profile = cfg.active_profile()
+            for role in ROLES:
+                port = cfg.port_for_role(role)
+                host = cfg.host_for_role(role)
+                if port and host in cfg.sources:
+                    profile.ports[port] = int(cfg.sources[host])
+        cfg.sync_sources()
+    else:
+        # 旧配置：保留 sources 原值（含「两个值不能相同」的旧校验），
+        # 同时生成 default profile 与平台默认接线，供 P1 的切换路径使用。
+        cfg.wiring = default_wiring(cfg.effective_host())
+        cfg.monitors.setdefault(
+            DEFAULT_KEY, default_profile(cfg.sources, cfg.effective_host())
+        )
     validate(cfg)
     return cfg
 
@@ -618,8 +868,33 @@ def validate(cfg: Config) -> None:
             raise ConfigError(f"sources 必须同时包含 windows 与 mac（缺少 {host}）")
         if not (0 <= int(cfg.sources[host]) <= 0xFF):
             raise ConfigError(f"sources.{host} 必须在 0..255 之间")
-    if cfg.sources["windows"] == cfg.sources["mac"]:
+    # 旧结构仍按老口径拦住「两个值相同」；V3 的 profile 里 HDMI1/HDMI2
+    # 确实可能同码（AOC U27N3G6R4B 实测都是 17），不能再用这条误伤。
+    if getattr(cfg, "_legacy_sources_only", True) and cfg.sources["windows"] == cfg.sources["mac"]:
         raise ConfigError("sources.windows 与 sources.mac 不能相同，否则切换无效果")
+    # 新结构也拦「本机与对端实际发出的码相同」：即便接的是两个不同的口
+    # （AOC U27N3G6R4B 的 HDMI1/HDMI2 都是 17），切过去也不会有画面变化。
+    try:
+        local_value = int(cfg.value_for_role("local"))
+        peer_value = int(cfg.value_for_role("peer"))
+    except ConfigError:
+        pass
+    else:
+        if local_value == peer_value:
+            raise ConfigError("本机与对端实际使用的输入源相同，切换无效果")
+    for key, profile in cfg.monitors.items():
+        if not str(key).strip():
+            raise ConfigError("monitors 的主键不能为空")
+        for port, code in profile.ports.items():
+            if not normalize_port(port):
+                raise ConfigError(f"monitors.{key} 里有未知端口: {port!r}")
+            if not (0 <= int(code) <= 0xFF):
+                raise ConfigError(f"monitors.{key}.{port} 必须在 0..255 之间")
+    for role, port in cfg.wiring.items():
+        if role not in ROLES:
+            continue
+        if not normalize_port(port):
+            raise ConfigError(f"wiring.{role} 不是合法端口: {port!r}")
     if cfg.this_host not in ("auto",) + _VALID_HOSTS:
         raise ConfigError("this_host 只能是 auto / windows / mac")
     if cfg.switch_mode not in ("other", "toggle"):

@@ -103,6 +103,34 @@ def test_dry_run_sends_nothing():
     assert "[演练]" in result.summary()
 
 
+def test_switch_uses_profile_port_value_and_logs_port():
+    """切屏不再写死 17/18：profile.ports + wiring 决定发哪个码。"""
+    cfg = from_dict(
+        {
+            "this_host": "mac",
+            "readback": {"enabled": False},
+            "monitors": {
+                "AOC:9987": {"ports": {"hdmi1": 17, "usb_c": 100}},
+            },
+            "wiring": {"local": "usb_c", "peer": "hdmi1"},
+            "active_monitor": "AOC:9987",
+        }
+    )
+    backend = MockBackend(current=100)
+    ctl = SwitchController(cfg, backend)
+    result = ctl.switch_now("windows")
+    assert result.value == 17
+    assert result.port == "hdmi1"
+    assert "hdmi1 (17)" in result.summary()
+    assert backend.set_calls == [17]
+
+    local = ctl.set_input_local(100)
+    assert local.port == "usb_c"
+    assert ctl.host_of_value(100) == "mac"
+    assert ctl.host_of_value(17) == "windows"
+    assert ctl.port_of_value(17) == "hdmi1"
+
+
 def test_readback_confirmed():
     cfg = make_cfg(readback={"enabled": True, "delay_ms": 0, "timeout_ms": 300, "interval_ms": 10})
     backend = MockBackend(current=17)

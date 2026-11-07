@@ -161,3 +161,32 @@ def test_set_vcp_is_reentrant_inside_run_exclusive():
 def test_set_vcp_without_handle_is_false():
     av = _fake_av(object(), ok=False)
     assert av.set_vcp(0x60, 18) is False
+
+
+# ---------------------------------------------------------------- V3：按 slot 挑句柄
+def _with_slots(*pairs):
+    av = AVServiceI2C()
+    av._lib = ("ctypes",)
+    av._handle_slots = [(slot, handle) for slot, handle in pairs]
+    av._handles = [handle for _, handle in pairs]
+    av._good = None
+    return av
+
+
+def test_candidates_never_include_builtin_display():
+    builtin, external = object(), object()
+    av = _with_slots(("disp0", builtin), ("dispext0", external))
+    assert av._candidates() == [external]
+
+
+def test_candidates_prefer_identity_slot():
+    ext0, ext1 = object(), object()
+    av = _with_slots(("dispext0", ext0), ("dispext1", ext1))
+    av.set_preferred_slot("dispext1")
+    assert av._candidates() == [ext1]
+
+
+def test_candidates_without_any_external_are_empty():
+    av = _with_slots(("disp0", object()))
+    assert av._candidates() == []
+

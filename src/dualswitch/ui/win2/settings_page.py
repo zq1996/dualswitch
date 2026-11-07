@@ -341,6 +341,40 @@ class SettingsPage(QWidget):
         row.addWidget(self.edit_mac_src, 0, Qt.AlignVCenter)
         return box
 
+    def _persist_active_profile(self, data: dict) -> None:
+        """把「输入源映射」的两个值写进当前屏的 profile，而不是只写旧 sources。
+
+        P1 起切换走 `profile.ports + wiring`；只改 sources 会在 from_dict 里被
+        profile 的真值覆盖掉，用户会觉得“改了没生效”。这里同时把 profile 落盘，
+        并把 `active_monitor` 指到它，保证保存后仍是这块屏的码表。
+        """
+        profile = getattr(self.cfg, "_active_profile", None)
+        if profile is None:
+            return
+        win_value = self._source_value(self.edit_win_src, "windows")
+        mac_value = self._source_value(self.edit_mac_src, "mac")
+        value_by_host = {"windows": win_value, "mac": mac_value}
+        for role in ("local", "peer"):
+            port = self.cfg.port_for_role(role)
+            host = self.cfg.host_for_role(role)
+            if port and host in value_by_host:
+                profile.ports[port] = value_by_host[host]
+        data["active_monitor"] = profile.key
+        monitors = data.setdefault("monitors", {})
+        monitors[profile.key] = {
+            "key": profile.key,
+            "name": profile.name,
+            "vcp": profile.vcp,
+            "ports": dict(profile.ports),
+            "readback": profile.readback,
+            "serial": profile.serial,
+            "year": profile.year,
+            "week": profile.week,
+            "calibrated_at": profile.calibrated_at,
+            "notes": profile.notes,
+            "builtin": False,
+        }
+
     def _storage_limit_value(self) -> int:
         """存储上限输入框 → 整数（非法/越界就夹到 10–5000）。"""
         try:
@@ -449,6 +483,7 @@ class SettingsPage(QWidget):
                     "mac": self._source_value(self.edit_mac_src, "mac"),
                 },
             )
+            self._persist_active_profile(data)
             clip = dict(data.get("clipboard") or {})
             clip.update(
                 enabled=self.sw_clip.isChecked(),

@@ -41,6 +41,8 @@ class SwitchResult:
     ok: bool
     target: str
     value: int
+    #: 目标端口语义名（hdmi1 / dp / usb_c…）。日志与界面用它，不再只说 mac/windows。
+    port: str = ""
     source: str = "hotkey"
     send_latency_ms: float = 0.0   # 触发 → Set 调用发出
     set_call_ms: float = 0.0       # Set 调用本身耗时
@@ -51,18 +53,21 @@ class SwitchResult:
     via: str = "local"             # local / remote（remote = 对端代发，本机没有可读的对象）
     at: datetime = field(default_factory=datetime.now)
 
+    def _where(self) -> str:
+        """日志里的目标：端口名优先（`usb_c (100)`），没有端口才退回主机名。"""
+        if self.port:
+            return f"{self.port} ({self.value})"
+        return f"{self.target} (VCP 0x60={self.value})"
+
     def summary(self) -> str:
         if not self.ok:
-            return f"切换到 {self.target} 失败：{self.error}"
+            return f"切换到 {self._where()} 失败：{self.error}"
         if self.dry_run:
-            return f"[演练] 本应切换到 {self.target} (VCP 0x60={self.value})，未发送指令"
+            return f"[演练] 本应切换到 {self._where()}，未发送指令"
         if self.via == "remote":
-            return (
-                f"已请对端代发切换 → {self.target} (VCP 0x60={self.value})，"
-                f"往返 {self.set_call_ms:.0f}ms"
-            )
+            return f"已请对端代发切换 → {self._where()}，往返 {self.set_call_ms:.0f}ms"
         return (
-            f"已发送切换指令 → {self.target} (VCP 0x60={self.value})，"
+            f"已发送切换指令 → {self._where()}，"
             f"发出延迟 {self.send_latency_ms:.1f}ms，调用耗时 {self.set_call_ms:.1f}ms"
         )
 
@@ -238,14 +243,19 @@ class SwitchController:
         return self._execute(self._clock(), source, forced_target=target)
 
     def host_of_value(self, value: int) -> str:
-        """VCP 0x60 的取值反查主机名；配置里没有的取值返回空串。"""
-        for host, val in self.cfg.sources.items():
-            try:
-                if int(val) == int(value):
-                    return host
-            except (TypeError, ValueError):
-                continue
-        return ""
+        """VCP 0x60 的取值反查主机名（走 profile + wiring；配置里没有返回空串）。"""
+        try:
+            return self.cfg.host_of_value(int(value))
+        except Exception:  # noqa: BLE001 - 反查失败只是少一条展示信息
+            log.debug("反查输入源 %s 失败", value, exc_info=True)
+            return ""
+
+    def port_of_value(self, value: int) -> str:
+        """VCP 值反查端口语义名（日志里用，如 `usb_c`）。"""
+        try:
+            return self.cfg.port_of_value(int(value))
+        except Exception:  # noqa: BLE001
+            return ""
 
     # ------------------------------------------------------------------ 显式通道
     def set_input_local(self, value: int, source: str = "ui") -> SwitchResult:
@@ -620,6 +630,7 @@ class SwitchController:
             ok=False,
             target=target,
             value=value,
+            port=self.cfg.port_for_host(target),
             source=source,
             send_latency_ms=(t_send - t0) * 1000.0,
         )
@@ -844,6 +855,7 @@ class SwitchController:
             ok=False,
             target=host or f"VCP 0x{self.cfg.vcp_code:02X}={value}",
             value=value,
+            port=self.port_of_value(value),
             source=source,
             send_latency_ms=0.0,
         )
@@ -908,6 +920,7 @@ class SwitchController:
             ok=False,
             target=host or f"VCP 0x{self.cfg.vcp_code:02X}={value}",
             value=value,
+            port=self.port_of_value(value),
             source=source,
             via="remote",
         )

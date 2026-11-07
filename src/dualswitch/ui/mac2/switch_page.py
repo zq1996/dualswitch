@@ -36,12 +36,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...ddc.profiles import ROW_H as PORT_ROW_H, port_label
+
 from . import icons, theme
 from .follow_card import FollowCard
 from .widgets import attach_hover_tip, label
 
-PORT = {"windows": "HDMI", "mac": "USB-C"}
 TITLE = {"windows": "Windows", "mac": "Mac"}
+_ROLE_TEXT = {"local": "本机输入口", "peer": "对端输入口", "": "空闲输入口"}
 
 
 def _title(host: str) -> str:
@@ -75,7 +77,7 @@ class ActionRow(QFrame):
     localClicked = Signal(int)
     peerClicked = Signal(int)
 
-    ROW_H = 58
+    ROW_H = PORT_ROW_H
     CHIP_W, CHIP_H = 36, 26
     #: 文字列宽：「Windows 的输入口」fallback 字体实测渲染 105px，给到 120 免得
     #: 常规文案无谓折行（两行文字块高度不一会让 17/18 的端口名高低错位）。
@@ -95,9 +97,10 @@ class ActionRow(QFrame):
         "让对端代发。"
     )
 
-    def __init__(self, host: str, value: int, is_local: bool, parent=None):
+    def __init__(self, port: str, value: int, role: str = "", parent=None):
         super().__init__(parent)
-        self.host = host
+        self.port_name = port
+        self.role = role
         self.value = int(value)
         self.setObjectName("actRow")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -118,8 +121,8 @@ class ActionRow(QFrame):
         col = QVBoxLayout()
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(1)
-        self.port = label(PORT.get(host, ""), "actPort")
-        self.who = label("本机输入口" if is_local else f"{_title(host)} 的输入口", "actWho")
+        self.port = label(port_label(port), "actPort")
+        self.who = label(_ROLE_TEXT.get(role, "空闲输入口"), "actWho")
         self.who.setWordWrap(True)   # 装不下就换行，不许压按钮
         col.addWidget(self.port)
         col.addWidget(self.who)
@@ -241,9 +244,8 @@ class SwitchCard(QFrame):
         acts.setContentsMargins(0, 0, 0, 0)
         acts.setSpacing(8)
         self.rows: list[ActionRow] = []
-        here = cfg.effective_host()
-        for host in ("windows", "mac"):
-            row = ActionRow(host, int(cfg.sources[host]), is_local=(host == here))
+        for port, value in cfg.active_ports():
+            row = ActionRow(port, int(value), role=cfg.port_role(port))
             row.localClicked.connect(self.localRequested)
             row.peerClicked.connect(self.peerRequested)
             self.rows.append(row)
@@ -268,9 +270,11 @@ class SwitchCard(QFrame):
         self._apply_enabled()
 
     def _port_line(self) -> str:
-        win = int(self.cfg.sources.get("windows", 0))
-        mac = int(self.cfg.sources.get("mac", 0))
-        return f"两个输入口 · 输入源 {win} = HDMI，{mac} = USB-C"
+        items = self.cfg.active_ports()
+        if not items:
+            return "未识别到输入口"
+        detail = "，".join(f"{port_label(p)}={v}" for p, v in items)
+        return f"{len(items)} 个输入口 · {detail}"
 
     def paintEvent(self, event):  # noqa: N802
         """设计稿 `.hero::after`：右上角一团主色柔光（沿用 QSS 底色，只叠光晕）。"""
@@ -297,7 +301,7 @@ class SwitchCard(QFrame):
 
         **只做展示**：不改变任何按钮的可用性（§3.5）。
         """
-        if host in PORT:
+        if host in TITLE:
             self.src_dot.setObjectName("srcDotOk")
             text = f"画面在 {_title(host)}"
             if detail:
