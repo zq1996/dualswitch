@@ -334,45 +334,10 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
-@pytest.mark.skipif(sys.platform == "darwin", reason="旧 ui/mac 已由 ui/mac2 取代")
-def test_window_renders_unknown_without_guessing(qt_app):
-    from dualswitch.ui.window import MainWindow
-
-    win = MainWindow(make_cfg(), "Alt+Space", "v1.0.0")
-    win.set_state(SOURCE_UNKNOWN)
-
-    assert win.hero.title.text() == "未检测到外接显示器"
-    assert "另一台" in win.hero.sub.text()
-    assert win.hero.button.isEnabled() is False
-    assert win.card_win._active is False and win.card_mac._active is False
-
-    # 回到已知状态：按钮要能再点（否则插上屏以后就一直灰着）
-    win.set_state("windows")
-    assert win.hero.title.text() == "Windows"
-    assert win.hero.button.isEnabled() is True
-    assert win.card_win._active is True
 
 
-@pytest.mark.skipif(sys.platform == "darwin", reason="旧 ui/mac 已由 ui/mac2 取代")
-def test_busy_false_keeps_button_disabled_in_unknown(qt_app):
-    from dualswitch.ui.window import MainWindow
-
-    win = MainWindow(make_cfg(), "Alt+Space", "v1.0.0")
-    win.set_state(SOURCE_UNKNOWN)
-    win.set_busy(True)
-    win.set_busy(False)                    # 切完/切失败都会走这一步
-    assert win.hero.button.isEnabled() is False
 
 
-@pytest.mark.skipif(sys.platform == "darwin", reason="旧 ui/mac 已由 ui/mac2 取代")
-def test_menu_unknown_disables_switch_entries():
-    from dualswitch.ui.statusitem import build_menu_entries
-
-    entries = build_menu_entries(make_cfg(), SOURCE_UNKNOWN, "alt+space", {})
-    titles = [e.title for e in entries]
-    assert any("当前画面：未检测到外部显示器" in t for t in titles)
-    switch = next(e for e in entries if "切换" in e.title and e.kind == "item")
-    assert switch.enabled is False
 
 
 # --------------------------------------------------------------------------- #

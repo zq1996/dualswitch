@@ -307,7 +307,7 @@ class MacStatusItem:
 
 def build_status_item(icon, on_click: Callable[[], None]):  # noqa: ANN001
     """macOS 优先原生菜单栏；缺少 pyobjc 时退回收托盘。"""
-    from .. import theme
+    from ..mac2 import theme
 
     if macos_available():
         try:

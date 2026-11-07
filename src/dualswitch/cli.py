@@ -780,122 +780,6 @@ def _log_source_evidence(backend, controller) -> None:  # noqa: ANN001
     )
 
 
-def cmd_ui(args) -> int:
-    """带图形界面的常驻模式（主窗口 + 托盘 + 热键）。"""
-    from .ui import available as ui_available
-
-    if not ui_available():
-        print("[FAIL] 未安装 PySide6，无法启动图形界面。")
-        print("       安装：pip install -e \".[gui]\"")
-        return 2
-
-    cfg, cfg_file = _load_config(args, create=True)
-    log_file = _setup_logging(cfg, console=bool(getattr(args, "console", False)))
-    log.info("=" * 62)
-    log.info("dualswitch %s 图形界面启动", __version__)
-    # 「跑的是哪个 exe」必须一步可查：排查打包版时，日志和成品对不上号最费时间
-    log.info(
-        "可执行文件：%s（打包版=%s，资源目录=%s）",
-        _exe_stamp(),
-        bool(getattr(sys, "frozen", False)),
-        getattr(sys, "_MEIPASS", "-"),
-    )
-    # 日志落在哪儿、文件 handler 到底挂上没有 —— 「日志不更新」时这两项是唯一线索
-    log.info(
-        "日志：%s（默认位置 %s，文件 handler %d 个，环境变量 DUALSWITCH_LOG=%s）",
-        log_file,
-        config_mod.config_dir() / "logs" / "dualswitch.log",
-        len(logging.getLogger("dualswitch").handlers),
-        os.environ.get("DUALSWITCH_LOG") or "未设置",
-    )
-    # 托盘图标能不能注册，先看完整性级别：低于 explorer 时 Shell_NotifyIcon 会被
-    # UIPI 挡掉，而 Qt 对此不抛异常 —— 这一行日志是「没图标」最快的判据
-    winenv.log_environment(log)
-
-    try:
-        backend = create_backend(cfg)
-    except Exception as exc:
-        log.error("初始化 DDC 后端失败：%s", exc)
-        print(f"[FAIL] 初始化 DDC 后端失败：{exc}")
-        return 2
-
-    # 启动时一次性只读探测（与 cmd_run 一致）。ui / ui2 原来都没有这一步，
-    # 界面首帧必然显示「未检测到外接显示器」，要等 2 秒轮询才纠正 —— 看着就像判错了。
-    startup_monitors: list = []
-    try:
-        startup_monitors = backend.list_monitors()
-        log.info(
-            "发现 %d 个物理显示器：%s",
-            len(startup_monitors),
-            "; ".join(m.label() for m in startup_monitors),
-        )
-    except DDCError as exc:
-        log.warning("枚举显示器失败：%s", exc)
-
-    controller = SwitchController(cfg, backend)
-    controller.note_scan(startup_monitors)
-
-    warning: str | None = None
-    hotkey = None
-    try:
-        hotkey = create_hotkey(cfg, controller.trigger)
-        hotkey.start()
-        log.info("热键已启用：%s（后端 %s）", hotkey.describe(), hotkey.name)
-    except HotkeyError as exc:
-        warning = str(exc)
-        log.error("热键注册失败：%s", exc)
-        hotkey = None
-
-    controller.start()
-
-    clip_engine = _start_clip_engine(cfg, cfg_file, controller, backend)
-
-    from .ui.runner import run_ui
-
-    try:
-        return run_ui(cfg, cfg_file, log_file, backend, controller, hotkey, warning,
-                      clip_engine=clip_engine)
-    finally:
-        if clip_engine is not None:
-            clip_engine.stop()
-        controller.stop()
-        if hotkey is not None:
-            try:
-                hotkey.stop()
-            except Exception:  # pragma: no cover
-                pass
-
-
-def _install_term_handler() -> None:
-    """把 SIGTERM 变成正常退出，好让 `finally` 里的收尾真的跑到。
-
-    为什么在意：省电模块会把外接屏从 WindowServer 停掉，**必须**在退出时恢复。
-    `killall` / 注销 / 关机发的都是 SIGTERM，而 Python 默认是直接死掉，
-    `finally` 与 atexit 都不执行 —— 那就会留下一块黑着的外接屏。
-    """
-    if sys.platform == "win32":
-        return
-    import signal
-
-    def _raise(signum, _frame):  # noqa: ANN001
-        log.info("收到信号 %s，按正常退出处理（会恢复外接屏）", signum)
-        # Qt 的事件循环会把 SystemExit 吞掉（实测 2026-11-06：日志打了，finally 没跑），
-        # 所以恢复动作必须在这里就地做完，别指望上层 finally。
-        try:
-            from . import display_power
-
-            display_power.restore_pending()
-        except Exception:  # noqa: BLE001 - 救命动作失败也要继续退出
-            log.exception("退出前恢复外接屏失败")
-        raise SystemExit(128 + signum)
-
-    try:
-        signal.signal(signal.SIGTERM, _raise)
-        signal.signal(signal.SIGHUP, _raise)
-    except (ValueError, OSError):  # 非主线程 / 平台不支持
-        pass
-
-
 def cmd_ui2(args) -> int:
     """v2 图形界面（宽窗口 + 侧栏三页）—— 与 `ui` 并行的新树，验收后旧树才删。"""
     from .ui import available as ui_available
@@ -1041,11 +925,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--log-level", default=None, help="DEBUG/INFO/WARNING/ERROR")
     run_p.set_defaults(func=cmd_run)
 
-    ui_p = sub.add_parser("ui", help="图形界面（主窗口 + 托盘 + 全局热键）", parents=[common])
-    ui_p.add_argument("--dry-run", action="store_true", help="只记录，不真正发送 Set")
-    ui_p.add_argument("--console", action="store_true", help="把日志同时输出到控制台")
-    ui_p.add_argument("--log-level", default=None, help="DEBUG/INFO/WARNING/ERROR")
-    ui_p.set_defaults(func=cmd_ui)
 
     ui2_p = sub.add_parser("ui2", help="v2 图形界面（宽窗口 + 侧栏导航）", parents=[common])
     ui2_p.add_argument("--dry-run", action="store_true", help="只记录，不真正发送 Set")

@@ -17,6 +17,8 @@
 | [MONITOR-PROFILE.md](MONITOR-PROFILE.md) | **显示器识别与按型号配置接口码表**：型号怎么读、怎么跟 DDC 句柄绑定、码表为什么读不出来只能标定 | 换显示器、接新屏、切屏发出去的码不对时 |
 | [PROFILE-AND-ROLES-DESIGN.md](PROFILE-AND-ROLES-DESIGN.md) | **设计稿**：平台/角色/端口三者解耦、双 Windows 影响、profile+wiring 结构、改动清单、页面设计图 | 决定要不要做「按屏配置」、评估改动量时 |
 | [V3-PLAN.md](V3-PLAN.md) | **V3 升版方案**：与 V2 并存的三条隔离线（配置/端口/包名）、worktree 做法、页面调整、缺口清单 | 真要动手做 V3 时 |
+| [V3-SCOPE.md](V3-SCOPE.md) | **V3 范围与工期**：分阶段改动量（行数）、AI 与 Windows 端工期、**键盘多端互传设计**、产品化缺口清单 | 排期、决定做多少时 |
+| [V3-TASKS.md](V3-TASKS.md) | **V3 实施任务清单**：P0 清理 v1 / P1–P3 每条任务的验收标准，可直接开工 | 动手写 V3 时 |
 | [REMOTE-SWITCH.md](REMOTE-SWITCH.md) | 对端代发：本机 DDC 打不到时请对端发 Set | 改远端链路时 |
 | [CLIPBOARD-SYNC-CONTRACT.md](CLIPBOARD-SYNC-CONTRACT.md) | 跨端剪贴板的接口契约（三件事共用一条 TCP：代发 / 配对 / 剪贴板） | 动 `sync/` 或 `clipboard/` 时 |
 

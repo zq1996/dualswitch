@@ -86,8 +86,8 @@ def titlebar(title: str, show_settings: bool = True, show_clipboard: bool = Fals
     from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QTransform
     from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QLabel, QWidget
 
-    from .. import theme
-    from ..widgets import label
+    from ..win2 import theme
+    from ..win2.widgets import label
 
     class CaptionButton(QAbstractButton):
         """标题栏按钮：线性图标自绘，避免 Unicode 字形大小与基线不一致。"""
@@ -123,7 +123,7 @@ def titlebar(title: str, show_settings: bool = True, show_clipboard: bool = Fals
             c = QPointF(self.width() / 2, self.height() / 2)
 
             if self.kind == "gear":
-                from ..widgets import paint_gear
+                from ..win2.widgets import paint_gear
 
                 paint_gear(p, c, color)
             elif self.kind == "clip":
@@ -413,7 +413,7 @@ class PystrayStatusItem:
         import pystray
         from PIL import Image
 
-        from .. import theme
+        from ..win2 import theme
 
         self._pystray = pystray
         self._on_activate = on_activate
@@ -517,7 +517,7 @@ def build_fallback_status_item(on_click: Callable[[], None]):  # noqa: ANN001
     2. pystray（`dualswitch run` 那条老路），最后一道。
     """
     try:
-        from .. import theme
+        from ..win2 import theme
 
         icon_path = theme.app_icon()
     except Exception:

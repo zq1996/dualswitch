@@ -75,16 +75,9 @@ def _selfcheck() -> int:
         "dualswitch.ui.chrome.base",
         "dualswitch.ui.chrome.mac",
         "dualswitch.ui.chrome.win",
-        "dualswitch.ui.theme",
-        "dualswitch.ui.widgets",
-        "dualswitch.ui.statusitem",
-        "dualswitch.ui.window",
-        "dualswitch.ui.settings",
-        "dualswitch.ui.runner",
-        # 间接导入的三个（runner / 函数内 import）：漏掉它们时双击就是闪退
-        "dualswitch.ui.clipboard_page",
+        # 界面实现在 ui/mac2 或 ui/win2（v1 的 ui/mac、ui/win 与 8 个兼容垫片
+        # 已于 2026-11-07 删除）；两个树的模块在下面按平台各自点名。
         "dualswitch.ui.clipboard_feed",
-        "dualswitch.ui.focus_style",
         # 剪贴板同步链路（引擎 + 协议），同样没有顶层入口 import
         "dualswitch.sync.engine",
         "dualswitch.sync.protocol",

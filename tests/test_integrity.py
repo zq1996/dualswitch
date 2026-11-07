@@ -80,22 +80,6 @@ class _StubRunner:
         raise AssertionError("级别不够时不该去问位置")
 
 
-def test_verify_skips_retries_when_integrity_blocked():
-    from dualswitch.ui.runner import UiRunner
-
-    stub = _StubRunner()
-    UiRunner._verify_status_item(stub)                    # 不抛异常、不重试
-    assert stub.retries == [], "级别不够时重试没有意义，Shell_NotifyIcon 一定被挡"
-
-
-def test_fallback_not_switched_when_integrity_blocked():
-    """pystray 也要走 Shell_NotifyIcon，级别不够时换过去只会更糟（还会藏掉 Qt 图标）。"""
-    from dualswitch.ui.runner import UiRunner
-
-    stub = _StubRunner()
-    assert UiRunner._switch_to_fallback_status(stub) is False
-
-
 def test_pystray_item_reports_startup_failure():
     """兜底实现起不来时要说出来，别让日志写着「已启动」而图标一个没有。"""
     from dualswitch.ui.chrome.win import PystrayStatusItem
