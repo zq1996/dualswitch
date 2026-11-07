@@ -1119,6 +1119,8 @@ class FakePairEngine:
         self.peers = list(peers or [])
         self.begin_pin = begin_pin
         self.calls = []
+        #: 两端同时出码时的裁决键（真实引擎上由 device_id 提供）
+        self.device_id = "windows-test00"
 
     DEFAULT = {
         "state": "idle", "outcome": "", "error": "", "error_kind": "",
@@ -1193,6 +1195,59 @@ def test_pairing_page_discover_lists_peers(app):
     # 已与别的电脑配对 → 「替换配对」；正在显示码 → 「输入配对码」
     assert page._peer_rows["macos-77aa"]["btn"].text() == "替换配对"
     assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "输入配对码"
+
+
+def test_pairing_peer_click_shows_code_when_peer_not_waiting(app):
+    """对端没在显示码：点「配对」= 本机出码，不再把人送进输入页空等。"""
+    engine = FakePairEngine(peers=_peers())
+    engine.peers[0]["pairing"] = False
+    page = PairingPage(engine)
+    page.activate()
+    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "配对"
+    page._select_peer(engine.peers[0])
+    assert page.state() == "showcode"
+    assert engine.calls.count("begin") == 1
+    assert page._show_code_peer["device"] == "windows-3f2a91c4"
+
+
+def test_pairing_peer_button_says_enter_when_peer_shows_code(app):
+    """对端正在显示码：按钮写「输入配对码」，点进去是输入页（不出码）。"""
+    engine = FakePairEngine(peers=_peers())
+    page = PairingPage(engine)
+    page.activate()
+    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "输入配对码"
+    page._select_peer(engine.peers[0])
+    assert page.state() == "entercode"
+    assert "begin" not in engine.calls
+
+
+def test_pairing_both_showing_code_switches_loser_to_enter(app):
+    """两端同时出码：设备 ID 大的一端撤码改输入，ID 小的一端保留显示。"""
+    engine = FakePairEngine(peers=_peers())
+    engine.device_id = "windows-zzzz"
+    engine.peers = [dict(engine.peers[0], device="macos-aaaa", pairing=True)]
+    page = PairingPage(engine)
+    page.activate()
+    page._start_show_code_for({"device": "macos-aaaa"})
+    assert page.state() == "showcode"
+    page._check_show_race()
+    assert page.state() == "entercode"
+    assert "cancel" in engine.calls
+    assert not page.enter_note.isHidden()
+
+
+def test_pairing_both_showing_code_keeper_stays_on_code(app):
+    """ID 小的一端保留自己的码，并在卡片外提示「以本页的码为准」。"""
+    engine = FakePairEngine(peers=_peers())
+    engine.device_id = "macos-0000"
+    engine.peers = [dict(engine.peers[0], pairing=True)]
+    page = PairingPage(engine)
+    page.activate()
+    page._start_show_code_for({"device": "windows-3f2a91c4"})
+    page._check_show_race()
+    assert page.state() == "showcode"
+    assert "cancel" not in engine.calls
+    assert not page.race_note.isHidden()
 
 
 def test_pairing_page_show_code_then_deactivate_cancels(app):
