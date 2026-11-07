@@ -1663,6 +1663,36 @@ def test_monitor_page_combo_popup_is_square(app):
     assert "QAbstractItemView::item{" in style and "border-radius:5px" in style
 
 
+def test_runner_connects_only_existing_handlers():
+    """`xxx.connect(self.foo)` 里的 foo 必须真的存在。
+
+    UiRunner2 的构造函数要真后端 / 真热键，测试里没法实例化，于是「连到一个
+    不存在的方法」在测试里是**静默通过**的 —— 2026-11-07 就因此让界面一启动就
+    AttributeError（把 `open_monitor_page` 写成了 `show_monitor_page`）。
+    这里静态扫一遍源码，把这类笔误挡在提交前。
+    """
+    import ast
+    from pathlib import Path
+
+    from dualswitch.ui.win2 import runner as runner_mod
+
+    tree = ast.parse(Path(runner_mod.__file__).read_text(encoding="utf-8"))
+    cls = next(n for n in ast.walk(tree)
+               if isinstance(n, ast.ClassDef) and n.name == "UiRunner2")
+    targets = set()
+    for node in ast.walk(cls):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "connect":
+            continue
+        for arg in node.args:
+            if (isinstance(arg, ast.Attribute) and isinstance(arg.value, ast.Name)
+                    and arg.value.id == "self"):
+                targets.add(arg.attr)
+    missing = sorted(t for t in targets if not hasattr(runner_mod.UiRunner2, t))
+    assert not missing, f"connect 到不存在的方法：{missing}"
+
+
 def test_monitor_page_saves_edited_port_table(app, tmp_path):
     import json
 

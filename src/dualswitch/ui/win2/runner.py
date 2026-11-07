@@ -332,7 +332,6 @@ class UiRunner2(QObject):
             self.clipboard_page.clear_records_with_confirm
         )
         self.settings_page.recordingChanged.connect(self._on_recording_changed)
-        self.settings_page.monitorConfigRequested.connect(self.show_monitor_page)
         self.settings_page.monitorConfigRequested.connect(self.open_monitor_page)
         self.monitor_page.backRequested.connect(lambda: self.show_page(PAGE_SETTINGS))
         self.monitor_page.saved.connect(self.on_config_saved)
