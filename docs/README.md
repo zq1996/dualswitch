@@ -14,6 +14,9 @@
 | 文档 | 内容 | 什么时候看 |
 |---|---|---|
 | [SCREEN-OWNERSHIP.md](SCREEN-OWNERSHIP.md) | **画面归属判定**：为什么只认 VCP 0x60 直读、幻影枚举为什么不可信 | 改归属判断、看到「画面回弹」时 |
+| [MONITOR-PROFILE.md](MONITOR-PROFILE.md) | **显示器识别与按型号配置接口码表**：型号怎么读、怎么跟 DDC 句柄绑定、码表为什么读不出来只能标定 | 换显示器、接新屏、切屏发出去的码不对时 |
+| [PROFILE-AND-ROLES-DESIGN.md](PROFILE-AND-ROLES-DESIGN.md) | **设计稿**：平台/角色/端口三者解耦、双 Windows 影响、profile+wiring 结构、改动清单、页面设计图 | 决定要不要做「按屏配置」、评估改动量时 |
+| [V3-PLAN.md](V3-PLAN.md) | **V3 升版方案**：与 V2 并存的三条隔离线（配置/端口/包名）、worktree 做法、页面调整、缺口清单 | 真要动手做 V3 时 |
 | [REMOTE-SWITCH.md](REMOTE-SWITCH.md) | 对端代发：本机 DDC 打不到时请对端发 Set | 改远端链路时 |
 | [CLIPBOARD-SYNC-CONTRACT.md](CLIPBOARD-SYNC-CONTRACT.md) | 跨端剪贴板的接口契约（三件事共用一条 TCP：代发 / 配对 / 剪贴板） | 动 `sync/` 或 `clipboard/` 时 |
 
@@ -39,6 +42,7 @@
 | 文档 | 内容 |
 |---|---|
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 按症状查：托盘图标不显示、DDC 读不到、热键不响应、鼠标联动不生效… |
+| [WINDOWS-VERIFY.md](WINDOWS-VERIFY.md) | **给 Windows 端的验证券**：能否读到 `厂商:产品号`（阻塞项）、`0x60` 读取能力、双 Windows 现状确认 | Windows 端接手验证时 |
 | [ISSUES.md](ISSUES.md) | 任务台账（未关闭的问题） |
 
 ## 历史

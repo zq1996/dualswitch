@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>屏幕切换 · V3 改动设计稿</title>
+<style>
+:root{
+  --accent:#4E87FF; --accent-deep:#2E63E8; --accent-soft:rgba(78,135,255,.13);
+  --peer:#7C5CFF; --peer-soft:rgba(124,92,255,.13);
+  --ink:#14181F; --ink2:#4B5566; --ink3:#8A93A3;
+  --line:#E3E7EE; --line-soft:#EDF0F5;
+  --bg:#EEF1F6; --card:#FFFFFF; --card2:#F7F9FC; --card3:#F0F3F8;
+  --sidebar:#F7F8FB;
+  --ok:#0E7C4A; --ok-bg:rgba(14,124,74,.11);
+  --warn:#B4690E; --warn-bg:rgba(180,105,14,.11);
+  --font:-apple-system,"SF Pro Text","PingFang SC","Helvetica Neue",system-ui,sans-serif;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,monospace;
+  --sh-win:0 2px 6px rgba(16,24,40,.05),0 30px 64px -22px rgba(16,24,40,.30);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--font);color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;padding:26px 20px 70px}
+.wrap{max-width:1010px;margin:0 auto}
+.head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+.head h1{margin:0;font-size:19px;font-weight:650;letter-spacing:-.01em}
+.head p{margin:4px 0 0;font-size:11.5px;color:var(--ink3);line-height:1.6}
+.tabs{display:flex;gap:4px;margin-left:auto;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:3px}
+.tabs button{appearance:none;border:0;background:transparent;font-family:inherit;font-size:12px;color:var(--ink2);padding:6px 12px;border-radius:4px;cursor:pointer}
+.tabs button.on{background:var(--accent);color:#fff;font-weight:550}
+.bar{display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:11.5px;color:var(--ink3)}
+.bar .lbl{color:var(--ink3)}
+.seg{display:flex;gap:3px;background:var(--card3);border-radius:6px;padding:3px}
+.seg button{appearance:none;border:0;background:transparent;font-family:inherit;font-size:11.5px;color:var(--ink2);padding:4px 10px;border-radius:4px;cursor:pointer}
+.seg button.on{background:var(--card);color:var(--ink);font-weight:550}
+
+.screen{display:none}
+.screen.on{display:block}
+
+.win{background:var(--card);border-radius:16px;box-shadow:var(--sh-win);overflow:hidden}
+.win-bar{height:36px;display:flex;align-items:center;padding:0 13px;gap:6px;border-bottom:1px solid var(--line-soft)}
+.dot{width:8px;height:8px;border-radius:50%;background:#E3E7EE}
+.win-body{display:flex;min-height:440px}
+
+.side{width:176px;background:var(--sidebar);border-right:1px solid var(--line-soft);padding:12px 10px;flex:none}
+.side-item{display:flex;align-items:center;gap:9px;font-size:12.5px;font-weight:550;color:var(--ink2);padding:8px 10px;border-radius:10px;margin-bottom:2px}
+.side-item.on{background:var(--accent);color:#fff;font-weight:620}
+.side-item .ico{width:14px;height:14px;flex:none;opacity:.85}
+.main{flex:1;padding:18px 20px 20px;min-width:0}
+
+.hero{background:var(--card2);border:1px solid var(--line-soft);border-radius:12px;padding:16px 18px 14px}
+.hero-top{display:flex;align-items:center;gap:9px}
+.hero-label{font-size:11px;font-weight:650;color:var(--ink3);letter-spacing:.6px}
+.pill{margin-left:auto;font-size:10px;font-weight:650;padding:3px 9px;border-radius:10px}
+.pill.run{background:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.hero-main{display:flex;align-items:center;gap:16px;margin-top:12px}
+.plate{width:62px;height:62px;border-radius:12px;background:var(--card3);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;flex:none}
+.hero-name{font-size:26px;font-weight:700;letter-spacing:-.01em;line-height:1.15}
+.hero-sub{font-size:12px;color:var(--ink2);margin-top:4px}
+.hero-src{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11.5px;color:var(--ink3)}
+.sdot{width:6px;height:6px;border-radius:3px;flex:none}
+
+.rows{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.actrow{display:flex;align-items:center;height:58px;padding:0 12px;background:var(--card);border:1px solid var(--line-soft);border-radius:10px}
+.actrow.on{border-color:rgba(78,135,255,.5);background:rgba(78,135,255,.06)}
+.chip{width:36px;height:26px;flex:none;background:var(--card3);border:1px solid var(--line);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700}
+.actrow.on .chip{background:var(--accent-soft);border-color:rgba(78,135,255,.4);color:var(--accent-deep)}
+.tcol{width:156px;margin-left:10px;flex:none}
+.port{font-size:12px;font-weight:650;color:var(--ink2);line-height:1.3}
+.who{display:flex;align-items:center;gap:5px;margin-top:1px}
+.wdot{width:7px;height:7px;border-radius:50%;flex:none}
+.who-txt{font-size:10px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acts{margin-left:auto;display:flex;align-items:center;gap:8px}
+.btn-primary{height:38px;width:150px;border:0;border-radius:10px;background:var(--accent);color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;display:flex;align-items:center;justify-content:center;gap:7px;cursor:pointer}
+.btn-primary:hover{background:var(--accent-deep)}
+.btn-mini{width:28px;height:28px;border:1px solid var(--line);border-radius:8px;background:var(--card);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.btn-mini:hover{border-color:var(--accent);background:var(--accent-soft)}
+.btn-mini.off{opacity:.4}
+
+.cliprow{display:flex;align-items:center;gap:12px;height:68px;padding:0 12px;border-bottom:1px solid var(--line-soft)}
+.thumb{width:50px;height:50px;position:relative;flex:none}
+.thumb img,.thumb .ph{width:46px;height:46px;border-radius:10px;display:block}
+.thumb .ph{background:var(--card3);border:1px solid var(--line);padding:9px 8px}
+.thumb .ph i{display:block;height:3px;border-radius:2px;background:#C9CFDA;margin-bottom:4px}
+.badge{position:absolute;right:0;bottom:0;width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:1.5px solid var(--card)}
+.clip-main{min-width:0;flex:1}
+.clip-title{font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.clip-meta{font-size:10.5px;color:var(--ink3);margin-top:3px}
+.clip-pill{font-size:10px;font-weight:650;padding:3px 9px;border-radius:10px;background:var(--card3);color:var(--ink2);flex:none}
+
+.sec-title{font-size:10.5px;font-weight:700;color:var(--ink3);letter-spacing:.5px;padding-left:4px;margin:0 0 8px}
+.sec-card{background:var(--card2);border:1px solid var(--line-soft);border-radius:12px;margin-bottom:16px}
+.srow{display:flex;align-items:center;gap:12px;min-height:50px;padding:12px 15px}
+.srow + .srow{border-top:1px solid var(--line-soft)}
+.srow-title{font-size:12.5px;font-weight:550}
+.srow-sub{font-size:10.5px;color:var(--ink3);margin-top:3px}
+.srow-val{margin-left:auto;font-size:11.5px;color:var(--ink3);font-family:var(--mono)}
+.btn-ghost{height:28px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink2);font-family:inherit;font-size:12px;font-weight:550;cursor:pointer}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent-deep)}
+.chev{width:7px;height:7px;border-right:1.6px solid var(--ink3);border-bottom:1.6px solid var(--ink3);transform:rotate(-45deg);margin-left:6px}
+.open-row{cursor:pointer}
+.open-row:hover{background:rgba(78,135,255,.05)}
+
+.devlist .srow{padding-top:10px;padding-bottom:10px}
+.detail{display:none;padding:0 15px 12px}
+.detail.on{display:block}
+.dl{display:flex;align-items:center;padding:6px 0;font-size:11.5px;color:var(--ink2)}
+.dl b{margin-left:auto;font-family:var(--mono);font-weight:550;color:var(--ink)}
+.mono-v{font-family:var(--mono);font-size:11.5px;color:var(--ink);border-bottom:1px dashed var(--line);padding:0 3px}
+
+.back{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink3);cursor:pointer;margin-bottom:12px}
+.back:hover{color:var(--accent-deep)}
+.back .ar{width:7px;height:7px;border-left:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:rotate(45deg)}
+.page-title{font-size:15px;font-weight:650;margin:0 0 14px}
+.note{font-size:11px;color:var(--ink3);line-height:1.7;margin:0 0 14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <div>
+      <h1>屏幕切换 · V3 改动设计稿</h1>
+      <p>按现有实现（QSS 实测尺寸）重画：数字章 36×26、主按钮 150×38、兜底钮 28×28、行高 58。未改动部分保持原样。</p>
+    </div>
+    <div class="tabs">
+      <button class="on" data-tab="t1">切换</button>
+      <button data-tab="t2">剪贴板</button>
+      <button data-tab="t3">设置</button>
+    </div>
+  </div>
+
+  <div class="bar">
+    <span class="lbl">场景</span>
+    <div class="seg">
+      <button class="on" data-scene="mw">Mac + Windows</button>
+      <button data-scene="ww">Windows + Windows</button>
+    </div>
+    <span style="margin-left:6px">双 Windows 时，本机蓝 / 对方紫，靠颜色 + 设备名区分</span>
+  </div>
+
+  <!-- ═══════════ ① 切换 ═══════════ -->
+  <section class="screen on" id="t1">
+    <div class="win">
+      <div class="win-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+      <div class="win-body">
+        <nav class="side">
+          <div class="side-item on">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1.5"/><path d="M5.5 14h5M8 11v3"/></svg>
+            切换
+          </div>
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4.5" y="1.5" width="9" height="11" rx="1.5"/><path d="M2.5 4.5v10h8"/></svg>
+            剪贴板
+          </div>
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2.5H3.5v11H6M10 2.5h2.5v11H10"/><path d="M5 8h6"/></svg>
+            配对
+          </div>
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"/></svg>
+            设置
+          </div>
+        </nav>
+
+        <div class="main">
+          <div class="hero">
+            <div class="hero-top">
+              <span class="hero-label">显示器</span>
+              <span class="pill run">对端在线</span>
+            </div>
+            <div class="hero-main">
+              <div class="plate">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#8A93A3" stroke-width="1.6"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>
+              </div>
+              <div style="min-width:0">
+                <div class="hero-name">AOC U27N3G6R4B</div>
+                <div class="hero-sub">4 个输入口 · 已标定 · 这台 USB-C，对方 HDMI 1</div>
+                <div class="hero-src"><span class="sdot" style="background:var(--ok)"></span>画面在本机（DDC 直读 0x60 = 100）</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rows">
+            <div class="actrow">
+              <div class="chip">17</div>
+              <div class="tcol">
+                <div class="port">HDMI 1</div>
+                <div class="who"><span class="wdot" style="background:var(--peer)"></span><span class="who-txt" data-dev="peer-name">DESKTOP-V6DVLD8</span></div>
+              </div>
+              <div class="acts">
+                <button class="btn-primary">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>
+                  本机发送 17
+                </button>
+                <button class="btn-mini">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#4B5566" stroke-width="1.5" stroke-linejoin="round"><path d="M14 2 7 9l-1 4 2.5-2.5L14 2z"/><path d="M2 6.5 14 2 9.5 13"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="actrow">
+              <div class="chip">17</div>
+              <div class="tcol">
+                <div class="port">HDMI 2</div>
+                <div class="who"><span class="who-txt" style="color:var(--ink3)">空闲</span></div>
+              </div>
+              <div class="acts">
+                <button class="btn-primary">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>
+                  本机发送 17
+                </button>
+                <button class="btn-mini">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#4B5566" stroke-width="1.5" stroke-linejoin="round"><path d="M14 2 7 9l-1 4 2.5-2.5L14 2z"/><path d="M2 6.5 14 2 9.5 13"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="actrow">
+              <div class="chip">15</div>
+              <div class="tcol">
+                <div class="port">DP</div>
+                <div class="who"><span class="who-txt" style="color:var(--ink3)">空闲</span></div>
+              </div>
+              <div class="acts">
+                <button class="btn-primary">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>
+                  本机发送 15
+                </button>
+                <button class="btn-mini">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#4B5566" stroke-width="1.5" stroke-linejoin="round"><path d="M14 2 7 9l-1 4 2.5-2.5L14 2z"/><path d="M2 6.5 14 2 9.5 13"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="actrow on">
+              <div class="chip">100</div>
+              <div class="tcol">
+                <div class="port">USB-C</div>
+                <div class="who"><span class="wdot" style="background:var(--accent)"></span><span class="who-txt" data-dev="local-name">MacBook Pro</span></div>
+              </div>
+              <div class="acts">
+                <button class="btn-primary">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>
+                  本机发送 100
+                </button>
+                <button class="btn-mini">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#4B5566" stroke-width="1.5" stroke-linejoin="round"><path d="M14 2 7 9l-1 4 2.5-2.5L14 2z"/><path d="M2 6.5 14 2 9.5 13"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ ② 剪贴板 ═══════════ -->
+  <section class="screen" id="t2">
+    <div class="win">
+      <div class="win-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+      <div class="win-body">
+        <nav class="side">
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1.5"/><path d="M5.5 14h5M8 11v3"/></svg>
+            切换
+          </div>
+          <div class="side-item on">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.5"><rect x="4.5" y="1.5" width="9" height="11" rx="1.5"/><path d="M2.5 4.5v10h8"/></svg>
+            剪贴板
+          </div>
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2.5H3.5v11H6M10 2.5h2.5v11H10"/><path d="M5 8h6"/></svg>
+            配对
+          </div>
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"/></svg>
+            设置
+          </div>
+        </nav>
+
+        <div class="main">
+          <p class="note" style="margin-bottom:10px">角标：<b style="font-weight:550">本机保持系统原色</b>（Mac 灰 / Windows 蓝），<b style="font-weight:550">对方统一紫色</b>。双 Windows 时就是「蓝底四格 / 紫底四格」，图标不变、底色区分角色。</p>
+
+          <div class="cliprow">
+            <div class="thumb">
+              <div class="ph"><i style="width:26px"></i><i style="width:30px"></i><i style="width:18px"></i><i style="width:24px"></i></div>
+              <div class="badge" id="badge0" style="background:#E9ECF1">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="#FFFFFF"><path d="M15.5 5.2c.8-1 1.9-1.5 2.9-1.4-.1 1.1-.6 2-1.4 2.6-.7.6-1.6 1-2.6.9 0-1 .5-1.5 1.1-2.1z"/><path d="M18.4 8.6c1.5 0 2.6.8 3.3 1.6-.9.6-1.5 1.4-1.5 2.6 0 1.3.8 2.1 1.8 2.7-.4 1.2-1.4 3.2-2.7 3.2-.8 0-1.3-.5-2.2-.5s-1.4.5-2.2.5c-1.4 0-2.9-2.2-2.9-4.6 0-2.2 1.5-3.6 3-3.6.8 0 1.5.5 2 .5s1.2-.5 2-.5z"/></svg>
+              </div>
+            </div>
+            <div class="clip-main">
+              <div class="clip-title">这是从本机复制的一段文字内容…</div>
+              <div class="clip-meta">这台 · 微信 · 11:58 · 文本</div>
+            </div>
+            <span class="clip-pill">已同步</span>
+          </div>
+
+          <div class="cliprow">
+            <div class="thumb">
+              <div class="ph"><i style="width:28px"></i><i style="width:22px"></i><i style="width:30px"></i></div>
+              <div class="badge" style="background:var(--peer)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="#FFFFFF"><rect x="2.5" y="2.5" width="8.6" height="8.6"/><rect x="12.9" y="2.5" width="8.6" height="8.6"/><rect x="2.5" y="12.9" width="8.6" height="8.6"/><rect x="12.9" y="12.9" width="8.6" height="8.6"/></svg>
+              </div>
+            </div>
+            <div class="clip-main">
+              <div class="clip-title">来自对方的另一段文字…</div>
+              <div class="clip-meta"><span data-dev="peer-name">DESKTOP-V6DVLD8</span> · 11:57 · 文本</div>
+            </div>
+            <span class="clip-pill">已同步</span>
+          </div>
+
+          <div class="cliprow" style="border-bottom:0">
+            <div class="thumb">
+              <div class="ph" style="padding:0;overflow:hidden"><div style="width:100%;height:100%;background:linear-gradient(135deg,#DCE3EE,#C8D2E0)"></div></div>
+              <div class="badge" style="background:var(--accent);border-color:var(--card)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="#FFFFFF"><rect x="2.5" y="2.5" width="8.6" height="8.6"/><rect x="12.9" y="2.5" width="8.6" height="8.6"/><rect x="2.5" y="12.9" width="8.6" height="8.6"/><rect x="12.9" y="12.9" width="8.6" height="8.6"/></svg>
+              </div>
+            </div>
+            <div class="clip-main">
+              <div class="clip-title">截图 2026-11-07 11:56</div>
+              <div class="clip-meta">这台 · 12 KB · 图片</div>
+            </div>
+            <span class="clip-pill">已同步</span>
+          </div>
+
+          <p class="note" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line-soft)">
+            第二条在 Mac + Windows 时对方是 Windows（紫底四格）；切到 Windows + Windows 后，对方仍是紫底四格，本机变成蓝底四格 —— <b style="font-weight:550">同一套规则，不用额外记</b>。
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ ③ 设置 ═══════════ -->
+  <section class="screen" id="t3">
+    <div class="win">
+      <div class="win-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+      <div class="win-body">
+        <nav class="side">
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1.5"/><path d="M5.5 14h5M8 11v3"/></svg>
+            切换
+          </div>
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4.5" y="1.5" width="9" height="11" rx="1.5"/><path d="M2.5 4.5v10h8"/></svg>
+            剪贴板
+          </div>
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2.5H3.5v11H6M10 2.5h2.5v11H10"/><path d="M5 8h6"/></svg>
+            配对
+          </div>
+          <div class="side-item on">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"/></svg>
+            设置
+          </div>
+        </nav>
+
+        <div class="main">
+          <p class="sec-title">通用</p>
+          <div class="sec-card">
+            <div class="srow"><div><div class="srow-title">跟随系统外观</div><div class="srow-sub">深色 / 浅色随 macOS</div></div><span class="srow-val">开</span></div>
+            <div class="srow"><div><div class="srow-title">开机自启</div><div class="srow-sub">登录时自动运行</div></div><span class="srow-val">关</span></div>
+          </div>
+
+          <p class="sec-title">显示器</p>
+          <div class="sec-card">
+            <div class="srow open-row" id="toDetail">
+              <div>
+                <div class="srow-title">显示器配置</div>
+                <div class="srow-sub">AOC U27N3G6R4B · 4 个输入口 · 已标定</div>
+              </div>
+              <span style="margin-left:auto;font-size:11.5px;color:var(--ink3)">查看与标定</span>
+              <span class="chev"></span>
+            </div>
+            <div class="srow"><div><div class="srow-title">显示器匹配</div><div class="srow-sub">按 m1ddc 列出的显示器名匹配</div></div><span class="srow-val">自动</span></div>
+            <div class="srow"><div><div class="srow-title">DDC 后端</div><div class="srow-sub">auto 在 mac 上即 m1ddc</div></div><span class="srow-val">auto</span></div>
+          </div>
+
+          <p class="sec-title">剪贴板</p>
+          <div class="sec-card">
+            <div class="srow"><div><div class="srow-title">同步图片</div><div class="srow-sub">文字之外也同步截图与图片文件</div></div><span class="srow-val">开</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ ④ 显示器详情（同窗口内页） ═══════════ -->
+  <section class="screen" id="t4">
+    <div class="win">
+      <div class="win-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+      <div class="win-body">
+        <nav class="side">
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1.5"/><path d="M5.5 14h5M8 11v3"/></svg>
+            切换
+          </div>
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4.5" y="1.5" width="9" height="11" rx="1.5"/><path d="M2.5 4.5v10h8"/></svg>
+            剪贴板
+          </div>
+          <div class="side-item">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2.5H3.5v11H6M10 2.5h2.5v11H10"/><path d="M5 8h6"/></svg>
+            配对
+          </div>
+          <div class="side-item on">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"/></svg>
+            设置
+          </div>
+        </nav>
+
+        <div class="main">
+          <span class="back" id="backBtn"><span class="ar"></span>返回设置</span>
+          <p class="page-title">显示器配置</p>
+
+          <p class="sec-title">当前显示器</p>
+          <div class="sec-card">
+            <div class="srow">
+              <div>
+                <div class="srow-title">AOC U27N3G6R4B</div>
+                <div class="srow-sub">AOC · 产品号 9987 · 序列号 UTHN8HA014094 · 4K 27"</div>
+              </div>
+              <div style="margin-left:auto;display:flex;gap:8px">
+                <button class="btn-ghost">重新识别</button>
+                <button class="btn-ghost">重新标定</button>
+              </div>
+            </div>
+            <div class="srow"><div><div class="srow-title">标定状态</div><div class="srow-sub">今天 11:28 标定 · 读回不稳定（成功率约 50%）</div></div><span class="pill run" style="margin-left:auto">已标定</span></div>
+          </div>
+
+          <p class="sec-title">接线（哪台机器接哪个口）</p>
+          <div class="sec-card">
+            <div class="srow">
+              <div><div class="srow-title">这台机器</div><div class="srow-sub" data-dev="local-name">MacBook Pro</div></div>
+              <button class="btn-ghost" style="margin-left:auto">USB-C ▾</button>
+            </div>
+            <div class="srow">
+              <div><div class="srow-title">对方机器</div><div class="srow-sub" data-dev="peer-name">DESKTOP-V6DVLD8</div></div>
+              <button class="btn-ghost" style="margin-left:auto">HDMI 1 ▾</button>
+            </div>
+            <div class="srow"><div><div class="srow-title">保存后立即生效</div><div class="srow-sub">不需要重启程序</div></div></div>
+          </div>
+
+          <p class="sec-title">端口码表</p>
+          <div class="sec-card">
+            <div class="srow"><div><div class="srow-title">HDMI 1</div><div class="srow-sub">对方正在使用</div></div><span class="mono-v" style="margin-left:auto">17</span></div>
+            <div class="srow"><div><div class="srow-title">HDMI 2</div><div class="srow-sub">空闲</div></div><span class="mono-v" style="margin-left:auto">17</span></div>
+            <div class="srow"><div><div class="srow-title">DP</div><div class="srow-sub">空闲</div></div><span class="mono-v" style="margin-left:auto">15</span></div>
+            <div class="srow"><div><div class="srow-title">USB-C</div><div class="srow-sub">这台正在使用</div></div><span class="mono-v" style="margin-left:auto">100</span></div>
+          </div>
+
+          <p class="sec-title">已保存的显示器</p>
+          <div class="sec-card devlist">
+            <div class="srow open-row" data-exp="e1">
+              <div>
+                <div class="srow-title">AOC Q2790R3</div>
+                <div class="srow-sub">2K · 2 个输入口 · 2026-11-06 标定</div>
+              </div>
+              <span style="margin-left:auto;font-size:11.5px;color:var(--ink3)">展开</span>
+              <span class="chev"></span>
+            </div>
+            <div class="detail" id="e1">
+              <div class="dl">HDMI <b>17</b></div>
+              <div class="dl">USB-C <b>18</b></div>
+              <div style="margin-top:8px;display:flex;gap:8px">
+                <button class="btn-ghost">设为当前</button>
+                <button class="btn-ghost">删除</button>
+              </div>
+            </div>
+
+            <div class="srow open-row" data-exp="e2">
+              <div>
+                <div class="srow-title">默认配置（未识别的屏）</div>
+                <div class="srow-sub">内置兜底，不可删除</div>
+              </div>
+              <span style="margin-left:auto;font-size:11.5px;color:var(--ink3)">展开</span>
+              <span class="chev"></span>
+            </div>
+            <div class="detail" id="e2">
+              <div class="dl">HDMI <b>17</b></div>
+              <div class="dl">USB-C <b>18</b></div>
+              <div class="dl" style="color:var(--ink3);font-size:11px;line-height:1.6;display:block;padding-top:6px">识别不到 profile 时使用。若新屏切不动，先在本页「重新标定」。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+const tabs = document.querySelectorAll('.tabs button');
+const screens = document.querySelectorAll('.screen');
+function show(id){
+  screens.forEach(function(s){ s.classList.toggle('on', s.id === id); });
+  tabs.forEach(function(b){ b.classList.toggle('on', b.dataset.tab === id); });
+}
+tabs.forEach(function(b){
+  b.addEventListener('click', function(){ show(b.dataset.tab); });
+});
+document.getElementById('toDetail').addEventListener('click', function(){ show('t4'); });
+document.getElementById('backBtn').addEventListener('click', function(){ show('t3'); });
+
+document.querySelectorAll('[data-exp]').forEach(function(row){
+  row.addEventListener('click', function(){
+    var el = document.getElementById(row.dataset.exp);
+    var open = el.classList.toggle('on');
+    var tag = row.querySelector('span[style*="margin-left"]');
+    if (tag) tag.textContent = open ? '收起' : '展开';
+    row.querySelector('.chev').style.transform = open ? 'rotate(45deg)' : 'rotate(-45deg)';
+  });
+});
+
+const scenes = {
+  mw: { local: { name: 'MacBook Pro' }, peer: { name: 'DESKTOP-V6DVLD8' } },
+  ww: { local: { name: 'DESKTOP-A1B2C3' }, peer: { name: 'LAPTOP-X9Y8Z7' } }
+};
+function applyScene(key){
+  ['local','peer'].forEach(function(role){
+    document.querySelectorAll('[data-dev="' + role + '-name"]').forEach(function(el){
+      el.textContent = scenes[key][role].name;
+    });
+  });
+  var meta = document.querySelectorAll('.clip-meta');
+  if (meta.length > 1) {
+    meta[0].innerHTML = roleLabel('local') + ' · 微信 · 11:58 · 文本';
+    meta[1].innerHTML = '<span data-dev="peer-name">' + scenes[key].peer.name + '</span> · 11:57 · 文本';
+    meta[2].innerHTML = roleLabel('local') + ' · 12 KB · 图片';
+  }
+}
+function roleLabel(role){
+  var n = scenes[cur][role].name;
+  return '<span data-dev="' + role + '-name">' + n + '</span>';
+}
+var cur = 'mw';
+const GLYPH_APPLE = '<svg width="13" height="13" viewBox="0 0 24 24" fill="#FFFFFF"><path d="M15.5 5.2c.8-1 1.9-1.5 2.9-1.4-.1 1.1-.6 2-1.4 2.6-.7.6-1.6 1-2.6.9 0-1 .5-1.5 1.1-2.1z"/><path d="M18.4 8.6c1.5 0 2.6.8 3.3 1.6-.9.6-1.5 1.4-1.5 2.6 0 1.3.8 2.1 1.8 2.7-.4 1.2-1.4 3.2-2.7 3.2-.8 0-1.3-.5-2.2-.5s-1.4.5-2.2.5c-1.4 0-2.9-2.2-2.9-4.6 0-2.2 1.5-3.6 3-3.6.8 0 1.5.5 2 .5s1.2-.5 2-.5z"/></svg>';
+const GLYPH_WIN = '<svg width="13" height="13" viewBox="0 0 24 24" fill="#FFFFFF"><rect x="2.5" y="2.5" width="8.6" height="8.6"/><rect x="12.9" y="2.5" width="8.6" height="8.6"/><rect x="2.5" y="12.9" width="8.6" height="8.6"/><rect x="12.9" y="12.9" width="8.6" height="8.6"/></svg>';
+
+document.querySelectorAll('.seg button').forEach(function(b){
+  b.addEventListener('click', function(){
+    document.querySelectorAll('.seg button').forEach(function(x){ x.classList.toggle('on', x === b); });
+    cur = b.dataset.scene;
+    applyScene(cur);
+    var b0 = document.getElementById('badge0');
+    if (b0) {
+      if (cur === 'mw') { b0.style.background = '#E9ECF1'; b0.innerHTML = GLYPH_APPLE; }
+      else { b0.style.background = 'var(--accent)'; b0.innerHTML = GLYPH_WIN; }
+    }
+  });
+});
+</script>
+</body>
+</html>
