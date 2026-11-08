@@ -639,6 +639,20 @@ class MainWindow(QWidget):
         """
 
     # ------------------------------------------------------------------ 事件
+    def hideEvent(self, event):  # noqa: N802
+        """主窗口一藏（收托盘 / 最小化）就把预览气泡收掉。
+
+        `PreviewBubble` 是 `Qt.Tool | WindowStaysOnTopHint` 的**无 parent 顶层窗口**，
+        不会跟着主窗口隐藏 —— 收托盘后它会孤零零浮在桌面上，而且此时它收不到
+        `leaveEvent`，「鼠标在气泡上就不关」的规则会让它再也关不掉，之后就压住
+        桌面上的点击。2026-11-08 用户报的「点啥都不好使」与此同源。
+        """
+        clip = getattr(self, "clip_page", None)
+        ctrl = getattr(clip, "preview_controller", None)
+        if ctrl is not None:
+            ctrl.hide_now()
+        super().hideEvent(event)
+
     def closeEvent(self, event: QCloseEvent):  # noqa: N802
         if self._allow_close:
             event.accept()

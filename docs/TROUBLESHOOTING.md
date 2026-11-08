@@ -587,3 +587,63 @@ dualswitch display off      # 手动停用（排障 / 不想让 macOS 渲染时�
 * 用的是私有 API，所以默认走「系统设置里停用」这条路，不写 permanent 作用域
   （`kCGConfigureForSession`），重启登录即失效。
 
+## 15. 界面「点了没反应」/ 点哪都不好使（2026-11-08）
+
+症状：用着用着（常见于切页、改设置之后）突然**整个窗口点不动**，按钮不响应、
+侧栏切不了页，但窗口本身没卡死（标题栏还能拖）。重开程序就好，过一会儿又来。
+
+### 15.1 先跑现场取证（Windows）
+
+**把鼠标停在那个点不动的按钮上**，然后：
+
+```bash
+python tools/diag_click_block.py
+```
+
+它读光标位置，问 Windows「这个点最上层是哪个窗口」，打印那个窗口的进程名 /
+类名 / 尺寸 / 是否置顶 / 是否鼠标穿透，再列出所有「可见 + 置顶」的顶层窗口。
+**如果最上层不是主窗口（`python.exe` 或 `dualswitch.exe`），命中的那个就是遮挡源。**
+
+```bash
+python tools/diag_click_block.py --topmost   # 只列置顶窗口
+```
+
+### 15.2 已知真因一：悬浮预览气泡关不掉（2026-11-08 已修）
+
+`ui/win2/preview.py::PreviewBubble` 是 `Qt.Tool | WindowStaysOnTopHint` 的
+**无 parent 顶层窗口**。它有两个要命的性质：
+
+* 窗口矩形（含阴影留白 + 箭头留白）**整体吃鼠标事件**，透明区也一样；
+* 「鼠标还停在气泡上就不关」这条规则拦住了 `hide_now()`。
+
+于是：气泡一 `show()`，鼠标通常就落在它范围内 → `_bubble_hovered` 立刻为真 →
+切页时的 `hide_now()` 直接 return → **气泡永久置顶**，把它覆盖的区域点击全吃掉。
+而且 Qt 不会给被隐藏的窗口补发 `leaveEvent`，标志一旦卡在 True 就再也不会复位。
+
+修法（三条一起，缺一不可）：
+
+1. `hide_now()` 强制关（`_do_close(force=True)`），不受悬停影响；
+2. `PreviewBubble.hideEvent` 里清掉 `_bubble_hovered`；
+3. `MainWindow.hideEvent`（收托盘 / 最小化）主动 `hide_now()` —— 气泡不跟主窗口隐藏。
+
+守卫：`tests/test_ui_win2.py::test_preview_hide_now_survives_hover` /
+`test_preview_hover_flag_cleared_on_hide` / `test_window_hide_closes_preview_bubble`。
+
+### 15.3 已知真因二：原生 tooltip 压住按钮（2026-11-06 结论，仍然有效）
+
+Qt 的 tooltip 窗口 exstyle = `0x88`（TOOLWINDOW | TOPMOST），**没有
+`WS_EX_TRANSPARENT`** —— 它压住哪个按钮，那个按钮就点不动（第一次点击只是关掉
+tooltip，不会重放给下面的控件）。所以**切换页的按钮一律不挂 tooltip**，
+守卫 `test_switch_buttons_never_pop_a_hover_bubble`。
+
+其他页（设置页「清理」、标题栏、侧栏把手、剪贴板暂停、配对页刷新）仍有原生
+tooltip，属已知取舍；如果哪天又出现「点一次没反应、再点就好了」，先怀疑它们。
+
+### 15.4 别的原因（按概率）
+
+| 现象 | 查什么 |
+|---|---|
+| 鼠标指针不见了 / 不动 | 罗技 HID++ 把鼠标切到另一台了，按鼠标底部 Easy-Switch 键切回（§11.4） |
+| 点哪都没反应，且主窗口有半透明灰蒙层 | `ConfirmOverlay` 没关掉，点卡片外 / 按 Esc 即可 |
+| 窗口像卡死，标题栏也拖不动 | 显示器标定对话框（`CalibrationDialog`，`Qt.Dialog` + `exec()`）被藏在后面，`Alt+Tab` 找它 |
+| 起了两个窗口叠在一起 | 单实例锁失效，看 `PROGRESS.md` §8 的 2026-11-08 09:50 条目 |

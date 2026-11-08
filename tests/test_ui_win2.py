@@ -445,6 +445,63 @@ def test_single_click_copies_double_click_previews(app, cfg):
     page.close()
 
 
+def test_preview_hide_now_survives_hover(app, cfg):
+    """气泡是置顶顶层窗口，切页时必须能**强制**关掉。
+
+    2026-11-08 用户报「设置完鼠标后点菜单没反应」：`PreviewBubble` 是
+    `Qt.Tool | WindowStaysOnTopHint` 的顶层窗口，一 `show()` 鼠标通常就落在它
+    范围内 → `_bubble_hovered` 立刻为真 → 切页的 `hide_now()` 被「鼠标还在气泡上
+    就不关」那条规则拦住 → 气泡永久置顶，把主窗口的点击全吃掉（它的窗口矩形
+    含阴影/箭头留白，整体吃事件）。
+    """
+    ctrl = PreviewController(None)
+    ctrl.bubble.show()
+    app.processEvents()
+    assert ctrl.bubble.isVisible()
+    ctrl.notify_bubble_hover(True)          # 模拟「鼠标正停在气泡上」
+
+    ctrl.hide_now()
+    assert not ctrl.bubble.isVisible(), "hide_now() 必须强制关，不能被悬停拦住"
+    assert ctrl._bubble_hovered is False, "强制关之后要清掉悬停标志"
+
+
+def test_preview_hover_flag_cleared_on_hide(app, cfg):
+    """Qt 不给被隐藏的窗口补发 leaveEvent → 标志必须由 hideEvent 清。
+
+    不清的话 `_bubble_hovered` 永久停在 True，之后 `schedule_close()` 全部失效，
+    气泡再弹出来就关不掉了。
+    """
+    ctrl = PreviewController(None)
+    ctrl.bubble.show()
+    app.processEvents()
+    ctrl.notify_bubble_hover(True)
+    assert ctrl._bubble_hovered is True
+
+    ctrl.bubble.hide()
+    app.processEvents()
+    assert ctrl._bubble_hovered is False
+
+
+def test_window_hide_closes_preview_bubble(app, cfg):
+    """收托盘 / 最小化时必须收掉气泡：它是无 parent 的置顶顶层窗口，不跟主窗隐藏。"""
+
+    class _Ctrl:
+        def __init__(self):
+            self.hidden = 0
+
+        def hide_now(self):
+            self.hidden += 1
+
+    ctrl = _Ctrl()
+    win = MainWindow(cfg, "Alt+Space", "v0")
+    win.clip_page = type("_Clip", (), {"preview_controller": ctrl})()
+    win.show()
+    app.processEvents()
+    win.hide()
+    app.processEvents()
+    assert ctrl.hidden == 1, "主窗口隐藏时要主动收气泡"
+
+
 def test_preview_delays(app, cfg):
     assert PreviewController.OPEN_DELAY_MS == 450
     assert PreviewController.CLOSE_DELAY_MS == 220

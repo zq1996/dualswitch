@@ -519,6 +519,31 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-08 13:0x **修「点哪都不好使」：悬浮预览气泡关不掉 → 永久置顶吃点击**
+  · 用户报：V3 界面一开始能点，改完鼠标设置后点侧栏/菜单全没反应；昨天就出现过，
+    当时归因于「浮窗遮挡」，删掉浮窗后仍在。
+  · **真因（实测复现）**：`ui/win2/preview.py::PreviewBubble` 是
+    `Qt.Tool | WindowStaysOnTopHint` 的**无 parent 顶层窗口**，窗口矩形（含阴影/箭头
+    留白）整体吃鼠标事件；而 `hide_now()` 走 `_do_close()`，后者开头有
+    「`_bubble_hovered` 为真就直接 return」。气泡一 `show()`，鼠标通常就落在它范围内
+    → `enterEvent` 立刻把标志置真 → **切页的 `hide_now()` 变成空操作** → 气泡永久置顶。
+    离屏实测：`show()` 后 `_bubble_hovered` 自动为 True，`hide_now()` 后仍可见。
+  · 第二重：Qt 不给被隐藏的窗口补发 `leaveEvent`，标志一旦卡 True 就再也不会复位。
+    第三重：气泡不跟主窗口隐藏，**收托盘后它会孤零零留在桌面上**（此时更关不掉）。
+  · 修三处：① `hide_now()` 传 `force=True`（`_do_close(force=...)`，保留「悬停时
+    `schedule_close` 不关」的设计意图）；② `PreviewBubble.hideEvent` 清 `_bubble_hovered`；
+    ③ `MainWindow.hideEvent`（收托盘/最小化）主动 `hide_now()`。
+  · 顺手修：`on_config_saved` 每次都 `self.toast = Toast(self.window)` 新建一个 —— 旧的
+    没人 delete，连点几十次设置就攒一堆子控件 + QTimer；改为复用（`show_text` 自带 raise_()）。
+  · 排除项（都实测过，不是它们）：侧栏按钮在 `app.setStyleSheet()` 全局重设后仍能点、
+    `apply_port_count()` 改窗口尺寸后仍能点、`FollowRow.set_state` 只改文字不重建控件、
+    `ConfirmOverlay` 点卡片外即关、`runner.eventFilter` 只处理 `ApplicationActivate` 不吞鼠标。
+  · 新增现场取证工具 `tools/diag_click_block.py`：读光标位置 → `WindowFromPoint` →
+    打印该点最上层窗口的进程/类名/尺寸/是否置顶/是否鼠标穿透，再列所有可见置顶窗口。
+    出问题时把鼠标放在点不动的按钮上跑一次即可指认遮挡源（只读，不碰 DDC/剪贴板）。
+  · 文档：`docs/TROUBLESHOOTING.md` 新增 §15（含 tooltip、HID++ 切走鼠标、标定对话框
+    模态、双实例四种「点不动」的分诊表）。
+  · 基线：**627 tests / 617 passed / 0 failed / 10 skipped**（新增 3 条气泡守卫）。
 - 2026-11-08 12:5x **合并远端 `d351ff3`（Mac 端鼠标跟随设置页 + 解除配对浮出卡），Windows 端补同款设置组**
   · 远端一个提交两件事：① 配对页「解除配对」确认从「卡片下方多长一块」改成贴按钮浮出的
     `PopConfirm`（`ui/mac2/widgets.py`）；② 设置页新增「鼠标跟随」组，把原先只能手改

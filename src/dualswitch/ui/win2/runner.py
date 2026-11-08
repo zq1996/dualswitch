@@ -1140,7 +1140,9 @@ class UiRunner2(QObject):
 
         icons.clear_cache()
         self.app.setStyleSheet(theme.qss())
-        self.toast = Toast(self.window)
+        # 这里**不要**重建 Toast：旧的那个没人 delete，会一直挂在窗口上当子控件
+        # （它带 WA_TransparentForMouseEvents 不挡点击，但对象和它的 QTimer 都留着，
+        # 连点几十次设置就攒一堆）。样式表换过之后复用同一个即可，`show_text` 自带 raise_()。
         self.clipboard_page.mark_dirty()
         self.clipboard_page.refresh()
         self._apply_owner()                # 换了配置也保留「画面在 X」
