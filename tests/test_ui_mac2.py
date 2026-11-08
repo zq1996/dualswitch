@@ -1334,6 +1334,48 @@ def test_retention_days_prunes_old_records(app, cfg):
 # --------------------------------------------------------------------------- #
 # 16. 预览气泡：箭头是子控件、三段不挤压（第三轮返工）
 # --------------------------------------------------------------------------- #
+def test_preview_zoom_curve_matches_frset_measurement():
+    """入场必须复刻 Frset 实测：从锚点长到全尺寸，只过冲 1.8%（2026-11-08 逐帧实测）。
+
+    回归守卫：10-21 之后的实现是「窗口尺寸不动、只向外抖 1.5%」，起点就是 1.0，
+    看起来是啪一下出现，跟 Frset 那种「从缩略图弹出来」完全不是一个东西。
+    """
+    from dualswitch.ui.mac2 import preview as pv
+
+    keys = pv.ZOOM_KEYS
+    assert keys[0] == (0.0, 0.0), "必须从锚点上的一个点长出来，不能原地抖动"
+    assert abs(keys[-1][1] - 1.0) < 1e-9
+    peak = max(v for _, v in keys)
+    assert 1.015 <= peak <= 1.022, f"过冲应约 1.8%，实际 {peak:.3f}"
+    # 中段必须真的还在小尺寸：61ms 时约 46%（实测点）
+    ms, mid = pv.ZOOM_SAMPLES_MS[4]
+    assert ms == 61 and 0.42 < mid < 0.50
+    # 总时长对齐实测 473ms
+    assert 450 <= pv.ZOOM_DURATION_MS <= 500
+
+
+def test_preview_zoom_layer_hands_back_to_real_widgets(app, cfg):
+    """动画期间画位图、结束后交回真实控件（否则卡片永远是张图，按钮点不动）。"""
+    page = ClipboardPage(FakeEngine(make_records()))
+    page.refresh()
+    row = page._rows["t1"]
+    ctrl = page.preview_controller
+    ctrl.open_now(row.record, row.ui_kind, row.thumb)
+    bubble = ctrl.bubble
+
+    bubble.zoom_prepare()
+    bubble.zoom_capture()
+    assert bubble._zoom.isVisible()
+    assert not bubble._inner.isVisible() and not bubble._arrow.isVisible()
+    assert not bubble._zoom._pix.isNull(), "没拍到卡片，缩放层会画空白"
+
+    bubble.set_zoom(0.5)
+    bubble.zoom_end()
+    assert bubble._inner.isVisible() and bubble._arrow.isVisible()
+    assert not bubble._zoom.isVisible()
+    ctrl.hide_now()
+
+
 def test_preview_arrow_is_visible_child(app, cfg):
     page = ClipboardPage(FakeEngine(make_records()))
     page.refresh()
@@ -1755,8 +1797,10 @@ def test_file_bubble_buttons_by_type(app, cfg):
     ):
         row = page._rows[rid]
         ctrl.open_now(row.record, row.ui_kind, row.thumb)
-        assert ctrl.bubble._btn_preview.isVisible() is want_preview, rid
-        assert ctrl.bubble._btn_find.isVisible() is want_find, rid
+        # 入场动画期间画的是位图，真实控件被藏起来；这里验的是「按类型分派」，
+        # 所以看自身的显隐状态（isVisibleTo 忽略祖先是否在屏上）。
+        assert (not ctrl.bubble._btn_preview.isHidden()) is want_preview, rid
+        assert (not ctrl.bubble._btn_find.isHidden()) is want_find, rid
         ctrl.hide_now()
 
 
