@@ -244,14 +244,15 @@ class ClipRow(QFrame):
         act_row.setContentsMargins(0, 0, 0, 0)
         act_row.setSpacing(3)
         act_row.addWidget(self._act_button("copy", "复制", self.copyRequested))
+        has_path = bool(getattr(record, "path", "") or "")
         if self.ui_kind == "image":
-            # 截图：只有预览（没有文件可打开）
+            # 截图 / 图片文件：都能预览；图片文件还能在访达里定位（Frset 实测同款）
             act_row.addWidget(self._act_button("preview", "用图片预览打开", self.openRequested))
-        elif self.ui_kind == "file":
-            if record.png is not None:      # 图片文件：预览 + 打开文件
+            if has_path:
                 act_row.addWidget(
-                    self._act_button("preview", "用图片预览打开", self.openRequested)
+                    self._act_button("finder", "打开文件（在访达中显示）", self.findRequested)
                 )
+        elif self.ui_kind == "file":
             act_row.addWidget(
                 self._act_button("finder", "打开文件（在访达中显示）", self.findRequested)
             )
@@ -342,16 +343,16 @@ class ClipRow(QFrame):
         menu = QMenu(self)
         menu.setFont(theme.qfont(12))
         menu.addAction("复制", lambda: self.copyRequested.emit(self.record.id))
+        has_path = bool(getattr(self.record, "path", "") or "")
         if self.ui_kind == "image":
-            # 截图没有文件可打开
             menu.addAction("用图片预览打开", lambda: self.openRequested.emit(self.record.id))
+            if has_path:                    # 图片文件：也能在访达里定位
+                menu.addAction(
+                    "打开文件（在访达中显示）", lambda: self.findRequested.emit(self.record.id)
+                )
         elif self.ui_kind == "link":
             menu.addAction("打开链接", lambda: self.openRequested.emit(self.record.id))
         elif self.ui_kind == "file":
-            if self.record.png is not None:
-                menu.addAction(
-                    "用图片预览打开", lambda: self.openRequested.emit(self.record.id)
-                )
             menu.addAction(
                 "打开文件（在访达中显示）", lambda: self.findRequested.emit(self.record.id)
             )

@@ -25,7 +25,15 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+    QTextDocument,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -74,6 +82,19 @@ FADE_KEYS: tuple[tuple[float, float], ...] = (
 )
 #: 动画步进：Qt 的动画驱动本身也是这个量级，16ms ≈ 60Hz
 ANIM_TICK_MS = 16
+#: 正文字体行距（Frset 1.3.16 实测约 1.7 倍：15px 字，行高约 26px）。
+#: QSS 的 line-height 对 QLabel 无效，只能走富文本，见 `_rich_text`。
+LINE_HEIGHT_PCT = 170
+
+
+def _rich_text(text: str) -> str:
+    """纯文本 → 带行距的富文本。转义 & < >，换行换成 <br>。
+
+    只为了让 QLabel 认 line-height；文本内容本身一个字都不改。
+    """
+    esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    esc = esc.replace("\n", "<br>")
+    return f'<div style="line-height:{LINE_HEIGHT_PCT}%">{esc}</div>'
 
 
 def sample_keys(keys: tuple[tuple[float, float], ...], progress: float) -> float:
@@ -331,21 +352,26 @@ class PreviewBubble(QFrame):
         inner_lay = QVBoxLayout(self._inner)
         inner_lay.setContentsMargins(0, 0, 0, 0)
         inner_lay.setSpacing(0)
+        self._inner_lay = inner_lay
 
         # ---- 头部 ----
         head = QFrame()
         head.setObjectName("pvHead")
         hl = QHBoxLayout(head)
-        hl.setContentsMargins(14, 11, 14, 10)
-        hl.setSpacing(9)
-        self._head_icon = QLabel()
-        self._head_icon.setFixedSize(18, 18)
+        hl.setContentsMargins(14, 10, 12, 8)
+        hl.setSpacing(6)
         self._head_title = ElidedLabel("", "pvTitle")
         self._pill_box = QHBoxLayout()
         self._pill_box.setContentsMargins(0, 0, 0, 0)
-        hl.addWidget(self._head_icon, 0, Qt.AlignVCenter)
+        # Frset 实测：标题只有类型名，右侧是**灰底上的线性小图标**（打开/复制），
+        # 没有类型图标、没有彩色主按钮。图标放这里，底栏只留信息。
+        self._btn_preview = IconButton("preview", "用图片预览打开", "pv")
+        self._btn_find = IconButton("finder", "打开文件（在访达中显示）", "pv")
+        self._btn_copy = IconButton("copy", "复制", "pv")
         hl.addWidget(self._head_title, 1)
         hl.addLayout(self._pill_box, 0)
+        for b in (self._btn_preview, self._btn_find, self._btn_copy):
+            hl.addWidget(b, 0, Qt.AlignVCenter)
         self._head = head
         inner_lay.addWidget(head)
 
@@ -366,12 +392,6 @@ class PreviewBubble(QFrame):
         fl.setSpacing(8)
         self._meta = ElidedLabel("", "pvMeta")
         fl.addWidget(self._meta, 1)
-        # 底栏按钮全图标（用户要求：剪贴板页不留文字按钮）
-        self._btn_preview = IconButton("preview", "用图片预览打开", "pv")
-        self._btn_find = IconButton("finder", "打开文件（在访达中显示）", "pv")
-        self._btn_copy = IconButton("copy", "复制", "pv", primary=True)
-        for b in (self._btn_preview, self._btn_find, self._btn_copy):
-            fl.addWidget(b, 0, Qt.AlignVCenter)
         self._btn_preview.setVisible(False)
         self._btn_find.setVisible(False)
         self._btn_preview.clicked.connect(lambda: self.openRequested.emit(self._record_id))
@@ -423,9 +443,10 @@ class PreviewBubble(QFrame):
         self._head.setFixedHeight(head_h)
         self._foot.setFixedHeight(foot_h)
 
-        text_w = max(80, inner_w - 28)
-        # 正文可用高度：上限 - 头 - 底栏 - body 上下内边距（14+14）
-        avail_h = max(40, max_h - head_h - foot_h - 28)
+        # 图片类铺满：正文没有 14×2 的内边距
+        body_pad = 0 if kind == "image" else 28
+        text_w = max(80, inner_w - body_pad)
+        avail_h = max(40, max_h - head_h - foot_h - body_pad)
         heights: list[int] = []
         for i in range(self._body_lay.count()):
             child = self._body_lay.itemAt(i).widget()
@@ -439,7 +460,7 @@ class PreviewBubble(QFrame):
             heights.append(height)
 
         spacing = self._body_lay.spacing()
-        body_h = 28 + sum(heights) + spacing * max(0, len(heights) - 1)
+        body_h = body_pad + sum(heights) + spacing * max(0, len(heights) - 1)
         budget = max_h - head_h - foot_h
         if body_h > budget:
             # 只压正文：从最后一个文本块开始收，留 60px 下限
@@ -452,10 +473,14 @@ class PreviewBubble(QFrame):
                     child.setFixedHeight(child.height() - shrink)
                     excess -= shrink
             body_h = budget
-        self._body_wrap.setFixedHeight(max(56, body_h))
-
         h = head_h + max(56, body_h) + foot_h
+        # Frset 实测：文本/代码/链接即使只有一行，气泡也是 246 高
+        # （346×246、586×246、556×246 三组实测完全一致）；图片按比例走，不受此限。
+        if kind != "image":
+            h = max(h, self.MIN_H)
         w, h = self._clamp_popover(kind, w, h, max_w, max_h)
+        # 白卡撑满：最小高度抬出来的那块给正文，别在气泡底部留一片灰
+        self._body_wrap.setFixedHeight(max(56, h - head_h - foot_h))
         self.resize(w, h)
         self._apply_inner_geometry()
 
@@ -486,6 +511,13 @@ class PreviewBubble(QFrame):
 
     def _label_height(self, label: QLabel, width: int) -> int:
         """`label` 在给定宽度下按词换行后的真实高度（sizeHint 不含换行高度）。"""
+        if label.textFormat() == Qt.RichText:
+            doc = QTextDocument()
+            doc.setDefaultFont(label.font())
+            doc.setDocumentMargin(0)
+            doc.setHtml(label.text())
+            doc.setTextWidth(max(20, width))
+            return int(doc.size().height())
         fm = QFontMetrics(label.font())
         flags = int(Qt.TextWordWrap | Qt.TextExpandTabs)
         return max(
@@ -557,8 +589,11 @@ class PreviewBubble(QFrame):
         kind = getattr(self, "_ui_kind", "text")
         pad = 28 + ARROW_MARGIN
         if kind == "image":
+            # 铺满：气泡宽就是图片宽（Frset 实测 562 宽的图 → 562 宽的气泡）
             pix = getattr(self, "_image_w", 0)
-            return min(max_w, max(200, pix + pad)) if pix else min(max_w, 240)
+            if not pix:
+                return min(max_w, theme.PV_IMG_MIN_W)
+            return min(max_w, max(theme.PV_IMG_MIN_W, pix))
         if kind == "file":
             # 文件卡是固定宽度，气泡必须跟着它（否则卡片被裁掉一截）
             return min(max_w, self.FILE_CARD_W + pad)
@@ -673,24 +708,24 @@ class PreviewBubble(QFrame):
     def show_record(self, record, ui_kind: str) -> None:  # noqa: ANN001
         self._record_id = record.id
         self._ui_kind = ui_kind
-        glyph = {
-            "image": "image", "file": icons.file_glyph(getattr(record, "path", "") or ""),
-            "link": "link-2", "code": "code", "text": "type",
-        }.get(ui_kind, "type")
-        # 文件卡的瓷砖底色是最浅的一档灰，拿来画字形会看不见 → 单独用 ink2
-        tint = (
-            theme.tokens().ink2 if ui_kind == "file" else theme.type_tile(ui_kind)[0]
-        )
-        self._head_icon.setPixmap(icons.svg_pixmap(glyph, 18, tint, 2.0))
-        if ui_kind == "file":
-            title = "文件"                       # 文件名放卡片里（照 Frset 的文件卡）
-        elif ui_kind == "image" and record.kind in ("image", "mixed"):
-            title = f"图片 {record.width}×{record.height}" if record.width else "图片"
-        else:
-            title = (record.text or "").splitlines()[0][:80] if record.text else "（空）"
+        # Frset 实测：标题就是**类型名**（文本/代码/链接/图片/文件），不是内容摘要
+        title = {
+            "image": "图片", "file": "文件", "link": "链接", "code": "代码", "text": "文本",
+        }.get(ui_kind, "文本")
         self._head_title.setText(title)
         self._replace_pill(record)
         self.clear_body()
+
+        # Frset 实测结构：图片类的图**直接铺满**（没有白卡、没有左右留白）；
+        # 文本/代码/链接/文件是「浅灰底上浮一张白卡」，左右各内缩 12。
+        flat = ui_kind == "image"
+        self._inner_lay.setContentsMargins(*(0, 0, 0, 0) if flat else (12, 0, 12, 6))
+        self._body_lay.setContentsMargins(*(0, 0, 0, 0) if flat else (14, 14, 14, 14))
+        name = "pvBodyFlat" if flat else "pvBody"
+        if self._body_wrap.objectName() != name:
+            self._body_wrap.setObjectName(name)
+            self._body_wrap.style().unpolish(self._body_wrap)
+            self._body_wrap.style().polish(self._body_wrap)
 
         builders = {
             "image": self._build_image,
@@ -704,10 +739,10 @@ class PreviewBubble(QFrame):
         self._meta.setText(footer_line(record, ui_kind))
         # 按钮规则（用户 2026-10-21）：
         #   截图 → 只有预览；图片文件 → 预览 + 打开文件；普通文件 → 只有打开文件
-        self._btn_preview.setVisible(
-            ui_kind == "image" or (ui_kind == "file" and record.png is not None)
-        )
-        self._btn_find.setVisible(ui_kind == "file")
+        has_path = bool(getattr(record, "path", "") or "")
+        self._btn_preview.setVisible(ui_kind == "image")
+        # 图片文件同样保留「在访达中显示」（Frset: 图片多给一个打开入口）
+        self._btn_find.setVisible(ui_kind == "file" or (ui_kind == "image" and has_path))
         self.sync_size()
 
     #: 分类上限（INTERACTIONS §3.4），值是**窗口**尺寸，不是内容尺寸
@@ -721,15 +756,21 @@ class PreviewBubble(QFrame):
         "link": (theme.PV_CARD_MAX_W, 320),
     }
 
-    #: 窗口上限里不能给图片的部分：头部 40 + 底栏 49 + 正文上下内边距 28
-    #: （注脚行已删，见 _build_image；它跟标题/底栏重复，白吃 32px 高度）
-    IMG_CHROME_H = 40 + 49 + 28
+    #: 非图片气泡的最小高度（Frset 实测：文本/代码/链接都是 246）
+    MIN_H = 246
+
+    #: 窗口上限里不能给图片的部分：头部 40 + 底栏 49
+    #: 图片类是铺满的，正文不再有 14×2 内边距（Frset 实测 562×522，图正好 562×449）
+    IMG_CHROME_H = 40 + 49
 
     @classmethod
     def _image_area(cls) -> tuple[int, int]:
-        """图片最大可渲染区域 = 窗口上限 − chrome（与 sync_size 用的是同一组数）。"""
+        """图片最大可渲染区域 = 窗口上限 − chrome（与 sync_size 用的是同一组数）。
+
+        图片类是**铺满**的（Frset 实测：图左侧紧贴气泡边缘），所以宽度不给内边距。
+        """
         return (
-            theme.PV_IMG_MAX_W - 28 - ARROW_MARGIN,
+            theme.PV_IMG_MAX_W - ARROW_MARGIN,
             theme.PV_IMG_MAX_H - cls.IMG_CHROME_H,
         )
 
@@ -787,7 +828,10 @@ class PreviewBubble(QFrame):
         shown = text[:cap]
         self._body_text = shown          # 测宽 / 量高都用这一段
 
-        label = QLabel(shown)
+        label = QLabel(_rich_text(shown))
+        label.setTextFormat(Qt.RichText)
+        # 正文是富文本（为了行距），原文留在属性上：测试与「取正文」都读它
+        label.setProperty("plainText", shown)
         label.setObjectName(object_name)
         label.setWordWrap(True)
         label.setAlignment(Qt.AlignLeft | Qt.AlignTop)

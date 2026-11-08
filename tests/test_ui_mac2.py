@@ -1394,7 +1394,10 @@ def test_preview_arrow_is_visible_child(app, cfg):
 
 
 def test_preview_footer_not_squeezed(app, cfg):
-    """底栏按钮不许被裁：底栏高度 == 它的 sizeHint，按钮完整落在底栏内。"""
+    """头部按钮不许被裁（Frset 把打开/复制放在标题栏右上角）。
+
+    2026-11-08：按钮从底栏移到头部，改为验「头部高度 == sizeHint、按钮完整落在头部内」。
+    """
     page = ClipboardPage(FakeEngine(make_records()))
     page.refresh()
     ctrl = page.preview_controller
@@ -1402,12 +1405,12 @@ def test_preview_footer_not_squeezed(app, cfg):
         row = page._rows[rid]
         ctrl.open_now(row.record, row.ui_kind, row.thumb)
         bubble = ctrl.bubble
-        assert bubble._foot.height() == bubble._foot.sizeHint().height()
+        head = bubble._head
+        assert head.height() == head.sizeHint().height(), "头部被压扁"
         btn = bubble._btn_copy
-        btn_bottom = bubble._foot.y() + btn.y() + btn.height()
-        assert btn_bottom <= bubble.height() - 6, "复制按钮贴到底边了"
-        right = bubble._inner.x() + btn.x() + btn.width()
-        assert right <= bubble.width() - 8, "复制按钮贴到右边了"
+        assert btn.y() >= 0 and btn.y() + btn.height() <= head.height(), "复制按钮超出头部"
+        right = bubble._inner.x() + head.x() + btn.x() + btn.width()
+        assert right <= bubble.width() - 6, "复制按钮贴到右边了"
         ctrl.hide_now()
 
 
@@ -1742,11 +1745,18 @@ def _file_png():
 
 
 def test_file_record_is_classified_as_file(app):
+    """访达复制的文件：**图片文件归图片**（出大图），其它文件才是文件卡。
+
+    Frset 1.3.16 实测（2026-11-08）：PNG 的预览就是图片，图铺满、标题「图片」。
+    旧规则 `if path: return "file"` 让图片文件在预览里只剩文档图标，已改。
+    """
     from dualswitch.ui.mac2 import openers
 
-    # 图片文件也是「文件」（path 优先），不是「图片」
-    assert openers.classify_record("mixed", "a.png", "/x/a.png") == "file"
+    assert openers.classify_record("mixed", "a.png", "/x/a.png") == "image"
+    assert openers.classify_record("mixed", "照片.JPG", "/x/照片.JPG") == "image"
+    assert openers.classify_record("mixed", "a.heic", "/x/a.heic") == "image"
     assert openers.classify_record("text", "a.dmg", "/x/a.dmg") == "file"
+    assert openers.classify_record("text", "a.txt", "/x/a.txt") == "file"
     assert openers.classify_record("mixed", "a.png") == "image"
 
 
@@ -1963,8 +1973,8 @@ def test_text_preview_shows_everything(app, cfg):
             "文件卡、扩展名字形、引擎不发文件、单击复制。\n") * 8
     bubble = _bubble_with(page, text)
     label = bubble._text_label
-    assert label.text() == text, "文本预览被截断了"
-    assert "…" not in label.text()
+    assert label.property("plainText") == text, "文本预览被截断了"
+    assert "…" not in label.property("plainText")
     # 正文完整落在滚动区域内，不越界到底栏
     assert label.height() >= bubble._text_scroll.height() - 2 or \
         bubble._text_scroll.verticalScrollBar().maximum() >= 0
@@ -1981,7 +1991,7 @@ def test_text_preview_grows_beyond_old_cap(app, cfg):
     text = "短句。" * 400                        # 约 1200 字，明显超过旧上限
     bubble = _bubble_with(page, text)
     assert bubble.height() > _theme.PV_TXT_MAX_H, "长文本要把预览窗撑高，而不是裁掉"
-    assert bubble._text_label.text() == text
+    assert bubble._text_label.property("plainText") == text
     page.preview_controller.hide_now()
 
 
@@ -1993,7 +2003,7 @@ def test_text_preview_scrolls_when_taller_than_screen(app, cfg):
     bar = bubble._text_scroll.verticalScrollBar()
     assert bubble.height() <= bubble._screen_cap() + 2
     assert bar.maximum() > 0, "超屏文本必须能滚动"
-    assert bubble._text_label.text() == text, "滚动也不能裁字"
+    assert bubble._text_label.property("plainText") == text, "滚动也不能裁字"
     page.preview_controller.hide_now()
 
 
@@ -2005,7 +2015,7 @@ def test_text_preview_caps_only_huge_text(app, cfg):
     text = "验证：全量 pytest 全绿。" * 4000      # 超过 PV_TEXT_MAX_CHARS
     assert len(text) > _theme.PV_TEXT_MAX_CHARS
     bubble = _bubble_with(page, text)
-    assert len(bubble._text_label.text()) == _theme.PV_TEXT_MAX_CHARS
+    assert len(bubble._text_label.property("plainText")) == _theme.PV_TEXT_MAX_CHARS
     assert bubble._text_note is not None
     assert "只渲染了前" in bubble._text_note.text()
     page.preview_controller.hide_now()
@@ -2014,7 +2024,7 @@ def test_text_preview_caps_only_huge_text(app, cfg):
 def test_short_text_preview_not_scrolled(app, cfg):
     page = ClipboardPage(FakeEngine([]))
     bubble = _bubble_with(page, "明天下午三点，会议室 B")
-    assert bubble._text_label.text() == "明天下午三点，会议室 B"
+    assert bubble._text_label.property("plainText") == "明天下午三点，会议室 B"
     assert bubble._text_scroll.verticalScrollBar().maximum() == 0, "短文本不该出现滚动条"
     page.preview_controller.hide_now()
 
