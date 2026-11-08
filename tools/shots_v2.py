@@ -283,6 +283,7 @@ def main() -> int:
             cp.preview_controller.open_now(row.record, row.ui_kind, row.thumb)
             app.processEvents()
             win.grab().save(str(OUT / "v2-clipboard-hover.png"))
+            cp.preview_controller.bubble.zoom_end()  # 出图要最终样子
             cp.preview_controller.bubble.grab().save(str(OUT / "v2-preview-bubble.png"))
             cp.preview_controller.hide_now()
 
@@ -307,6 +308,7 @@ def main() -> int:
                 cp.preview_controller.open_now(crow.record, crow.ui_kind, crow.thumb)
                 app.processEvents()
                 win.grab().save(str(OUT / f"{name}.png"))
+                cp.preview_controller.bubble.zoom_end()  # 出图要最终样子
                 cp.preview_controller.bubble.grab().save(str(OUT / f"{name}.png"))
                 cp.preview_controller.hide_now()
                 crow._fade_acts(0.0)
@@ -316,6 +318,7 @@ def main() -> int:
             lrow = cp._rows["l2"]
             cp.preview_controller.open_now(lrow.record, lrow.ui_kind, lrow.thumb)
             app.processEvents()
+            cp.preview_controller.bubble.zoom_end()  # 出图要最终样子
             cp.preview_controller.bubble.grab().save(str(OUT / "v2-preview-longtext.png"))
             cp.preview_controller.hide_now()
 

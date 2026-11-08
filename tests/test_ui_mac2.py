@@ -1682,25 +1682,48 @@ def test_file_bubble_buttons_by_type(app, cfg):
         ctrl.hide_now()
 
 
-def test_file_bubble_is_file_card_not_image(app, cfg, tmp_path):
-    """图片文件的气泡是「文件」卡：标题写「文件」，正文是文件名 + 目录。"""
+def _body_pixmap_names(bubble):
+    from PySide6.QtWidgets import QLabel
+
+    return [
+        w.objectName() for w in bubble._body_wrap.findChildren(QLabel)
+        if w.pixmap() is not None and not w.pixmap().isNull()
+    ]
+
+
+def test_image_file_bubble_shows_the_picture(app, cfg):
+    """图片文件（访达复制的 PNG）：文件卡里要出真图 + 文件名 + 目录。
+
+    2026-11-08 修回归：之前一律只画 52px 文档图标，图片文件在预览窗里看不到图
+    （缩略图有、预览没有）。`clipboard/macos.py` 本来就在为图片文件抽 png。
+    """
+    from PySide6.QtWidgets import QLabel
+
     rec = _file_rec("fi", "照片.png", png=_file_png())
     page = ClipboardPage(FakeEngine([rec]))
     page.refresh()
     page.preview_controller.open_now(rec, "file", page._rows["fi"].thumb)
     bubble = page.preview_controller.bubble
-    assert bubble._head_title.text() == "文件"
-    from PySide6.QtWidgets import QLabel
 
     texts = [w.text() for w in bubble._body_wrap.findChildren(QLabel)]
     assert "照片.png" in texts, "文件卡正文要有文件名"
     assert "~/Downloads" in texts, "文件卡正文要有目录"
-    body_pixmaps = [
-        w for w in bubble._body_wrap.findChildren(QLabel)
-        if w.objectName() != "pvFileIcon"
-        and w.pixmap() is not None and not w.pixmap().isNull()
-    ]
-    assert not body_pixmaps, "文件卡不该塞图片正文（缩略图里已经有了）"
+    assert "pvFileShot" in _body_pixmap_names(bubble), "图片文件必须在预览里出图"
+    assert "pvFileIcon" not in _body_pixmap_names(bubble), "出图了就别再叠文档图标"
+    page.preview_controller.hide_now()
+
+
+def test_plain_file_bubble_has_no_picture(app, cfg):
+    """普通文件（没有像素数据）仍是文档图标卡片，不许去读文件或占位出图。"""
+    rec = _file_rec("fd", "ChatGPTInstaller.dmg")
+    page = ClipboardPage(FakeEngine([rec]))
+    page.refresh()
+    page.preview_controller.open_now(rec, "file", page._rows["fd"].thumb)
+    bubble = page.preview_controller.bubble
+
+    names = _body_pixmap_names(bubble)
+    assert "pvFileIcon" in names
+    assert "pvFileShot" not in names
     page.preview_controller.hide_now()
 
 
