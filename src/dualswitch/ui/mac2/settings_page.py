@@ -12,6 +12,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence
 from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -138,6 +139,51 @@ class HotkeyKeycaps(QWidget):
 # --------------------------------------------------------------------------- #
 # 设置页
 # --------------------------------------------------------------------------- #
+class SlotPicker(QWidget):
+    """1 / 2 / 3 三个小方块单选。0 = 三个都不选中（槽位还没配）。
+
+    不用 `Segmented`：那是给「标准 / 自动」这类两三字选项的，一个数字塞进去
+    被撑成 80px 宽的按钮，行里看着像占了半行。
+    """
+
+    changed = Signal(int)
+
+    def __init__(self, value: int = 0, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._buttons: dict[int, QPushButton] = {}
+        current = int(value or 0)
+        for n in (1, 2, 3):
+            btn = QPushButton(str(n))
+            btn.setObjectName("slotBtn")
+            btn.setCheckable(True)
+            btn.setFixedSize(34, 28)
+            btn.setFocusPolicy(Qt.NoFocus)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setChecked(n == current)
+            btn.clicked.connect(lambda _=False, v=n: self._pick(v))
+            lay.addWidget(btn)
+            self._group.addButton(btn)
+            self._buttons[n] = btn
+
+    def _pick(self, value: int) -> None:
+        self.changed.emit(value)
+
+    def value(self) -> int:
+        for n, btn in self._buttons.items():
+            if btn.isChecked():
+                return n
+        return 0
+
+    def set_value(self, value: int) -> None:
+        for n, btn in self._buttons.items():
+            btn.setChecked(n == int(value or 0))
+
+
 class MonitorEntry(QFrame):
     """「显示器配置 ›」整行可点：设计稿 ④ 的 openrow（右侧是说明 + 折角箭头）。"""
 
@@ -224,6 +270,33 @@ class SettingsPage(QWidget):
             settings_row("DDC 后端", "auto 在 mac 上即 m1ddc", val_backend),
         ])
 
+        # ---- 鼠标跟随（Easy-Switch 槽位）----
+        # 以前只能手改 config.json 的 mouse_switch；槽位没配时切屏页的开关是隐藏的，
+        # 等于「有个功能但打不开」。这里把配置摊到界面上：两端槽位 + 切换延时。
+        # 开关仍留在切换页（跟随卡片那一行），避免两处控件互相覆盖。
+        ms = getattr(self.cfg, "mouse_switch", None)
+        self.pick_slot_local = SlotPicker(int(getattr(ms, "local_slot", 0) or 0))
+        self.pick_slot_local.changed.connect(self._on_slot_changed)
+        self.pick_slot_peer = SlotPicker(int(getattr(ms, "peer_slot", 0) or 0))
+        self.pick_slot_peer.changed.connect(self._on_slot_changed)
+        self.edit_settle = QLineEdit(str(int(getattr(ms, "settle_ms", 800) or 0)))
+        self.edit_settle.setObjectName("numEdit")
+        self.edit_settle.setFixedSize(66, 28)
+        self.edit_settle.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.edit_settle.setValidator(QIntValidator(0, 5000, self))
+        self.edit_settle.editingFinished.connect(self._apply)
+        sec_mouse = self._section("鼠标跟随", [
+            settings_row(
+                "本机槽位", "鼠标底部 Easy-Switch 键上的 1·2·3，本机接在哪个",
+                self.pick_slot_local,
+            ),
+            settings_row(
+                "对端槽位", "另一台电脑占的槽位，不能和本机相同",
+                self.pick_slot_peer,
+            ),
+            settings_row("切换延时", "切屏成功后等多久再把鼠标推过去", self._settle_control()),
+        ])
+
         # ---- 通用 ----
         self.sw_notify = ToggleSwitch(self.cfg.notify)
         self.sw_notify.clicked.connect(self._apply)
@@ -269,7 +342,7 @@ class SettingsPage(QWidget):
             settings_row("只认右 Option", "打开后左 Option 不触发", self.sw_strict),
         ])
 
-        for section in (sec_monitor, sec_general, sec_clip, sec_hotkey):
+        for section in (sec_monitor, sec_mouse, sec_general, sec_clip, sec_hotkey):
             lay.addWidget(section)
         lay.addStretch(1)
         self._refresh_storage()
@@ -299,6 +372,37 @@ class SettingsPage(QWidget):
             card_lay.addWidget(row)
         col.addWidget(card)
         return wrap
+
+    # --- 鼠标跟随 ---
+    def _on_slot_changed(self, _value: int) -> None:
+        """两端不能同一个槽位：撞了就退回原值，别让界面显示一个存不下去的组合。"""
+        local = self.pick_slot_local.value()
+        peer = self.pick_slot_peer.value()
+        if local and local == peer:
+            ms = getattr(self.cfg, "mouse_switch", None)
+            self.pick_slot_local.set_value(int(getattr(ms, "local_slot", 0) or 0))
+            self.pick_slot_peer.set_value(int(getattr(ms, "peer_slot", 0) or 0))
+            self.toastRequested.emit("本机和对端不能选同一个槽位")
+            return
+        self._apply()
+
+    def _settle_control(self) -> QWidget:
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        row.addWidget(self.edit_settle, 0, Qt.AlignVCenter)
+        row.addWidget(label("ms", "setVal"), 0, Qt.AlignVCenter)
+        return box
+
+    def _settle_value(self) -> int:
+        """切换延时 → 整数（非法/越界夹到 0–5000）。"""
+        try:
+            value = int(str(self.edit_settle.text()).strip() or 0)
+        except ValueError:
+            ms = getattr(self.cfg, "mouse_switch", None)
+            value = int(getattr(ms, "settle_ms", 800) or 0)
+        return max(0, min(5000, value))
 
     def _storage_limit_value(self) -> int:
         """存储上限输入框 → 整数（非法/越界就夹到 10–5000）。"""
@@ -390,6 +494,19 @@ class SettingsPage(QWidget):
                 storage_limit_mb=self._storage_limit_value(),
             )
             data["clipboard"] = clip
+            local_slot = self.pick_slot_local.value()
+            peer_slot = self.pick_slot_peer.value()
+            if local_slot and local_slot == peer_slot:
+                # 两端同一个槽位 = 打开鼠标跟随后两边互相把对方推走，先拦住
+                self.toastRequested.emit("本机和对端不能选同一个槽位")
+                return
+            mouse = dict(data.get("mouse_switch") or {})
+            mouse.update(
+                local_slot=local_slot,
+                peer_slot=peer_slot,
+                settle_ms=self._settle_value(),
+            )
+            data["mouse_switch"] = mouse
             validated = from_dict(data)
             save_config(validated, self.config_file)
         except (ConfigError, HotkeyError, ValueError) as exc:

@@ -835,6 +835,17 @@ QT_QPA_PLATFORM=offscreen <venv python> tools/shots_win2.py
 `pair_with_peer(addr, pin)`（阻塞 ≤15s，必须后台线程）/ `unpair()` / `pairing_status()` /
 `discovered_peers()` / `refresh_discovery()`。
 
+> **2026-11-08 · 两端确认样式暂时不同（不必强行对齐）**
+>
+> mac 端把「解除配对」的确认从「卡片下方多长一块」改成了**贴按钮浮出的小卡**
+> （`ui/mac2/widgets.py::PopConfirm`，popover 观感，见 `INTERACTIONS-v2.md` §10.26）；
+> Windows 端继续用 §8 的窗口内遮罩即可 —— 两者都守「只有一个窗口」，层级也都不重。
+> 要统一是后续决定，别为了对齐去返工已经能用的遮罩。
+>
+> 同一天 mac 端设置页新增了「鼠标跟随」组（`mouse_switch.local_slot / peer_slot / settle_ms`
+> 可配，以前只能手改 config.json）。Windows 端要做就照同一组字段与文案，
+> **别自己发明第二套语义**（0 = 未配置、两端不能同槽位）。
+
 ### 14.2 已拍板（2026-10-22）：侧栏 156 + 收起 / 侧栏退出按钮
 
 > 用户 2026-10-22 明确选择「配对页 + 侧栏全跟」。原来这里的「待拍板」结论作废，

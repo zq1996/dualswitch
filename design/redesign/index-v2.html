@@ -592,6 +592,14 @@ body{
   padding:4.5px 10px;border-radius:6px;cursor:pointer;
 }
 .seg-mini button.on{background:var(--accent);color:#fff;font-weight:650}
+/* 鼠标 Easy-Switch 槽位 1·2·3 */
+.slot-group{display:flex;gap:4px}
+.slot-btn{
+  width:34px;height:28px;border-radius:7px;border:1px solid var(--line);
+  background:var(--card);color:var(--ink-2);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;
+}
+.slot-btn:hover{border-color:var(--accent);color:var(--accent-deep)}
+.slot-btn.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:650}
 
 /* ═══════════════════════════════════════
    配对电脑（2026-10-22 新增，待评审）
@@ -674,10 +682,26 @@ body{
 .pair-note{display:flex;gap:8px;align-items:flex-start;margin-top:12px;padding:9px 11px;border-radius:8px;background:var(--card-3);color:var(--ink-3);font-size:10px;line-height:1.6}
 .btn-danger{height:34px;padding:0 14px;border-radius:8px;border:1px solid transparent;background:var(--danger);color:#fff;font:inherit;font-size:11.5px;font-weight:650;cursor:pointer}
 .btn-danger:hover{filter:brightness(.94)}
-.pair-confirm{margin-top:12px;padding:12px 14px;border-radius:10px;background:var(--danger-bg);border:1px solid rgba(168,43,43,.18)}
-.pair-confirm[hidden]{display:none}
-.pair-confirm .t{font-size:11.5px;font-weight:650;color:var(--danger)}
-.pair-confirm .s{font-size:10px;color:var(--ink-2);line-height:1.6;margin-top:4px}
+/* 「解除配对」确认：贴着按钮浮出的小卡（popover 观感，不是弹窗、也不在卡片里多长一块） */
+.pair-actions{position:relative}
+.pair-pop{
+  position:absolute; right:0; bottom:calc(100% + 12px); width:268px; z-index:6;
+  background:var(--card); border:1px solid var(--line-soft); border-radius:12px;
+  box-shadow:0 8px 30px rgba(16,24,40,.16),0 2px 8px rgba(16,24,40,.06);
+  padding:12px 12px 10px;
+}
+.pair-pop[hidden]{display:none}
+.pair-pop .t{font-size:12.5px;font-weight:650;color:var(--ink);line-height:1.4}
+.pair-pop .s{font-size:10.5px;color:var(--ink-3);line-height:1.6;margin-top:5px}
+.pair-pop .pop-actions{display:flex;gap:4px;justify-content:flex-end;margin-top:10px}
+.pair-pop .pop-btn{height:26px;padding:0 10px;border-radius:7px;border:0;background:transparent;font:inherit;font-size:11.5px;font-weight:600;color:var(--ink-2);cursor:pointer}
+.pair-pop .pop-btn:hover{background:var(--card-3);color:var(--ink)}
+.pair-pop .pop-btn.danger{color:var(--danger);font-weight:650}
+.pair-pop .pop-btn.danger:hover{background:var(--danger-bg)}
+.pair-pop::after{
+  content:""; position:absolute; right:52px; top:100%; width:12px; height:6px;
+  background:var(--card); clip-path:polygon(0 0,50% 100%,100% 0);
+}
 
 /* ── 侧栏说明 ─────────────────────────── */
 .side{width:300px;flex-shrink:0;display:flex;flex-direction:column;gap:13px}
@@ -1024,6 +1048,27 @@ body{
             <!-- ── 设置页 ── -->
             <div class="page" id="pageSet">
               <div class="set-sec">
+                <div class="set-hd">鼠标跟随</div>
+                <div class="set-card">
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">本机槽位</div><div class="set-s">鼠标底部 Easy-Switch 键上的 1·2·3，本机接在哪个</div></div>
+                    <div class="slot-group" data-slot><button class="slot-btn">1</button><button class="slot-btn">2</button><button class="slot-btn">3</button></div>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">对端槽位</div><div class="set-s">另一台电脑占的槽位，不能和本机相同</div></div>
+                    <div class="slot-group" data-slot><button class="slot-btn">1</button><button class="slot-btn">2</button><button class="slot-btn">3</button></div>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-tx"><div class="set-t">切换延时</div><div class="set-s">切屏成功后等多久再把鼠标推过去</div></div>
+                    <div class="storage-ctl">
+                      <input class="num-input" value="800" aria-label="切换延时">
+                      <span class="set-val">ms</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-sec">
                 <div class="set-hd">通用</div>
                 <div class="set-card">
                   <div class="set-row">
@@ -1266,13 +1311,13 @@ body{
                   <div class="pair-actions">
                     <button class="btn-ghost" id="btnRepair">重新配对</button>
                     <button class="btn-danger" id="btnUnpair">解除配对</button>
-                  </div>
-                  <div class="pair-confirm" id="pairConfirm" hidden>
-                    <div class="t">解除和 DESKTOP-8Q2K 的配对？</div>
-                    <div class="s">解除后本机剪贴板只在本机记录，不再同步到这台电脑；历史记录会保留，另一台电脑不会收到通知。</div>
-                    <div class="pair-actions" style="margin-top:10px">
-                      <button class="btn-ghost" id="btnUnpairCancel">取消</button>
-                      <button class="btn-danger" id="btnUnpairConfirm">解除配对</button>
+                    <div class="pair-pop" id="pairConfirm" hidden>
+                      <div class="t">解除和 DESKTOP-8Q2K 的配对？</div>
+                      <div class="s">解除后本机剪贴板只在本机记录，不再同步到这台电脑；历史记录会保留。</div>
+                      <div class="pop-actions">
+                        <button class="pop-btn" id="btnUnpairCancel">取消</button>
+                        <button class="pop-btn danger" id="btnUnpairConfirm">解除配对</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1920,6 +1965,11 @@ const ICONS = {
   bindSeg("#segTheme", b=> document.documentElement.dataset.theme=b.dataset.theme);
   $$("[data-toggle]").forEach(t=> t.addEventListener("click", ()=> t.classList.toggle("on")));
   $$("[data-seg]").forEach(s=> s.addEventListener("click", e=>{
+    const b=e.target.closest("button"); if(!b) return;
+    $$("button",s).forEach(x=>x.classList.remove("on")); b.classList.add("on");
+  }));
+  /* 鼠标槽位：1·2·3 单选（再点一次不取消，和实现一致） */
+  $$("[data-slot]").forEach(s=> s.addEventListener("click", e=>{
     const b=e.target.closest("button"); if(!b) return;
     $$("button",s).forEach(x=>x.classList.remove("on")); b.classList.add("on");
   }));

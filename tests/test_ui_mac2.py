@@ -538,6 +538,26 @@ def test_pairing_unpair_confirm_survives_tick(app):
     assert page.confirm_title.text() == "解除和 DESKTOP-8Q2K 的配对？"
 
 
+def test_pairing_unpair_confirm_closes_on_outside_click(app):
+    """浮出的确认卡：点页面别处收起；点锚点本身也收起（不许「关掉又开一次」）。"""
+    engine = FakePairEngine(paired=True, peer_device="windows-3f2a91c4",
+                            peer_name="DESKTOP-8Q2K", addr="192.168.1.31:47823")
+    page = PairingPage(engine)
+    page.resize(592, 560)
+    page.show()
+    page.activate()
+
+    page._ask_unpair()
+    assert not page.confirm_box.isHidden()
+    QTest.mouseClick(page.paired_name, Qt.LeftButton)
+    assert page.confirm_box.isHidden(), "点卡片外没把确认卡收掉"
+
+    page._ask_unpair()
+    assert not page.confirm_box.isHidden()
+    QTest.mouseClick(page._unpair_btn, Qt.LeftButton)
+    assert page.confirm_box.isHidden(), "点锚点应该只收起，不该重新弹出来"
+
+
 def test_pairing_replace_confirm_survives_peer_rebuild(app):
     # 「替换配对」确认框不能放在设备列表里：列表按 device id 整块重建会连它一起 destroy，
     # self._replace_box 变成悬空指针，之后再 show/hide 就是 RuntimeError。
@@ -1605,11 +1625,17 @@ def test_settings_buttons_are_never_narrower_than_their_hint(app, cfg, tmp_path)
     """设置页按钮宽度必须容得下文字（`ghostBtn` 的 QSS padding 16px 要算进去）。
 
     mac2 的「清理」原来写死 56px，而 QSS 下两个汉字要 59px —— 文字会被裁掉半个字。
+
+    必须先套上主题：没有 QSS 时按原生按钮算 sizeHint（macOS 恒为 80px），
+    宽度写死的图标/数字小钮会被误判成「文字被裁」。
     """
     from PySide6.QtWidgets import QPushButton
 
+    from dualswitch.ui.mac2 import theme
     from dualswitch.ui.mac2.settings_page import SettingsPage
 
+    theme.set_appearance("light")
+    app.setStyleSheet(theme.qss())
     page = SettingsPage(cfg, tmp_path / "config.json")
     page.resize(624, 620)
     page.show()
@@ -2371,8 +2397,50 @@ def test_settings_group_order(app, cfg):
 
     page = SettingsPage(cfg, "/tmp/dualswitch-v3-test.json")
     titles = [lb.text() for lb in page.findChildren(QLabel) if lb.objectName() == "setSec"]
-    assert titles == ["显示器", "通用", "剪贴板", "热键"]
+    assert titles == ["显示器", "鼠标跟随", "通用", "剪贴板", "热键"]
     assert not hasattr(page, "seg_policy")
+
+
+def test_settings_mouse_slots_write_config(app, cfg, tmp_path):
+    """鼠标跟随的槽位/延时必须能在界面上改（以前只能手改 config.json）。
+
+    槽位没配时切屏页的开关是隐藏的，等于「有功能但打不开」。
+    """
+    from dualswitch.config import load
+    from dualswitch.ui.mac2.settings_page import SettingsPage
+
+    path = tmp_path / "config.json"
+    page = SettingsPage(cfg, path)
+    assert page.pick_slot_local.value() == 0
+    assert page.pick_slot_peer.value() == 0
+
+    page.pick_slot_local.set_value(2)
+    page._on_slot_changed(2)
+    page.pick_slot_peer.set_value(1)
+    page._on_slot_changed(1)
+    page.edit_settle.setText("600")
+    page._apply()
+
+    disk = load(path)
+    assert disk.mouse_switch.local_slot == 2
+    assert disk.mouse_switch.peer_slot == 1
+    assert disk.mouse_switch.settle_ms == 600
+
+
+def test_settings_mouse_slots_reject_same_slot(app, cfg, tmp_path):
+    """两端选同一个槽位要拦住：否则打开跟随会把两边互相推走。"""
+    from dualswitch.ui.mac2.settings_page import SettingsPage
+
+    page = SettingsPage(cfg, tmp_path / "config.json")
+    toasts: list[str] = []
+    page.toastRequested.connect(toasts.append)
+    page.pick_slot_local.set_value(3)
+    page._on_slot_changed(3)
+    page.pick_slot_peer.set_value(3)
+    page._on_slot_changed(3)
+    assert toasts and "同一个槽位" in toasts[-1]
+    assert page.cfg.mouse_switch.local_slot == 3
+    assert page.cfg.mouse_switch.peer_slot == 0
 
 
 def test_mac_window_quit_on_close(app, cfg):

@@ -674,6 +674,16 @@ def qss(t: Tokens | None = None) -> str:
     }}
     QPushButton#segBtn:hover {{ color: {t.ink}; }}
     QPushButton#segBtn:checked {{ background: {t.accent}; color: {t.on_accent}; font-weight: 650; }}
+    /* 鼠标 Easy-Switch 槽位 1·2·3（设置页） */
+    QPushButton#slotBtn {{
+        background: {t.card}; color: {t.ink2}; border: 1px solid {t.line};
+        border-radius: 7px; font-size: 11.5px; font-weight: 600; padding: 0;
+    }}
+    QPushButton#slotBtn:hover {{ border-color: {t.accent}; color: {t.accent_deep}; }}
+    QPushButton#slotBtn:checked {{
+        background: {t.accent}; color: {t.on_accent}; border-color: {t.accent};
+        font-weight: 650;
+    }}
     QPushButton#recordBtn {{
         background: transparent; border: 1px dashed {t.line}; border-radius: 8px;
         color: {t.ink2}; font-size: 11px; padding: 0 10px;
@@ -777,4 +787,21 @@ def qss(t: Tokens | None = None) -> str:
     #pairConfirmText {{ color: {t.ink2}; font-size: 10px; }}
     #pairCenterTitle {{ color: {t.ink}; font-size: 14px; font-weight: 680; }}
     #pairCenterSub {{ color: {t.ink3}; font-size: 11px; }}
+
+    /* ---------- 页内浮出确认（popover 观感，不是弹窗） ---------- */
+    #popCard {{
+        background: {t.card}; border: 1px solid {t.line_soft}; border-radius: 12px;
+    }}
+    #popTitle {{ color: {t.ink}; font-size: 12.5px; font-weight: 650; }}
+    #popSub {{ color: {t.ink3}; font-size: 10.5px; }}
+    QPushButton#popGhost {{
+        background: transparent; color: {t.ink2}; border: 0; border-radius: 7px;
+        font-size: 11.5px; font-weight: 600; padding: 0 10px;
+    }}
+    QPushButton#popGhost:hover {{ background: {t.card3}; color: {t.ink}; }}
+    QPushButton#popDanger {{
+        background: transparent; color: {t.danger}; border: 0; border-radius: 7px;
+        font-size: 11.5px; font-weight: 650; padding: 0 10px;
+    }}
+    QPushButton#popDanger:hover {{ background: {t.danger_bg}; }}
     """

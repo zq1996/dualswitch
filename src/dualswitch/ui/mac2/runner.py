@@ -676,7 +676,8 @@ class UiRunner2(QObject):
             # 槽位没配时开关打开也不会有任何效果（MouseSwitcher 先校验槽位），
             # 所以直接不给开关，别让人点了以为生效。
             page.set_mouse_follow(
-                False, "槽位未配置 · 在 config.json 填 mouse_switch", "idle", usable=False
+                False, "槽位未配置 · 去「设置 › 鼠标跟随」选好两端槽位", "idle",
+                usable=False,
             )
         elif bool(getattr(ms, "enabled", False)):
             page.set_mouse_follow(

@@ -212,6 +212,13 @@ def main() -> int:
         app.processEvents()
         win.grab().save(str(OUT / "v2-pair-paired.png"))
 
+        # 「解除配对」的确认：贴按钮浮出的小卡（§10.26），也出一张，方便对照
+        pair._ask_unpair()
+        app.processEvents()
+        win.grab().save(str(OUT / "v2-pair-unpair-confirm.png"))
+        pair._hide_unpair()
+        app.processEvents()
+
         pair_engine.set_status(
             state="idle", paired=False, connected=False, peer_device="", peer_name="",
             paired_at=0.0, addr="",

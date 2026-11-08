@@ -810,6 +810,58 @@ pytest -q tests/test_ui_mac2.py -k "fits_the_window or quick_actions or hover_ti
 `test_peer_tip_mentions_offline_state` / `test_hover_tip_wraps_long_text_and_waits_for_the_delay` /
 `test_switch_page_still_fits_the_window`。
 
+### 10.26 解除配对确认改成浮出小卡 + 设置页补「鼠标跟随」（2026-11-08）
+
+用户两条反馈：①「确认页面…下面又多出来一块，这块的设计太丑了，正常也没有这样的设计理念吧？」
+②「鼠标跟随的配置现在只能在配置文件里修改，应用界面不能配置」。
+
+#### ① 解除配对：改成贴按钮浮出的 popover
+
+先否掉了候选方案：**不做系统弹窗**（用户：「不用系统级的弹窗吧？层级有点大」）。
+QMessageBox / NSAlert 会把人从页面里拎出去，而这是一次「别点错」的二级确认，不是独立任务。
+
+| 项 | 规格 |
+|---|---|
+| 控件 | `ui/mac2/widgets.py::PopConfirm`（页面级一个实例，`pairing_page.confirm_box`） |
+| 卡片 | 宽 268、圆角 12、`card` 底、`line_soft` 1px 边框、阴影 blur 30 / y 8 / alpha 62 |
+| 小尖 | 高 6、半宽 6，指向触发按钮中心；**必须是后创建的子控件**（`_PopTail`）—— 画在父的 `paintEvent` 里会被 card 的 drop-shadow 压成灰影（实测） |
+| 位置 | 右缘对齐按钮、底边距按钮顶 10px；上方放不下翻到下方；x/y 钳进页面 |
+| 按钮 | 取消 = `ink2` 文字钮；确认 = `danger` 红字钮（`#popGhost` / `#popDanger`，高 26、圆角 7）；hover 才出底色 |
+| 关闭 | 点页面空白（viewport eventFilter）、`Esc`、取消按钮。**`Enter` 不绑确认** |
+| 布局影响 | 零。卡片是绝对定位子控件，不进任何 layout —— 这就是「不再多长一块」的根本 |
+
+保留的三条硬约束（§12.3）：常驻到用户操作、500ms 轮询只刷字段、不新建窗口。
+
+#### ② 设置页「鼠标跟随」：槽位与延时可配
+
+`MouseSwitchConfig.local_slot / peer_slot` 原先只能手改 config.json，而槽位没配时
+切屏页的鼠标开关是**隐藏**的（`_refresh_follow` 里的 `usable` 判定）——用户看到的是
+「有这功能但打不开」，只能去翻配置文件。现在摊到设置页：
+
+| 行 | 控件 | 字段 |
+|---|---|---|
+| 本机槽位 | `SlotPicker`（1·2·3 三个 34×28 方块，`#slotBtn`） | `mouse_switch.local_slot` |
+| 对端槽位 | 同上 | `mouse_switch.peer_slot` |
+| 切换延时 | `numEdit` 数字框 + `ms`（0–5000） | `mouse_switch.settle_ms` |
+
+- **0 = 未配置**：三个方块都不选中（`SlotPicker.value()` 返回 0），不许替用户默认选 1 ——
+  槽位选错的代价是鼠标失联，只能按鼠标底部物理键恢复。
+- **两端不能同槽位**：撞了就退回原值并 toast「本机和对端不能选同一个槽位」。
+- 开关仍在切换页「跟随画面」卡片（避免两处控件互相覆盖）；设置页保存后 runner
+  的 `on_config_saved` 会刷新切屏页，槽位配好那一刻开关就出现。
+- 切屏页状态行文案从「在 config.json 填 mouse_switch」改成
+  「去「设置 › 鼠标跟随」选好两端槽位」。
+
+#### 守卫
+
+```bash
+pytest -q tests/test_ui_mac2.py -k "settings_mouse or settings_group_order or settings_buttons"
+pytest -q tests/test_ui_mac2.py -k "unpair or pairing_page_unpair"   # 快速确认仍常驻、轮询不收
+```
+
+原型同步：`design/redesign/index-v2.html`（`.pair-pop` / `[data-slot]`）。
+出图：`QT_QPA_PLATFORM=offscreen .venv/bin/python outputs/shot_popconfirm.py`。
+
 ---
 
 ## 11. 实现对照表（2026-10-21 定稿）
@@ -826,7 +878,8 @@ pytest -q tests/test_ui_mac2.py -k "fits_the_window or quick_actions or hover_ti
 | 长悬停 tip（按钮上的操作说明） | `ui/mac2/widgets.py::HoverTip/TipBubble` | 1.2s 才弹、300px 折行、先钳窗口再钳屏幕（§10.25） |
 | 剪贴板页（工具栏 / chips / 行 / 空态） | `ui/mac2/clipboard_page.py` | 行 68px，缩略图 46，角标 22 |
 | 悬浮预览窗（气泡 + 箭头 + 文件卡） | `ui/mac2/preview.py` | 箭头必须是子控件（父级画会被卡片盖住） |
-| 设置页（三组 + 存储上限 + 清理） | `ui/mac2/settings_page.py` | 「清理」发 `clearRequested` → 剪贴板页清空确认 |
+| 设置页（五组 + 存储上限 + 清理） | `ui/mac2/settings_page.py` | 「清理」发 `clearRequested` → 剪贴板页清空确认；「鼠标跟随」组见 §10.26 |
+| 页内浮出确认（解除配对 / 替换配对） | `ui/mac2/widgets.py::PopConfirm` | 贴按钮的 popover，不进 layout；不是 QDialog（§10.26） |
 | 菜单栏菜单（状态灯 + 键帽 + 单击/双击） | `ui/mac2/statusmenu.py` | 行内不放图标 |
 | 通用控件（键帽/开关/分段/chips/药丸/元信息行） | `ui/mac2/widgets.py` | `destroy()` 立刻撤控件，避免叠影 |
 | 颜色 / 字号 / QSS / 令牌 | `ui/mac2/theme.py` | 字号一律**像素**（`APP_FONT_PX`），`theme.qcolor()` 解析 rgba |
@@ -1137,25 +1190,32 @@ python -m dualswitch ui2
 - 连接状态是**独立信息**：已配对但对端离线时，副行写「对端离线，等待重新连接」，胶囊仍是绿色
   「已配对」（配对不会因为离线失效）。
 - 「重新配对」→ 状态 1，并在列表顶部标出当前设备（按钮「重新配对」）。
-- 「解除配对」→ 行内二次确认（不是系统弹窗，留在页内）：
+- 「解除配对」→ 页内浮出确认（**不是系统弹窗，也不在卡片里多长一块**，2026-11-08 改，见 §10.26）：
 
 ```
-┌─────────────────────────────────────────────────┐
-│ 解除和 DESKTOP-8Q2K 的配对？                      │
-│ 解除后本机剪贴板只在本机记录，不再同步到这台电脑；   │
-│ 历史记录会保留，另一台电脑不会收到通知。            │
-│                  [取消]   [解除配对]（红色）        │
-└─────────────────────────────────────────────────┘
+                       ┌──────────────────────────────┐
+                       │ 解除和 DESKTOP-8Q2K 的配对？   │
+                       │ 解除后本机剪贴板只在本机记录，  │
+                       │ 不再同步到这台电脑；历史记录会保留。│
+                       │              取消   解除配对  │  ← 白卡 + 阴影 + 下沿小尖
+                       └──────────────▼───────────────┘
+                              [重新配对]  [解除配对]
 ```
+
+- 卡片规格：宽 268、圆角 12、`line_soft` 1px 边框、阴影 blur 30 / 下偏移 8；
+  白底，主/次按钮都是**文字按钮**（取消 `ink2`、确认 `danger` 红字，hover 才出底色）。
+  右缘对齐触发按钮，底边距按钮顶 10px，小尖指向按钮中心；上方放不下翻到下方。
+- 关闭方式：点卡片外、`Esc`、点「取消」。**`Enter` 不绑确认** —— 破坏性操作必须鼠标点。
+  按钮点下去不再改版面（旧的浅红块把卡片撑高、把下面的提示卡推走，观感是「设计漏了一块」）。
 
 - 确认后只清本机的 `psk / peer_device / paired_at`，**不向对端发解除消息**；对端下次握手失败，
   状态变「密钥不匹配 → 需重新配对」。
-- **确认面板常驻**：点「解除配对」后，这块面板要一直显示到用户点「取消 / 解除配对」为止；
+- **确认卡常驻**：点「解除配对」后，这张卡要一直浮着，直到用户点「取消 / 解除配对」；
   页面的 500ms 状态轮询只许刷新卡片里的动态字段（连接状态、设备 ID、地址、配对时间），
-  不许收面板、不许切页。2026-10-23 真机 bug：轮询每 500ms 调一次进页函数（里面有
+  不许收卡、不许切页。2026-10-23 真机 bug：轮询每 500ms 调一次进页函数（里面有
   `confirm_box.hide()`），面板一闪而过、根本点不到 —— 这类「轮询顺手改 UI 状态」的写法在
   配对页统一禁止（`_tick` 只调 `_render_*`，不调 `_show_*`）。
-- 「替换配对」的确认面板同理，且它挂在**页面**里而不是设备列表里：设备列表按 device id
+- 「替换配对」的确认同理，且它挂在**页面**里而不是设备列表里：设备列表按 device id
   整块重建时会 destroy 掉列表内所有控件，挂里面会留下悬空指针。
 
 #### 状态 7 · 配对失败（网络不可达 / 超时）
