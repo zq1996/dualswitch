@@ -226,7 +226,10 @@ class PopoverArrow(QWidget):
     填充卡片色，外观上跟气泡连成一体。
     """
 
-    W, H = 12, 18
+    #: 逐像素量出来的（Frset 1.3.16 文本气泡右缘，物理像素 ÷2）：
+    #: 尖端凸出卡片 **11**，三角高 **30**，直边（斜率恒 0.78，不是圆弧）。
+    #: 旧值 12×18 又扁又矮，看着「尖得不对」就是这个。
+    W, H = 11, 30
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -575,9 +578,10 @@ class PreviewBubble(QFrame):
                 ).height()
             else:
                 need = fm.height()
-            if child.objectName() == "pvCode":
-                return need + 26        # 代码块的 11px 内边距 + 描边
-            return need + 4
+            # 带内边距的正文块（代码 11px、链接 11px）必须把上下内边距算进去，
+            # 否则文字最后一行会被正文容器裁掉半截（2026-11-08 用户截图实证）。
+            m = child.contentsMargins()
+            return need + m.top() + m.bottom() + 4
         return max(18, child.sizeHint().height())
 
     def _natural_width(self, max_w: int) -> int:
