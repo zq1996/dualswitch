@@ -451,16 +451,22 @@ body{
              0 20px 48px -10px rgba(16,24,40,.32);
   overflow:visible;
   transform-origin:var(--pv-origin,left center);
-  animation:pvSpring .32s cubic-bezier(.22,1.2,.36,1);   /* 弹簧：轻微过冲 */
+  animation:pvSpring .473s linear;   /* 曲线全在关键帧里（Frset 逐帧实测，见 INTERACTIONS §10.27） */
 }
 [data-theme="dark"] .preview{
   box-shadow:0 0 0 .5px rgba(255,255,255,.10),0 1px 2px rgba(0,0,0,.3),
              0 20px 48px -10px rgba(0,0,0,.6);
 }
 @keyframes pvSpring{
-  0%  {opacity:0;transform:scale(.9) translateY(4px)}
-  60% {opacity:1;transform:scale(1.015) translateY(0)}   /* 过冲一帧 */
-  100%{opacity:1;transform:scale(1)}
+  /* 实测 Frset 1.3.16：3×2 的点 → 255ms 过冲 1.8% → 473ms 收住，alpha 207ms 到满 */
+  0%   {opacity:0;   transform:scale(0)}
+  13%  {opacity:.46; transform:scale(.46)}
+  19%  {transform:scale(.69)}
+  30%  {opacity:.91; transform:scale(.91)}
+  44%  {opacity:1;   transform:scale(1.009)}
+  54%  {transform:scale(1.018)}
+  79%  {transform:scale(1.004)}
+  100% {opacity:1;   transform:scale(1)}
 }
 .preview.on{display:block}
 /* 指向缩略图的小箭头（PopoverArrowShape） */

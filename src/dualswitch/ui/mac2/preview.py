@@ -17,12 +17,10 @@ import os
 import time
 
 from PySide6.QtCore import (
-    QAbstractAnimation,
-    QRect,
-    QEasingCurve,
     QObject,
-    QPropertyAnimation,
+    QPoint,
     QRect,
+    QRectF,
     Qt,
     QTimer,
     Signal,
@@ -45,6 +43,48 @@ from .widgets import ElidedLabel, IconButton, destroy
 STATE_TEXT = {"ok": "已同步", "pend": "传输中", "fail": "失败", "local": "仅本机"}
 STATE_STYLE = {"ok": "statOk", "pend": "statRun", "fail": "statBad", "local": "statIdle"}
 ARROW_MARGIN = 12
+
+#: 入场缩放：**Frset 1.3.16 逐帧实测**（CGWindowList 4ms 轮询它弹出的气泡窗口，
+#: 562×399 的图片气泡；归一化缩放 = 实测宽度 / 最终宽度）。
+#:
+#: 实测结论：
+#:   · 从 **3×2 的点**长出来（锚点就是箭头尖），不是原地抖一下
+#:   · 255ms 到达峰值 572×407（**只过冲 1.8%**），470ms 回到 562×399
+#:   · 透明度同步上升，207ms 就到 1.0（比尺寸早收）
+#:   · 阻尼弹簧拟合：ω=24.85 rad/s（response≈253ms）、dampingFraction≈0.89
+#:
+#: 直接用实测点当关键帧（而不是套 spring 解析式）：尾部 240→473ms 那段
+#: 从 1.018 缓慢回落，比单自由度弹簧收敛得慢，套公式会差 1.5%。
+ZOOM_SAMPLES_MS: tuple[tuple[float, float], ...] = (
+    (0, 0.000), (11, 0.071), (23, 0.187), (44, 0.324), (61, 0.459),
+    (73, 0.585), (90, 0.694), (107, 0.783), (124, 0.854), (140, 0.909),
+    (160, 0.948), (175, 0.977), (191, 0.995), (207, 1.009), (223, 1.014),
+    (240, 1.018), (256, 1.018), (274, 1.016), (291, 1.014), (307, 1.012),
+    (323, 1.011), (343, 1.009), (362, 1.007), (375, 1.004), (408, 1.002),
+    (473, 1.000),
+)
+ZOOM_DURATION_MS = 473
+ZOOM_KEYS: tuple[tuple[float, float], ...] = tuple(
+    (ms / ZOOM_DURATION_MS, scale) for ms, scale in ZOOM_SAMPLES_MS
+)
+ZOOM_FADE_MS = 200
+#: 透明度曲线（按 ZOOM_FADE_MS 归一）：207ms 到满，前期比 OutCubic 缓（实测 alpha）
+FADE_KEYS: tuple[tuple[float, float], ...] = (
+    (0.00, 0.0), (0.30, 0.46), (0.60, 0.90), (1.00, 1.0),
+)
+#: 动画步进：Qt 的动画驱动本身也是这个量级，16ms ≈ 60Hz
+ANIM_TICK_MS = 16
+
+
+def sample_keys(keys: tuple[tuple[float, float], ...], progress: float) -> float:
+    """在 (进度, 值) 关键帧上线性取值（段内线性，端点夹住）。"""
+    if progress <= keys[0][0]:
+        return keys[0][1]
+    for (p0, v0), (p1, v1) in zip(keys, keys[1:]):
+        if progress <= p1:
+            span = p1 - p0
+            return v1 if span <= 0 else v0 + (v1 - v0) * (progress - p0) / span
+    return keys[-1][1]
 
 
 def human_size(n: int) -> str:
@@ -208,6 +248,61 @@ class PopoverArrow(QWidget):
 
 
 # --------------------------------------------------------------------------- #
+# 入场用的缩放画布
+# --------------------------------------------------------------------------- #
+class ZoomLayer(QWidget):
+    """把气泡**拍成位图**后整体缩放绘制，动画结束再交回真实控件。
+
+    为什么不像 Frset 那样直接改窗口尺寸：气泡内部每一块（正文宽度、按钮、
+    换行）都是按**最终宽度**钉死的。窗口一旦从小往大长，Qt 会按小尺寸重新布局，
+    正文先挤成两行、按钮被压出边框——就是 10-21 那次「按钮贴边框」的真相。
+    Frset 是 SwiftUI，布局是矢量重排所以没这个问题；Qt 只能改用位图缩放：
+    布局一次算到底，动画期间只是这张图在放大，观感等价而布局不动。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._pix = QPixmap()
+        self._anchor = QPoint(0, 0)
+        self._factor = 1.0
+        #: 淡入做在层内（画的时候 setOpacity），**不动窗口 windowOpacity** ——
+        #: 顶层窗口设成 0 透明后销毁时序会乱（offscreen 下实测报
+        #: `QObject: shared QObject was deleted directly`），而且 offscreen 平台本来就不支持。
+        self._alpha = 1.0
+        self.hide()
+
+    def set_frame(self, pix: QPixmap, anchor: QPoint) -> None:
+        self._pix = pix
+        self._anchor = anchor
+        self.update()
+
+    def set_factor(self, factor: float) -> None:
+        self._factor = factor
+        self.update()
+
+    def set_alpha(self, alpha: float) -> None:
+        self._alpha = max(0.0, min(1.0, alpha))
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802
+        if self._pix.isNull():
+            return
+        dpr = self._pix.devicePixelRatio() or 1.0
+        # grab() 给的是物理像素，这里换算回逻辑尺寸再乘缩放
+        w = self._pix.width() / dpr * self._factor
+        h = self._pix.height() / dpr * self._factor
+        # 锚点（箭头尖）在动画里不许移动：以它为不动点向左上/右展开
+        x = self._anchor.x() - self._anchor.x() * self._factor
+        y = self._anchor.y() - self._anchor.y() * self._factor
+        p = QPainter(self)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        p.setOpacity(self._alpha)
+        p.drawPixmap(QRectF(x, y, w, h), self._pix, QRectF(self._pix.rect()))
+        p.end()
+
+
+# --------------------------------------------------------------------------- #
 # 气泡本体
 # --------------------------------------------------------------------------- #
 class PreviewBubble(QFrame):
@@ -281,6 +376,9 @@ class PreviewBubble(QFrame):
         inner_lay.addWidget(foot)
 
         self._arrow = PopoverArrow(self)
+        # 入场缩放层：盖住整块（含箭头留白），动画期间只画这张位图
+        self._zoom = ZoomLayer(self)
+        self._zoom.setGeometry(self.rect())
         # 文本正文（滚动容器）引用；换记录时 clear_body 会把它们销毁
         self._text_label: QLabel | None = None
         self._text_note: QLabel | None = None
@@ -488,6 +586,57 @@ class PreviewBubble(QFrame):
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self._apply_inner_geometry()
+        self._zoom.setGeometry(self.rect())
+
+    # ------------------------------------------------------------- 入场缩放
+    @property
+    def anchor_point(self) -> QPoint:
+        """箭头尖的位置 —— 缩放动画的不动点（气泡从这里长出去）。"""
+        x = self.width() - 1 if self._arrow_right else 0
+        return QPoint(x, self._arrow_y)
+
+    def zoom_prepare(self) -> None:
+        """show 之前：先盖上一层 factor=0 的缩放层，窗口的第一帧什么都不画。
+
+        这样就不必把窗口设成透明来「藏」那一下——不用 `setWindowOpacity`。
+        """
+        self._zoom.setGeometry(self.rect())
+        self._zoom.set_factor(0.0)
+        self._zoom.set_alpha(0.0)
+        self._inner.hide()
+        self._arrow.hide()
+        self._zoom.show()
+        self._zoom.raise_()
+
+    def zoom_capture(self) -> None:
+        """show 之后（布局与 QSS 已落定）：把卡片拍成位图，交接给缩放层。
+
+        `_inner.show()` 到 `_inner.hide()` 之间没有回到事件循环，所以这次
+        「临时显示」不会被真正画到屏幕上，不会有闪一帧整卡的问题。
+        """
+        self._inner.show()
+        self._arrow.show()
+        pix = self.grab()
+        self._inner.hide()
+        self._arrow.hide()
+        self._zoom.setGeometry(self.rect())
+        self._zoom.set_frame(pix, self.anchor_point)
+        self._zoom.set_factor(0.0)
+        self._zoom.show()
+        self._zoom.raise_()
+
+    def set_zoom(self, factor: float) -> None:
+        self._zoom.set_factor(factor)
+
+    def set_zoom_alpha(self, alpha: float) -> None:
+        self._zoom.set_alpha(alpha)
+
+    def zoom_end(self) -> None:
+        """收尾：位图只是动画载体，交回真实控件。"""
+        self._zoom.hide()
+        self._inner.show()
+        self._arrow.show()
+        self._arrow.raise_()
 
     def enterEvent(self, event):  # noqa: N802
         # 预览窗自身 hover 可停留（__isPreviewPopoverHovered）
@@ -752,10 +901,24 @@ class PreviewController(QObject):
         self._close_timer.setInterval(self.CLOSE_DELAY_MS)
         self._close_timer.timeout.connect(self._do_close)
         self._pending: tuple | None = None
-        self._anim: QPropertyAnimation | None = None
-        self._fade: QPropertyAnimation | None = None
+        self._zoom_token = 0
         self._current_id: str | None = None
         self._bubble_hovered = False
+        # 等一帧再抓位图。**必须是自己的 QTimer**：`QTimer.singleShot(0, lambda…)`
+        # 不随 controller 销毁而取消，测试/退出时那条回调会打到已删除的对象上
+        # （`QObject: shared QObject was deleted directly`）。
+        self._start_timer = QTimer(self)
+        self._start_timer.setSingleShot(True)
+        self._start_timer.setInterval(0)
+        self._start_timer.timeout.connect(self._on_start_timeout)
+        # 入场动画用常驻定时器自己算，不用 QPropertyAnimation/QVariantAnimation：
+        # 运行中的 QAbstractAnimation 在 controller 被销毁时会留下「shared QObject
+        # was deleted directly」的告警（测试进程里必现），而且曲线本来就要按实测
+        # 关键帧逐点取值，自己算反而更直白。
+        self._anim_timer = QTimer(self)
+        self._anim_timer.setInterval(ANIM_TICK_MS)
+        self._anim_timer.timeout.connect(self._anim_step)
+        self._anim_t0 = 0.0
 
     # ---- 触发口 ----
     def schedule_open(self, record, ui_kind: str, anchor: QWidget) -> None:  # noqa: ANN001
@@ -813,12 +976,38 @@ class PreviewController(QObject):
         self.bubble.show_record(record, ui_kind)
         self._position(anchor)
         self._current_id = record.id
+        # 先盖一层 factor=0 的缩放层再 show：第一帧什么都不画，不会闪一下整卡
+        self.bubble.zoom_prepare()
         self.bubble.show()
-        self._animate_in()
+        self._zoom_token += 1
+        self._start_timer.start()
+
+    def _on_start_timeout(self) -> None:
+        self._start_zoom(self._zoom_token)
+
+    def _start_zoom(self, token: int) -> None:
+        if token != self._zoom_token or not self.bubble.isVisible():
+            return
+        self.bubble.zoom_capture()
+        self._anim_t0 = time.perf_counter()
+        self._anim_timer.start()
+
+    def _anim_step(self) -> None:
+        elapsed = (time.perf_counter() - self._anim_t0) * 1000.0
+        progress = min(1.0, elapsed / ZOOM_DURATION_MS)
+        self.bubble.set_zoom(sample_keys(ZOOM_KEYS, progress))
+        self.bubble.set_zoom_alpha(sample_keys(FADE_KEYS, min(1.0, elapsed / ZOOM_FADE_MS)))
+        if progress >= 1.0:
+            self._anim_timer.stop()
+            self.bubble.zoom_end()
 
     def _do_close(self) -> None:
         if self._bubble_hovered and self.bubble.isVisible():
             return                      # 鼠标还在气泡上：不关
+        self._zoom_token += 1           # 作废还没跑的那次入场
+        self._start_timer.stop()
+        self._anim_timer.stop()
+        self.bubble.zoom_end()
         if self.bubble.isVisible():
             self.bubble.hide()
         self._current_id = None
@@ -851,49 +1040,4 @@ class PreviewController(QObject):
         # 箭头对准缩略图中线
         self.bubble.set_arrow(arrow_right, thumb_r.center().y() - top)
 
-    def _ensure_anims(self) -> None:
-        """入场动画对象常驻复用。
-
-        **不要用 `DeleteWhenStopped`**：跑完一次后 C++ 对象就被回收，下一次再
-        `stop()` 会抛 `RuntimeError: Internal C++ object already deleted`，
-        表现是「第二次悬停不弹预览」（2026-10-21 实测）。
-        """
-        if self._anim is None:
-            self._anim = QPropertyAnimation(self.bubble, b"geometry", self)
-            self._anim.setDuration(300)
-            self._anim.setEasingCurve(QEasingCurve.OutCubic)
-        if self._fade is None:
-            self._fade = QPropertyAnimation(self.bubble, b"windowOpacity", self)
-            self._fade.setDuration(180)
-            self._fade.setEasingCurve(QEasingCurve.OutCubic)
-
-    def _animate_in(self) -> None:
-        """入场：淡入 + 轻微「弹一下」（1.5% 过冲），**绝不从缩小开始**。
-
-        气泡内部是按最终宽度钉死宽度的；如果窗口从 94% 长起来，内容会先溢出、
-        右边被裁一刀（就是「按钮贴边框」的真相）。所以只向上过冲、不回缩到更小。
-        """
-        bubble = self.bubble
-        final = bubble.geometry()
-        grow_w = max(2, int(final.width() * 0.015))
-        grow_h = max(2, int(final.height() * 0.012))
-        overshoot = QRect(
-            final.x() - grow_w,
-            final.y() - grow_h,
-            final.width() + grow_w * 2,
-            final.height() + grow_h * 2,
-        )
-        self._ensure_anims()
-        anim = self._anim
-        anim.stop()
-        anim.setKeyValueAt(0.0, final)
-        anim.setKeyValueAt(0.35, overshoot)
-        anim.setKeyValueAt(1.0, final)
-        anim.start()
-
-        fade = self._fade
-        fade.stop()
-        fade.setStartValue(0.0)
-        fade.setEndValue(1.0)
-        fade.start()
 

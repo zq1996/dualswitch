@@ -267,7 +267,8 @@ Windows 复制的显 Windows 角标。应用名（微信/Safari…）降级为�
 | 链接块 | 随 URL | max-width 380                                                  |
 
 **动画**（Frset：`SwiftUI Animation.spring(response:dampingFraction:)`）：  
-弹簧入场 320ms `cubic-bezier(.22,1.2,.36,1)`，scale .9→1.015 过冲→1，transform-origin 朝锚点侧。
+入场：**scale 0 → 1.018 → 1，473ms**，transform-origin 在**箭头尖**（2026-11-08 按 Frset
+逐帧实测重做，实测数据与实现见 §10.27；此前写的「320ms scale .9→1.015」是估算，已作废）。
 
 **视觉**：带**指向箭头**的气泡（Frset：`PopoverArrowShape`/`PreviewArrowGeometryStore`），  
 r13 三层阴影、头部浅底+类型图标+状态药丸、代码块浅底描边、链接浅蓝块、底栏元信息+按钮。
@@ -294,7 +295,10 @@ r13 三层阴影、头部浅底+类型图标+状态药丸、代码块浅底描�
 访达（文件）→ toast「在访达中显示：路径」。
 
 **视觉基线**：圆角 14、三层阴影（外描边 .5px + 近投影 + 远投影）、  
-入场 scale(.96)→1 + fade 180ms、头/底浅底区分正文区。深色模式阴影加深。
+入场 scale 0→1.018→1 + fade 200ms（2026-11-08 实测重做，见 §10.27）、头/底浅底区分正文区。深色模式阴影加深。
+
+> 三层阴影：`win2` 已实现（`SHADOW=14` 自绘），`mac2` **尚未**——`PreviewBubble` 没有
+> `paintEvent`，窗口也只给箭头留了 12px。mac 上白卡压白底会显得平，待补。
 
 ### 3.5 行内动作 🆕
 
@@ -809,6 +813,72 @@ pytest -q tests/test_ui_mac2.py -k "fits_the_window or quick_actions or hover_ti
 `test_quick_actions_section_is_gone` / `test_operation_hint_moved_into_button_hover_tip` /
 `test_peer_tip_mentions_offline_state` / `test_hover_tip_wraps_long_text_and_waits_for_the_delay` /
 `test_switch_page_still_fits_the_window`。
+
+### 10.27 预览气泡入场：照 Frset 逐帧实测重做缩放曲线（2026-11-08）
+
+> 编号说明：`10.26` 在 v3 分支上是「解除配对 popover + 设置页鼠标跟随」，合并后接在本文末尾。
+
+**背景**：用户反馈「现在的浮窗不如当初抄 Frset 的时候」，怀疑动画被改坏。逐帧实测后确认
+**不是参数跑偏，是形态就不对**——现在这版窗口尺寸完全不动、只向外抖 1.5%，而 Frset 是
+**从锚点上的一个点长到全尺寸**。
+
+#### 实测方法（可复现）
+
+| 步骤 | 做法 |
+|---|---|
+| 打开面板 | `axdrive.swift`（AX 遍历 + `AXExtrasMenuBar` 按下）→ 再按「悬浮剪贴板 ⇧⌘V」 |
+| 触发气泡 | `CGEvent` 把鼠标移到缩略图上（不动到像素级，悬停即触发） |
+| 采样 | `CGWindowListCopyWindowInfo` **4ms 轮询**该进程所有窗口的 `bounds` + `alpha` |
+
+气泡是**独立窗口**（`layer=3`），几何逐帧变化 → 不必猜，直接把 scale 曲线和 alpha 曲线录下来。
+（SwiftUI 的 spring 常量是编译期内联的 Double，静态 `strings` 拿不到；黑盒测的是合成后真正上屏的结果，反而更准。）
+
+#### 实测数据（562×399 的图片气泡）
+
+| t (ms) | 0 | 61 | 90 | 140 | 207 | 255 | 473 |
+|---|---|---|---|---|---|---|---|
+| 尺寸 | 3×2 | 258×184 | 390×277 | 511×363 | 567×403 | **572×407** | 562×399 |
+| alpha | 0 | .46 | .69 | .91 | 1.00 | 1.00 | 1.00 |
+
+- scale 0 → 1，**255ms 过冲到 1.018**，473ms 回到 1.000
+- alpha 与尺寸同步上升，**207ms 就到 1.0**（比尺寸先收）
+- 阻尼弹簧拟合：**ω=24.85 rad/s（response≈253ms）、dampingFraction≈0.89**，RMSE 1.9%；
+  但尾部 240→473ms 的回落比单自由度弹簧慢，套公式会差 1.5%，所以实现直接拿实测点当关键帧。
+
+#### 实现（`ui/mac2/preview.py`）
+
+| 项 | 做法 |
+|---|---|
+| 曲线 | `ZOOM_SAMPLES_MS` 26 个实测点 → `ZOOM_KEYS` 归一化；`ZOOM_DURATION_MS=473` |
+| 缩放载体 | `ZoomLayer`：把**已按最终尺寸排好版**的气泡 `grab()` 成位图，按 factor 以**箭头尖**为不动点缩放绘制 |
+| 透明度 | 画位图时 `setOpacity`，200ms，实测 alpha 曲线（0 / .46@30% / .90@60% / 1）。**不动窗口 `windowOpacity`** —— 顶层窗设 0 透明后销毁时序会乱（offscreen 下必现 `QObject: shared QObject was deleted directly`），而且 offscreen 平台本就不支持 |
+| 驱动 | 常驻 `QTimer` 16ms 逐帧取关键帧值（`sample_keys`）。不用 `QPropertyAnimation` / `QVariantAnimation`：运行中的 `QAbstractAnimation` 在 controller 销毁时会留同一个告警 |
+| 防闪 | `show` 之前先盖一层 factor=0 的缩放层，第一帧什么都不画；抓图时临时 `_inner.show()` → `grab()` → `_inner.hide()`，中间不回事件循环，不会闪出整卡 |
+| 收尾 | `zoom_end()` 隐藏位图层、交回真实控件（否则卡片永远是张图，按钮点不动） |
+| 重入 | `_zoom_token` 作废待执行的入场；定时器是 controller 的子对象，随其销毁而取消 |
+
+> **为什么不用窗口 geometry 动画**（Frset 就是改窗口尺寸）：气泡内部每一块都按**最终宽度**
+> 钉死，窗口从小往大长时 Qt 会按小尺寸重新布局——正文先挤成两行、按钮被压出边框，
+> 就是 10-21 那次「按钮贴边框」的真相。SwiftUI 是矢量重排所以 Frset 没这问题；
+> Qt 只能改成位图缩放：布局一次算到底，动画期间只是这张图在放大。
+
+#### 与旧实现的差别
+
+| | 旧（10-21 15:58 起了两版） | 新 |
+|---|---|---|
+| 起点 | 100% 尺寸 | 0（锚点一个点） |
+| 过冲 | 1.5%，抖的是窗口 geometry | 1.8%，抖的是绘制 |
+| 时长 | 300ms | 473ms |
+| 观感 | 啪一下出现，再抖一下 | 从缩略图弹出来 |
+
+#### 守卫
+
+```bash
+pytest -q tests/test_ui_mac2.py -k "zoom"
+```
+
+`test_preview_zoom_curve_matches_frset_measurement`（起点为 0、峰值 1.8%、61ms 处约 46%、时长 473ms）/
+`test_preview_zoom_layer_hands_back_to_real_widgets`（动画期画位图、结束交回真实控件）。
 
 ---
 
