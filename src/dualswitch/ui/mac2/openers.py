@@ -27,6 +27,7 @@ URL_RE = re.compile(r"^(https?|ftp)://\S+$", re.IGNORECASE)
 #: 行内/预览窗按钮集合（按类型）
 ACTIONS_BY_KIND = {
     # 截图没有文件可打开（用户 2026-10-21：截图有预览、没有打开文件）
+    # 图片文件（path 非空）额外给 finder，见 Row._build_actions
     "image": ("preview", "copy"),
     "file": ("finder", "copy"),
     "link": ("openlink", "copy"),
@@ -35,14 +36,26 @@ ACTIONS_BY_KIND = {
 }
 
 
+#: 按扩展名认定「图片文件」。Frset 1.3.16 实测（2026-11-08）：访达复制的 PNG
+#: 在预览里**就是图片**——图铺满 562 宽、标题「图片」、底栏给尺寸，没有文件名/目录。
+#: 旧实现一刀切 `if path: return "file"`，害得图片文件在预览里只剩一个文档图标。
+_IMAGE_EXTS = frozenset(
+    ".png .jpg .jpeg .jpe .heic .heif .gif .webp .bmp .tif .tiff".split()
+)
+
+
+def is_image_path(path: str) -> bool:
+    return Path(path).suffix.lower() in _IMAGE_EXTS
+
+
 def classify_record(kind: str, text: str | None, path: str = "") -> str:
     """ClipRecord.kind（text/image/mixed）+ path → UI 类型（text/code/image/link/file）。
 
-    **`path` 优先**：从访达复制的文件（含图片文件）都是「文件」卡片；
-    `path` 为空才是截图 / 网页图片 / 纯文本。这是 Frset 的分类法，用户 2026-10-21 指定。
+    **`path` 优先，但图片文件归「图片」**：访达复制的 PNG/JPG 走图片分支（出大图），
+    其它文件才是「文件」卡片。Frset 1.3.16 实测口径（2026-11-08）。
     """
     if path:
-        return "file"
+        return "image" if is_image_path(path) else "file"
     if kind in ("image", "mixed"):
         return "image"
     body = (text or "").strip()

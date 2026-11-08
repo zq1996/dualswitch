@@ -77,15 +77,18 @@ HOVER_TIP_W = 300
 #:   窗口高 = clamp(内容高 + 垂直 chrome, MIN_H, MAX_H)
 #: 上下限都是**窗口**尺寸，不是图片像素尺寸；图片按内容框等比缩放、只缩不放。
 #: 实测 Frset 为 346×226 ~ 562×626，内容框 ≈ 524×524。
+#: 以下上限全部来自 **Frset 1.3.16 逐窗口实测**（2026-11-08，见 INTERACTIONS §10.29）：
+#: 图片 562×522（1124×898 的图，图铺满宽度）、文本 346×246（141 字）/ 376×278（276 字，滚动）、
+#: 代码 586×246（带行号）、链接 556×246。旧值 392/400/380 是看设计稿估的。
 PV_IMG_MAX_W, PV_IMG_MAX_H = 562, 626
 PV_IMG_MIN_W, PV_IMG_MIN_H = 346, 226
-PV_TXT_MAX_W, PV_TXT_MAX_H = 392, 270
+PV_TXT_MAX_W, PV_TXT_MAX_H = 376, 278
 #: 预览窗正文最多渲染多少字。**不是视觉截断**：正常长度的文本一律完整显示
 #: （超长时预览窗长到屏幕高度、内部可滚动）；只有超过这个量级才切掉，
 #: 免得几 MB 的日志让 QLabel 排版把机器拖卡。
 PV_TEXT_MAX_CHARS = 20000
-PV_CODE_MAX_W, PV_CODE_MAX_H = 400, 290
-PV_CARD_MAX_W = 380
+PV_CODE_MAX_W, PV_CODE_MAX_H = 586, 278
+PV_CARD_MAX_W = 556
 PV_RADIUS = 13
 
 MENU_W = 242                     # 菜单栏弹出菜单宽
@@ -622,36 +625,38 @@ def qss(t: Tokens | None = None) -> str:
     }}
     QPushButton#actBtnDanger:hover {{ background: {t.danger}; }}
 
-    /* ---------- 预览窗 ---------- */
-    #pvRoot {{ background: {t.card}; border-radius: {PV_RADIUS}px; }}
-    #pvHead {{ background: {t.card2}; border-bottom: 1px solid {t.line_soft};
-        border-top-left-radius: {PV_RADIUS}px; border-top-right-radius: {PV_RADIUS}px; }}
-    #pvTitle {{ color: {t.ink}; font-size: 11.5px; font-weight: 650; }}
-    #pvBody {{ background: {t.card}; }}
-    #pvText {{ color: {t.ink2}; font-size: 11.5px; }}
+    /* ---------- 预览窗 ----------
+       Frset 1.3.16 实测结构（2026-11-08）：整块是**浅灰底**，正文是一张**浮起的白卡**，
+       标题和底部信息都直接压在灰底上，两者之间没有分隔线。
+       旧实现是「一张白卡 + 浅灰头尾」，观感和 Frset 完全不同。 */
+    #pvRoot {{ background: {t.card3}; border-radius: {PV_RADIUS}px; }}
+    #pvHead {{ background: transparent; border: 0; }}
+    #pvTitle {{ color: {t.ink2}; font-size: 12px; font-weight: 500; }}
+    #pvBody {{ background: {t.card}; border-radius: 10px; }}
+    /* 图片类：图片本身就是内容，直接铺满，不要白卡也不要左右留白 */
+    #pvBodyFlat {{ background: transparent; border: 0; border-radius: 0; }}
+    #pvText {{ color: {t.ink}; font-size: 15px; }}
     #pvCode {{
         background: {t.card2}; border: 1px solid {t.line_soft}; border-radius: 9px;
-        color: {t.ink}; font-size: 10.5px; font-family: "{MONO_FAMILIES[0]}";
+        color: {t.ink}; font-size: 12.5px; font-family: "{MONO_FAMILIES[0]}";
     }}
     #pvLink {{
-        background: {t.accent_soft}; border-radius: 9px; color: {t.accent_deep};
-        font-size: 10.5px; font-family: "{MONO_FAMILIES[0]}";
+        color: {t.ink}; font-size: 14px; font-family: "{MONO_FAMILIES[0]}";
     }}
-    #pvFileCard {{ background: {t.card2}; border: 1px solid {t.line_soft};
-        border-radius: 12px; }}
-    #pvFileName {{ color: {t.ink}; font-size: 12px; font-weight: 650; }}
+    #pvFileCard {{ background: {t.card}; border: 0; border-radius: 10px; }}
+    #pvFileName {{ color: {t.ink}; font-size: 13px; font-weight: 500; }}
     /* 预览窗正文滚动条：白底上 handle 用 ink3，不然 line 那种浅灰等于看不见 */
     #pvScroll {{ background: transparent; border: 0; }}
     #pvScroll QScrollBar:vertical {{ width: 7px; background: transparent; }}
     #pvScroll QScrollBar::handle:vertical {{ background: {t.ink3}; border-radius: 3.5px; }}
-    #pvFileDir {{ color: {t.ink3}; font-size: 10px; }}
-    #pvFoot {{ background: {t.card2}; border-top: 1px solid {t.line_soft};
+    #pvFileDir {{ color: {t.ink3}; font-size: 10.5px; }}
+    #pvFoot {{ background: transparent; border: 0;
         border-bottom-left-radius: {PV_RADIUS}px;
         border-bottom-right-radius: {PV_RADIUS}px; }}
-    #pvMeta {{ color: {t.ink3}; font-size: 9.5px; }}
-    #pvNote {{ color: {t.ink3}; font-size: 9.5px; }}
+    #pvMeta {{ color: {t.ink3}; font-size: 10.5px; }}
+    #pvNote {{ color: {t.ink3}; font-size: 10px; }}
     QPushButton#pvBtn {{
-        background: {t.card3}; color: {t.ink2}; border: 0; border-radius: 7px; padding: 0;
+        background: transparent; color: {t.ink2}; border: 0; border-radius: 7px; padding: 0;
     }}
     QPushButton#pvBtn:hover {{ background: {t.line}; }}
     QPushButton#pvBtnPri {{ background: {t.accent}; border: 0; border-radius: 7px; padding: 0; }}
