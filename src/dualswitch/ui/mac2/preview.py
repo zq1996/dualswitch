@@ -716,7 +716,8 @@ class PreviewBubble(QFrame):
         # 文本/代码的高度上限交给屏幕：内容多长就长多高，长到屏幕放不下时内部滚动
         "text": (theme.PV_TXT_MAX_W, 100_000),
         "code": (theme.PV_CODE_MAX_W, 100_000),
-        "file": (theme.PV_CARD_MAX_W, 320),
+        # 文件卡带了图片预览，上限要放得下「图 200 + 文件名 + 目录」
+        "file": (theme.PV_CARD_MAX_W, 470),
         "link": (theme.PV_CARD_MAX_W, 320),
     }
 
@@ -836,11 +837,17 @@ class PreviewBubble(QFrame):
 
     #: 文件卡正文宽度（预览窗内宽固定，文件名按这个宽度量换行）
     FILE_CARD_W = theme.PV_CARD_MAX_W - 28 - ARROW_MARGIN
+    #: 图片文件在文件卡里的预览图高度上限（宽度跟着卡片走）：够看清内容，
+    #: 又不至于把卡片撑成第二个「图片预览」。
+    FILE_SHOT_H = 200
 
     def _build_file(self, record) -> None:  # noqa: ANN001
-        """文件卡（照 Frset）：文档图标 + 扩展名、文件名、所在目录，全部居中。
+        """文件卡（照 Frset）：**图片文件出真图**，其它文件给文档图标；下面都跟
+        文件名与所在目录，全部居中。
 
-        图片文件也是文件卡（缩略图里已经能看到图了，卡片只回答「这是哪个文件」）。
+        2026-11-08 修：之前一律只画 52px 文档图标，图片文件在预览窗里看不到图 ——
+        缩略图有、预览没有，等于白丢了「看内容」这件事（`clipboard/macos.py` 本来
+        就为图片文件抽了 png，Windows 端的注释也写着「预览窗能出图」）。
         """
         self._body_text = file_name(record)
         self._image_w = 0
@@ -852,14 +859,20 @@ class PreviewBubble(QFrame):
         lay.setSpacing(0)
         lay.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
 
-        icon = QLabel()
-        icon.setObjectName("pvFileIcon")
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setPixmap(icons.file_pixmap(file_name(record), 52))
-        lay.addWidget(icon, 0, Qt.AlignHCenter)
-        lay.addSpacing(9)
+        inner_w = self.FILE_CARD_W - 32
+        shot = self._file_shot(record, inner_w)
+        if shot is not None:
+            lay.addWidget(shot, 0, Qt.AlignHCenter)
+            lay.addSpacing(12)
+        else:
+            icon = QLabel()
+            icon.setObjectName("pvFileIcon")
+            icon.setAlignment(Qt.AlignCenter)
+            icon.setPixmap(icons.file_pixmap(file_name(record), 52))
+            lay.addWidget(icon, 0, Qt.AlignHCenter)
+            lay.addSpacing(9)
 
-        name_w = self.FILE_CARD_W - 32
+        name_w = inner_w
         name = QLabel(file_name(record))
         name.setObjectName("pvFileName")
         name.setAlignment(Qt.AlignCenter)
@@ -881,6 +894,43 @@ class PreviewBubble(QFrame):
         lay.addWidget(folder, 0, Qt.AlignHCenter)
 
         self._body_lay.addWidget(card)
+
+    def _file_shot(self, record, avail_w: int) -> QLabel | None:  # noqa: ANN001
+        """图片文件的实际预览图（等比缩进卡片宽度，最高 FILE_SHOT_H）。
+
+        Retina 上仍按 devicePixelRatio 渲物理像素再折算，和 `_build_image` 同一套；
+        高度必须 `setFixedHeight(逻辑)` —— 否则 QLabel.sizeHint 给物理高度，
+        卡片高度会翻倍（`_measure_body_child` 对 QFrame 走的就是 sizeHint）。
+        """
+        if record.png is None:
+            return None
+        image = QImage()
+        if not image.loadFromData(record.png, "PNG"):
+            return None
+        pix = QPixmap.fromImage(image)
+        if pix.isNull():
+            return None
+        factor = min(
+            1.0,
+            avail_w / max(1, pix.width()),
+            self.FILE_SHOT_H / max(1, pix.height()),
+        )
+        disp_w = max(1, int(pix.width() * factor))
+        disp_h = max(1, int(pix.height() * factor))
+        dpr = float(self.devicePixelRatioF() or 1.0)
+        scaled = pix.scaled(
+            max(1, int(disp_w * dpr)),
+            max(1, int(disp_h * dpr)),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        scaled.setDevicePixelRatio(dpr)
+        label = QLabel()
+        label.setObjectName("pvFileShot")
+        label.setAlignment(Qt.AlignCenter)
+        label.setPixmap(scaled)
+        label.setFixedHeight(disp_h)
+        return label
 
 
 # --------------------------------------------------------------------------- #
