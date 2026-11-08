@@ -87,6 +87,31 @@ ANIM_TICK_MS = 16
 LINE_HEIGHT_PCT = 170
 
 
+def rounded_pixmap(pix: QPixmap, radius: float) -> QPixmap:
+    """把位图裁成圆角。图片类铺满整个气泡，四角必须跟外壳一致（Frset 1.3.16 实测）。
+
+    `radius` 是**逻辑**半径，内部按 devicePixelRatio 放大后再裁，否则 Retina 上
+    圆角会只有一半大、边缘发毛。
+    """
+    dpr = float(pix.devicePixelRatio() or 1.0)
+    # 必须走 QImage：QPixmap 带 dpr 时 drawPixmap(0,0,pix) 按**逻辑**尺寸作画，
+    # 在物理尺寸的画布上只填到左上角一小块（图会缩成四分之一，2026-11-08 实测踩到）。
+    src = pix.toImage()
+    src.setDevicePixelRatio(1.0)
+    out = QImage(src.size(), QImage.Format_ARGB32_Premultiplied)
+    out.fill(Qt.transparent)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, out.width(), out.height()), radius * dpr, radius * dpr)
+    painter.setClipPath(path)
+    painter.drawImage(0, 0, src)
+    painter.end()
+    result = QPixmap.fromImage(out)
+    result.setDevicePixelRatio(dpr)
+    return result
+
+
 def _rich_text(text: str) -> str:
     """纯文本 → 带行距的富文本。转义 & < >，换行换成 <br>。
 
@@ -256,14 +281,17 @@ class PopoverArrow(QWidget):
             path.lineTo(self.W, 1.5)
             path.lineTo(self.W, self.H - 1.5)
         path.closeSubpath()
-        p.fillPath(path, theme.qcolor(t.card))
-        # 描边色别用 line_soft：白气泡配浅描边等于没有边，用户会以为「箭头丢了」
-        edge = theme.qcolor(t.line if t.name == "light" else "#38404C")
+        # 箭头是**气泡外壳**的一部分，必须跟外壳同色（card3 浅灰），
+        # 不是正文白卡色（card）。填 card 会在灰底上凸出一块白三角 —— 用户 2026-11-08 截图实证。
+        shell = theme.qcolor(t.card3)
+        p.fillPath(path, shell)
+        # 描边跟着外壳走：浅到几乎看不见，只负责把边缘从背景里分出来
+        edge = theme.qcolor(t.line_soft if t.name == "light" else "#38404C")
         p.setPen(edge)
         p.drawPath(path)
-        # 底边那一笔会被卡片压住，再补一层卡片色把缝隙填掉
+        # 底边那一笔会被外壳压住，再补一层外壳色把缝隙填掉
         p.setPen(Qt.NoPen)
-        p.setBrush(theme.qcolor(t.card))
+        p.setBrush(shell)
         if self._point_right:
             p.drawRect(0, 1, 2, self.H - 2)
         else:
@@ -365,10 +393,12 @@ class PreviewBubble(QFrame):
         # 没有类型图标、没有彩色主按钮。图标放这里，底栏只留信息。
         self._btn_preview = IconButton("preview", "用图片预览打开", "pv")
         self._btn_find = IconButton("finder", "打开文件（在访达中显示）", "pv")
+        # 链接有自己的「打开」入口：Frset 的 ↗ 按钮（眼睛图标对链接没意义）
+        self._btn_link = IconButton("openlink", "打开链接", "pv")
         self._btn_copy = IconButton("copy", "复制", "pv")
         hl.addWidget(self._head_title, 1)
         hl.addLayout(self._pill_box, 0)
-        for b in (self._btn_preview, self._btn_find, self._btn_copy):
+        for b in (self._btn_preview, self._btn_find, self._btn_link, self._btn_copy):
             hl.addWidget(b, 0, Qt.AlignVCenter)
         self._head = head
         inner_lay.addWidget(head)
@@ -392,7 +422,9 @@ class PreviewBubble(QFrame):
         fl.addWidget(self._meta, 1)
         self._btn_preview.setVisible(False)
         self._btn_find.setVisible(False)
+        self._btn_link.setVisible(False)
         self._btn_preview.clicked.connect(lambda: self.openRequested.emit(self._record_id))
+        self._btn_link.clicked.connect(lambda: self.openRequested.emit(self._record_id))
         self._btn_find.clicked.connect(lambda: self.findRequested.emit(self._record_id))
         self._btn_copy.clicked.connect(lambda: self.copyRequested.emit(self._record_id))
         self._foot = foot
@@ -441,9 +473,15 @@ class PreviewBubble(QFrame):
         self._head.setFixedHeight(head_h)
         self._foot.setFixedHeight(foot_h)
 
-        # 图片类铺满：正文没有 14×2 的内边距
+        # 图片类：上下无内边距，左右各留 IMG_PAD
         body_pad = 0 if kind == "image" else 28
-        text_w = max(80, inner_w - body_pad)
+        # 非图片类：卡片左右各内缩 12（_inner_lay），这段也要从可用宽度里扣掉，
+        # 否则按过宽的列宽量行数 → 实际换行更多 → 最后一行被裁（2026-11-08 链接截图实证）
+        side_pad = 0 if kind == "image" else 24
+        text_w = max(
+            80,
+            inner_w - body_pad - side_pad - (2 * self.IMG_PAD if kind == "image" else 0),
+        )
         avail_h = max(40, max_h - head_h - foot_h - body_pad)
         heights: list[int] = []
         for i in range(self._body_lay.count()):
@@ -571,16 +609,17 @@ class PreviewBubble(QFrame):
                 dpr = float(pix.devicePixelRatio() or 1.0)
                 return int(round(pix.height() / dpr)) + 2
             fm = QFontMetrics(child.font())
+            m = child.contentsMargins()
             if child.wordWrap():
                 flags = Qt.TextWordWrap | Qt.TextExpandTabs
+                # 换行宽度必须扣掉 label 自己的左右内边距（代码/链接块各 11px），
+                # 不然按「整块宽」量出来的行数偏少 → 最后一行被裁。
+                avail = max(20, text_w - m.left() - m.right())
                 need = fm.boundingRect(
-                    QRect(0, 0, text_w, 20000), int(flags), child.text()
+                    QRect(0, 0, avail, 20000), int(flags), child.text()
                 ).height()
             else:
                 need = fm.height()
-            # 带内边距的正文块（代码 11px、链接 11px）必须把上下内边距算进去，
-            # 否则文字最后一行会被正文容器裁掉半截（2026-11-08 用户截图实证）。
-            m = child.contentsMargins()
             return need + m.top() + m.bottom() + 4
         return max(18, child.sizeHint().height())
 
@@ -592,7 +631,7 @@ class PreviewBubble(QFrame):
             pix = getattr(self, "_image_w", 0)
             if not pix:
                 return min(max_w, theme.PV_IMG_MIN_W)
-            return min(max_w, max(theme.PV_IMG_MIN_W, pix))
+            return min(max_w, max(theme.PV_IMG_MIN_W, pix + 2 * self.IMG_PAD))
         if kind == "file":
             # 文件卡是固定宽度，气泡必须跟着它（否则卡片被裁掉一截）
             return min(max_w, self.FILE_CARD_W + pad)
@@ -719,7 +758,9 @@ class PreviewBubble(QFrame):
         # 文本/代码/链接/文件是「浅灰底上浮一张白卡」，左右各内缩 12。
         flat = ui_kind == "image"
         self._inner_lay.setContentsMargins(*(0, 0, 0, 0) if flat else (12, 0, 12, 6))
-        self._body_lay.setContentsMargins(*(0, 0, 0, 0) if flat else (14, 14, 14, 14))
+        self._body_lay.setContentsMargins(
+            *((self.IMG_PAD, 0, self.IMG_PAD, 0) if flat else (14, 14, 14, 14))
+        )
         name = "pvBodyFlat" if flat else "pvBody"
         if self._body_wrap.objectName() != name:
             self._body_wrap.setObjectName(name)
@@ -740,6 +781,7 @@ class PreviewBubble(QFrame):
         #   截图 → 只有预览；图片文件 → 预览 + 打开文件；普通文件 → 只有打开文件
         has_path = bool(getattr(record, "path", "") or "")
         self._btn_preview.setVisible(ui_kind == "image")
+        self._btn_link.setVisible(ui_kind == "link")
         # 图片文件同样保留「在访达中显示」（Frset: 图片多给一个打开入口）
         self._btn_find.setVisible(ui_kind == "file" or (ui_kind == "image" and has_path))
         self.sync_size()
@@ -758,6 +800,9 @@ class PreviewBubble(QFrame):
     #: 非图片气泡的最小高度（Frset 实测：文本/代码/链接都是 246）
     MIN_H = 246
 
+    #: 图片四周的外壳留白（逻辑像素）
+    IMG_PAD = 12
+
     #: 窗口上限里不能给图片的部分：头部 40 + 底栏 49
     #: 图片类是铺满的，正文不再有 14×2 内边距（Frset 实测 562×522，图正好 562×449）
     IMG_CHROME_H = 40 + 49
@@ -766,10 +811,10 @@ class PreviewBubble(QFrame):
     def _image_area(cls) -> tuple[int, int]:
         """图片最大可渲染区域 = 窗口上限 − chrome（与 sync_size 用的是同一组数）。
 
-        图片类是**铺满**的（Frset 实测：图左侧紧贴气泡边缘），所以宽度不给内边距。
+        图片四周留一圈外壳色的 padding（Frset 1.3.16 实测），不顶到气泡边缘。
         """
         return (
-            theme.PV_IMG_MAX_W - ARROW_MARGIN,
+            theme.PV_IMG_MAX_W - ARROW_MARGIN - 2 * cls.IMG_PAD,
             theme.PV_IMG_MAX_H - cls.IMG_CHROME_H,
         )
 
@@ -805,7 +850,8 @@ class PreviewBubble(QFrame):
                 Qt.SmoothTransformation,
             )
             scaled.setDevicePixelRatio(dpr)
-            pix_label.setPixmap(scaled)
+            # 图片铺满气泡，四角要跟外壳一致（Frset 实测是圆角，不裁就是四个直角）
+            pix_label.setPixmap(rounded_pixmap(scaled, theme.PV_RADIUS))
             self._image_w = disp_w       # 逻辑宽度 —— 决定气泡宽，不能用 scaled.width()（那是物理像素）
         self._body_lay.addWidget(pix_label, 0, Qt.AlignHCenter)
         # 尺寸/大小不在正文重复：标题栏已有「图片 1560×1216」，底栏也有「… · 2.3MB · 1560×1216」。
