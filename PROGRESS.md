@@ -519,6 +519,35 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-08 15:1x **定位并修掉「所有按钮都点不动」：layered 窗口点击整片穿透**
+  · 用户报「现在桌面上的 V3，各个按钮都不能按了」，程序还活着 → **活的现场**，直接取证。
+  · **现象全对不上常见猜测**：`SendMessageTimeout(WM_NULL)` **0ms 返回 1**（UI 线程活着，
+    不是卡死）；`IsWindowEnabled=True`、`WS_DISABLED` 未置位（不是被模态窗口禁用）；
+    `GetForegroundWindow()` **就是主窗口**（前台）；枚举该进程 7 个顶层窗口只有主窗口可见
+    （**没有浮层、没有 tooltip**）；`GetCapture()` 空（没人抢鼠标）。
+  · **决定性两条**：① 主窗口内**每一个点**的 `WindowFromPoint` 都返回下层窗口
+    （当时是 WorkBuddy 的 `Chrome_WidgetWin_1`），而截图证明画面还好好显示着；
+    ② 用 `PostMessage` 往侧栏按钮投 `WM_LBUTTONDOWN/UP`，页面**正常切换**
+    （设置 → 切换 → 配对）—— 说明 Qt 内部、布局、信号全都正常。
+  · **机制**：主窗口是 `WS_EX_LAYERED`（`WA_TranslucentBackground` + 自绘圆角）。
+    全局 `app.setStyleSheet()` 会让所有 widget 重新 polish，layered 窗口的绘制 buffer
+    与 **hit-test 区域**脱节 —— 画面留在屏幕上（DWM 缓存），Windows 却认为那块像素全透明，
+    鼠标整片穿透给下层窗口。**验证**：`SW_MINIMIZE` → `SW_RESTORE` 强制重建 buffer 后，
+    hit-test 立刻回到主窗口（用户当场恢复可点）。
+  · **触发点**：`on_config_saved()` 每次保存配置都无条件 `app.setStyleSheet(theme.qss())`。
+    外观固定 light，QSS 内容永远不变 —— 纯属重复劳动且有害。日志佐证：
+    15:00:45 / 15:00:47 两次「热键已重建」（= 两次 `on_config_saved`，用户在设置页点
+    「严格区分左右 Alt」），之后按钮全失效。
+  · 修：新增 `UiRunner2._sync_stylesheet()`，内容没变就一个字节都不动；`__init__` 里
+    缓存首份 QSS。守卫 `test_config_saved_never_resets_global_stylesheet`（扫
+    `on_config_saved` 函数体，不许出现裸 `setStyleSheet`）。
+  · 这也**解释了昨天那个「浮窗遮挡」的误判**：删掉 hover 浮层后问题照旧，因为根因不是浮层。
+  · 顺带记下两个未解项（与本 bug 无关，恢复后依旧存在）：
+    ① 主窗口实际 780×628，而 `WIN_H(550)+extra(58)` 应为 608（628 = 570+58，即 mac2 的
+    `WIN_H`；`grep WIN_H` 全仓库只有 550，来源仍未定位 —— 与 2026-11-08 09:50 条目同源）；
+    ② `apply_port_count` 的 `setFixedSize` 若哪天真的改变尺寸，同样可能触发 buffer 脱节。
+  · 文档：`docs/TROUBLESHOOTING.md` §15.2 新增（含完整取证表格 + **临时自救：最小化再恢复**）。
+  · 基线：**629 tests / 619 passed / 0 failed / 10 skipped**。
 - 2026-11-08 13:0x **修「点哪都不好使」：悬浮预览气泡关不掉 → 永久置顶吃点击**
   · 用户报：V3 界面一开始能点，改完鼠标设置后点侧栏/菜单全没反应；昨天就出现过，
     当时归因于「浮窗遮挡」，删掉浮窗后仍在。

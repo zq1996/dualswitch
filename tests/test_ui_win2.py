@@ -445,6 +445,31 @@ def test_single_click_copies_double_click_previews(app, cfg):
     page.close()
 
 
+def test_config_saved_never_resets_global_stylesheet():
+    """保存配置**不许**无条件重设全局样式表 —— 会让 layered 窗口的点击整片穿透。
+
+    2026-11-08 用户报「各个按钮都不能按」，现场取证：主窗口 `WS_EX_LAYERED`
+    （`WA_TranslucentBackground` + 自绘圆角），前台、可见、未禁用、
+    `SendMessageTimeout(WM_NULL)` 0ms 响应、枚举窗口无遮挡，但窗口内**每个点**的
+    `WindowFromPoint` 都返回下层窗口 —— 画面还在（DWM 缓存），点击整片穿透。
+    最小化再恢复立刻正常（强制重建 buffer）。触发点是每次 `on_config_saved` 都
+    `app.setStyleSheet(theme.qss())` 全局 repolish。
+
+    只允许走 `_sync_stylesheet()`：QSS 内容没变就不重设（外观固定 light，永远不变）。
+    """
+    from pathlib import Path as _Path
+
+    src = (_Path(__file__).resolve().parents[1] / "src" / "dualswitch" / "ui"
+           / "win2" / "runner.py").read_text(encoding="utf-8")
+    body = src.split("def on_config_saved", 1)[1].split("def _toggle_clip_engine", 1)[0]
+    bad = [
+        ln.strip()
+        for ln in body.splitlines()
+        if "setStyleSheet" in ln.split("#", 1)[0]
+    ]
+    assert not bad, f"on_config_saved 里别直接 setStyleSheet，走 _sync_stylesheet()：{bad}"
+
+
 def test_no_super_eventfilter_in_win2():
     """`super().eventFilter()` 会递归爆栈 —— 一律 `return False`。
 

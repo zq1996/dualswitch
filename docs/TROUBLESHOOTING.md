@@ -608,7 +608,42 @@ python tools/diag_click_block.py
 python tools/diag_click_block.py --topmost   # 只列置顶窗口
 ```
 
-### 15.2 已知真因一：悬浮预览气泡关不掉（2026-11-08 已修）
+**如果 `--topmost` 里没有任何可疑窗口，但光标处命中的仍不是主窗口 —— 那就是
+§15.2 的 layered 穿透，不是遮挡。** 最快验证：最小化再恢复窗口，点击立刻恢复。
+
+### 15.2 已知真因一：layered 窗口点击整片穿透（2026-11-08 已修）
+
+**症状**：用着用着突然**所有按钮都点不动**，但窗口看着完全正常（画面没花、没灰蒙层、
+标题栏还能拖、任务管理器里进程活着、CPU 也不高）。重开就好，之后又会复发。
+
+**现场取证**（2026-11-08 在用户机器上实测，一整套都对得上）：
+
+| 检查项 | 结果 | 说明 |
+|---|---|---|
+| `SendMessageTimeout(WM_NULL)` | 0ms 返回 1 | UI 线程活着，**不是卡死** |
+| `IsWindowEnabled` / `WS_DISABLED` | True / 未置位 | **不是被模态窗口禁用** |
+| `GetForegroundWindow()` | == 主窗口 | 它就是前台窗口 |
+| 枚举该进程所有顶层窗口 | 只有主窗口可见 | **没有浮层、没有 tooltip** |
+| `GetCapture()` | 空 | 没有控件抢鼠标 |
+| 窗口内**每个点**的 `WindowFromPoint` | **都返回下层窗口** | ← 真凶 |
+| `PostMessage` 投 `WM_LBUTTONDOWN/UP` 到侧栏 | 页面正常切换 | Qt 内部完全正常 |
+| 最小化再恢复（`SW_MINIMIZE`→`SW_RESTORE`） | hit-test 立刻恢复正常 | 强制重建 layered buffer |
+
+**机制**：主窗口是 `WS_EX_LAYERED`（`WA_TranslucentBackground` + 自绘圆角）。
+全局重设样式表（`app.setStyleSheet()`）会让所有 widget 重新 polish，
+layered 窗口的绘制 buffer 与 **hit-test 区域**脱节 —— 画面还留在屏幕上（DWM 缓存），
+但 Windows 认为那块像素全透明，鼠标就整片穿透给下层窗口。
+
+**触发点**：`UiRunner2.on_config_saved()` 每次保存配置都无条件
+`app.setStyleSheet(theme.qss())`。外观固定 light，QSS 内容永远不变，纯属重复劳动。
+
+**修法**：改走 `_sync_stylesheet()` —— 内容没变就一个字节都不动。
+守卫 `test_config_saved_never_resets_global_stylesheet`。
+
+**临时自救（复发时）**：**最小化再恢复窗口**（或 `Alt+Tab` 切走切回），
+点击立刻恢复。不用重启程序。
+
+### 15.3 已知真因二：悬浮预览气泡关不掉（2026-11-08 已修）
 
 `ui/win2/preview.py::PreviewBubble` 是 `Qt.Tool | WindowStaysOnTopHint` 的
 **无 parent 顶层窗口**。它有两个要命的性质：
@@ -629,7 +664,7 @@ python tools/diag_click_block.py --topmost   # 只列置顶窗口
 守卫：`tests/test_ui_win2.py::test_preview_hide_now_survives_hover` /
 `test_preview_hover_flag_cleared_on_hide` / `test_window_hide_closes_preview_bubble`。
 
-### 15.3 已知真因二：原生 tooltip 压住按钮（2026-11-06 结论，仍然有效）
+### 15.4 已知真因三：原生 tooltip 压住按钮（2026-11-06 结论，仍然有效）
 
 Qt 的 tooltip 窗口 exstyle = `0x88`（TOOLWINDOW | TOPMOST），**没有
 `WS_EX_TRANSPARENT`** —— 它压住哪个按钮，那个按钮就点不动（第一次点击只是关掉
@@ -639,7 +674,7 @@ tooltip，不会重放给下面的控件）。所以**切换页的按钮一律�
 其他页（设置页「清理」、标题栏、侧栏把手、剪贴板暂停、配对页刷新）仍有原生
 tooltip，属已知取舍；如果哪天又出现「点一次没反应、再点就好了」，先怀疑它们。
 
-### 15.4 别的原因（按概率）
+### 15.5 别的原因（按概率）
 
 | 现象 | 查什么 |
 |---|---|

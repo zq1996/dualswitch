@@ -309,7 +309,8 @@ class UiRunner2(QObject):
         self.app.setFont(font)
         # 外观固定浅色（§2「主题」）
         theme.set_appearance("light")
-        self.app.setStyleSheet(theme.qss())
+        self._applied_qss = theme.qss()
+        self.app.setStyleSheet(self._applied_qss)
         # 点过的按钮不留灰色虚线焦点框（噪音，见 ui/win2/focus_style.py）
         focus_style.install(self.app)
 
@@ -1213,6 +1214,31 @@ class UiRunner2(QObject):
         self.window.set_side_hotkey(label)
         self._refresh_menu()
 
+    def _sync_stylesheet(self) -> bool:
+        """按需重设全局样式表 —— **内容没变就一个字节都不动**。
+
+        外观固定 light（§2），`theme.qss()` 每次返回同样内容，所以无条件
+        `app.setStyleSheet()` 纯属重复劳动，而且**有害**：
+
+        主窗口是 `WS_EX_LAYERED`（`WA_TranslucentBackground` + 自绘圆角）。全局重设
+        样式表会让所有 widget 重新 polish，layered 窗口的 buffer 与 **hit-test 区域**
+        可能因此脱节 —— 画面还留在屏幕上（DWM 缓存），但 Windows 认为那块像素全透明，
+        鼠标就整片穿透给下层窗口：**按钮看得见、点哪都没反应**。
+
+        2026-11-08 现场实测（用户报「各个按钮都不能按」）：主窗口前台、可见、
+        未禁用、`SendMessageTimeout(WM_NULL)` 0ms 响应、枚举窗口无遮挡，但窗口内
+        **每一个点**的 `WindowFromPoint` 都返回下层窗口；最小化再恢复后立刻恢复
+        （强制重建 layered buffer）。触发点就是每次保存配置都重设样式表。
+
+        返回是否真的重设了。
+        """
+        qss = theme.qss()
+        if qss == getattr(self, "_applied_qss", None):
+            return False
+        self.app.setStyleSheet(qss)
+        self._applied_qss = qss
+        return True
+
     def on_config_saved(self, cfg) -> None:  # noqa: ANN001
         old_hotkey = self._hotkey_spec
         old_clip_on = bool(
@@ -1239,7 +1265,7 @@ class UiRunner2(QObject):
         from . import icons
 
         icons.clear_cache()
-        self.app.setStyleSheet(theme.qss())
+        self._sync_stylesheet()
         # 这里**不要**重建 Toast：旧的那个没人 delete，会一直挂在窗口上当子控件
         # （它带 WA_TransparentForMouseEvents 不挡点击，但对象和它的 QTimer 都留着，
         # 连点几十次设置就攒一堆）。样式表换过之后复用同一个即可，`show_text` 自带 raise_()。
