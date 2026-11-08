@@ -845,6 +845,12 @@ QT_QPA_PLATFORM=offscreen <venv python> tools/shots_win2.py
 > 同一天 mac 端设置页新增了「鼠标跟随」组（`mouse_switch.local_slot / peer_slot / settle_ms`
 > 可配，以前只能手改 config.json）。Windows 端要做就照同一组字段与文案，
 > **别自己发明第二套语义**（0 = 未配置、两端不能同槽位）。
+>
+> **2026-11-08 已落地（Windows 端）**：`ui/win2/settings_page.py::SlotPicker` 与 mac2 同构
+> （1·2·3 三个 34×28 方块、`#slotBtn`、0 = 全不选），分组顺序同为
+> 显示器 / 鼠标跟随 / 通用 / 剪贴板 / 热键，行数 3/3/2/3/3。切屏页状态行文案同步改成
+> 「槽位未配置 · 去「设置 › 鼠标跟随」选好两端槽位」。**确认样式仍按上面的决定不动**
+> （继续用 §8 遮罩），两端暂时不一致是有意为之。
 
 ### 14.2 已拍板（2026-10-22）：侧栏 156 + 收起 / 侧栏退出按钮
 

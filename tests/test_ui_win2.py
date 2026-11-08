@@ -748,7 +748,7 @@ def test_chips_height_and_counts(app, cfg):
 
 
 # --------------------------------------------------------------------------- #
-# 8. 设置页四组（与 mac2 同构：显示器 / 通用 / 剪贴板 / 热键）
+# 8. 设置页五组（与 mac2 同构：显示器 / 鼠标跟随 / 通用 / 剪贴板 / 热键）
 # --------------------------------------------------------------------------- #
 def test_settings_has_four_groups_like_mac(app, cfg, tmp_path):
     """2026-11-07 用户：设置页内容以 mac 端为准。
@@ -758,7 +758,7 @@ def test_settings_has_four_groups_like_mac(app, cfg, tmp_path):
     """
     page = SettingsPage(cfg, tmp_path / "config.json")
     titles = [lb.text() for lb in page.findChildren(QLabel) if lb.objectName() == "setSec"]
-    assert titles == ["显示器", "通用", "剪贴板", "热键"]
+    assert titles == ["显示器", "鼠标跟随", "通用", "剪贴板", "热键"]
     # 三个调试入口不许回来（要查环境用 CLI：dualswitch probe / doctor）
     assert not hasattr(page, "probeRequested")
     assert not hasattr(page, "openLogRequested")
@@ -766,7 +766,7 @@ def test_settings_has_four_groups_like_mac(app, cfg, tmp_path):
 
 
 def test_settings_row_counts_match_mac(app, cfg, tmp_path):
-    """每组行数也要和 mac2 一致：显示器 3 / 通用 2 / 剪贴板 3 / 热键 3。"""
+    """每组行数也要和 mac2 一致：显示器 3 / 鼠标跟随 3 / 通用 2 / 剪贴板 3 / 热键 3。"""
     page = SettingsPage(cfg, tmp_path / "config.json")
 
     def rows_of(title: str) -> int:
@@ -781,9 +781,48 @@ def test_settings_row_counts_match_mac(app, cfg, tmp_path):
             and lay.itemAt(i).widget().objectName() != "setSep"
         )
 
-    assert {t: rows_of(t) for t in ("显示器", "通用", "剪贴板", "热键")} == {
-        "显示器": 3, "通用": 2, "剪贴板": 3, "热键": 3,
+    assert {t: rows_of(t) for t in ("显示器", "鼠标跟随", "通用", "剪贴板", "热键")} == {
+        "显示器": 3, "鼠标跟随": 3, "通用": 2, "剪贴板": 3, "热键": 3,
     }
+
+
+def test_settings_mouse_slots_write_config(app, cfg, tmp_path):
+    """鼠标跟随的槽位/延时必须能在界面上改（以前只能手改 config.json）。
+
+    槽位没配时切屏页的开关是隐藏的，等于「有功能但打不开」。
+    """
+    from dualswitch.config import load
+
+    path = tmp_path / "config.json"
+    page = SettingsPage(cfg, path)
+    assert page.pick_slot_local.value() == 0
+    assert page.pick_slot_peer.value() == 0
+
+    page.pick_slot_local.set_value(2)
+    page._on_slot_changed(2)
+    page.pick_slot_peer.set_value(1)
+    page._on_slot_changed(1)
+    page.edit_settle.setText("600")
+    page._apply()
+
+    disk = load(path)
+    assert disk.mouse_switch.local_slot == 2
+    assert disk.mouse_switch.peer_slot == 1
+    assert disk.mouse_switch.settle_ms == 600
+
+
+def test_settings_mouse_slots_reject_same_slot(app, cfg, tmp_path):
+    """两端选同一个槽位要拦住：否则打开跟随会把两边互相推走。"""
+    page = SettingsPage(cfg, tmp_path / "config.json")
+    toasts: list[str] = []
+    page.toastRequested.connect(toasts.append)
+    page.pick_slot_local.set_value(3)
+    page._on_slot_changed(3)
+    page.pick_slot_peer.set_value(3)
+    page._on_slot_changed(3)
+    assert toasts and "同一个槽位" in toasts[-1]
+    assert page.cfg.mouse_switch.local_slot == 3
+    assert page.cfg.mouse_switch.peer_slot == 0
 
 
 def test_settings_writes_config(app, cfg, tmp_path):
@@ -1491,7 +1530,7 @@ def test_paused_state_uses_warn_tone_and_windows_wording(app, cfg):
 def test_mouse_row_hides_the_switch_when_slots_are_unconfigured(app, cfg):
     """槽位没配时打开开关也不会有任何效果，所以不给开关 —— 置灰会被当成「待会儿能开」。"""
     page = SwitchPage(cfg, "Alt+Space", "")
-    page.set_mouse_follow(False, "槽位未配置 · 在 config.json 填 mouse_switch",
+    page.set_mouse_follow(False, "槽位未配置 · 去「设置 › 鼠标跟随」选好两端槽位",
                           "idle", usable=False)
     row = page.follow.mouse
     assert row.switch.isHidden() is True

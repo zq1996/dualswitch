@@ -519,6 +519,26 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-08 12:5x **合并远端 `d351ff3`（Mac 端鼠标跟随设置页 + 解除配对浮出卡），Windows 端补同款设置组**
+  · 远端一个提交两件事：① 配对页「解除配对」确认从「卡片下方多长一块」改成贴按钮浮出的
+    `PopConfirm`（`ui/mac2/widgets.py`）；② 设置页新增「鼠标跟随」组，把原先只能手改
+    config.json 的 `mouse_switch.local_slot / peer_slot / settle_ms` 摊到界面上。
+  · **① 按设计决定不跟**：`docs/UI-WINDOWS2-DESIGN.md` §14.1 已写明两端确认样式暂时不同、
+    Windows 继续用 §8 窗口内遮罩（别为了对齐返工能用的遮罩）。Windows 配对页未改。
+  · **② 照做**：`ui/win2/settings_page.py` 加 `SlotPicker`（1·2·3 三个 34×28 方块、对象名
+    `slotBtn`、`0 = 全不选`）+ `_on_slot_changed / _settle_control / _settle_value`，
+    `_apply` 写回 `mouse_switch`。分组顺序变五组：显示器 / 鼠标跟随 / 通用 / 剪贴板 / 热键，
+    行数 3/3/2/3/3（与 mac2 逐字一致）。`ui/win2/theme.py` 补 `#slotBtn` 三态样式。
+  · **两端同槽位就地拦住**：撞了退回原值 + toast「本机和对端不能选同一个槽位」——
+    否则打开跟随会两边互相把对方推走（config 的 `_validate_mouse_switch` 也会拦，但那时
+    已经落盘失败、用户只看到「保存失败」）。
+  · 切屏页文案：`ui/win2/runner.py` 的「在 config.json 填 mouse_switch」→
+    「去「设置 › 鼠标跟随」选好两端槽位」（`docs/KEYBOARD-BRIDGE.md` 同步）。
+  · 顺手修 `settings_page.py` 模块 docstring：还写着已删除的「高级」组。
+  · 新增 2 条用例（槽位/延时写盘、同槽位拒绝）+ 改 3 条（五组组名、行数、槽位未配文案）。
+  · 界面复核（真字体 + 主题 QSS，`tools/shots_win2.py` + 选中态离屏抓图）：三行都单行、
+    1·2·3 方块 34×28 不被压、选中态蓝底白字清晰、`800 ms` 与单位对齐，无裁切/重叠。
+  · 基线：**624 tests / 614 passed / 0 failed / 10 skipped**。
 - 2026-11-08 09:50 **排查「启动两次、第一次点击不生效」→ 加单实例保护**
   · 日志（`%APPDATA%\dualswitch-v3\logs\dualswitch.log`）证实今早确实起了两次：
     **09:28:32** 与 **09:28:56**，两次都没有退出记录。进程列表里**两个真实实例都还活着**
