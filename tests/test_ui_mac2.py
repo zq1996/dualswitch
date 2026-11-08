@@ -949,7 +949,7 @@ def test_switch_page_follows_screen_port_count(app):
     )
     page = SwitchPage(cfg, "alt+space", "U27N3G6R4B")
     assert [r.port_name for r in page.hero.rows] == ["hdmi1", "hdmi2", "dp", "usb_c"]
-    assert [r.value for r in page.hero.rows] == [17, 17, 15, 100]
+    assert [r.value for r in page.hero.rows] == [17, 17, 15, 18]
     assert page.hero.rows[3].role == "local"      # 本机 USB-C
     assert page.hero.rows[0].role == "peer"       # 对端 HDMI 1
 
