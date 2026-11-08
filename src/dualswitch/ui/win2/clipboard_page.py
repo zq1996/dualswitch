@@ -878,7 +878,11 @@ class ClipboardPage(QWidget):
                 self.search_edit.setFocus(Qt.ShortcutFocusReason)
                 self.search_edit.selectAll()
                 return True
-        return super().eventFilter(obj, event)
+        # 这里**不能**写 `super().eventFilter(...)`：PySide6 对 QObject 虚函数会把
+        # super() 调用重新派发回本方法，递归到解释器栈上限（mac2 实测 870 层
+        # RuntimeError，win2 在 atexit 实测 909 层）。`QObject.eventFilter` 的默认
+        # 行为就是「不拦截」，直接返回 False 语义完全相同。
+        return False
 
     def handle_escape(self) -> bool:
         """`Esc`：先关预览气泡，再清搜索，最后取消选中（§6.5）。"""

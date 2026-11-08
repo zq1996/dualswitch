@@ -445,6 +445,109 @@ def test_single_click_copies_double_click_previews(app, cfg):
     page.close()
 
 
+def test_config_saved_never_resets_global_stylesheet():
+    """保存配置**不许**无条件重设全局样式表 —— 会让 layered 窗口的点击整片穿透。
+
+    2026-11-08 用户报「各个按钮都不能按」，现场取证：主窗口 `WS_EX_LAYERED`
+    （`WA_TranslucentBackground` + 自绘圆角），前台、可见、未禁用、
+    `SendMessageTimeout(WM_NULL)` 0ms 响应、枚举窗口无遮挡，但窗口内**每个点**的
+    `WindowFromPoint` 都返回下层窗口 —— 画面还在（DWM 缓存），点击整片穿透。
+    最小化再恢复立刻正常（强制重建 buffer）。触发点是每次 `on_config_saved` 都
+    `app.setStyleSheet(theme.qss())` 全局 repolish。
+
+    只允许走 `_sync_stylesheet()`：QSS 内容没变就不重设（外观固定 light，永远不变）。
+    """
+    from pathlib import Path as _Path
+
+    src = (_Path(__file__).resolve().parents[1] / "src" / "dualswitch" / "ui"
+           / "win2" / "runner.py").read_text(encoding="utf-8")
+    body = src.split("def on_config_saved", 1)[1].split("def _toggle_clip_engine", 1)[0]
+    bad = [
+        ln.strip()
+        for ln in body.splitlines()
+        if "setStyleSheet" in ln.split("#", 1)[0]
+    ]
+    assert not bad, f"on_config_saved 里别直接 setStyleSheet，走 _sync_stylesheet()：{bad}"
+
+
+def test_no_super_eventfilter_in_win2():
+    """`super().eventFilter()` 会递归爆栈 —— 一律 `return False`。
+
+    PySide6 对 QObject 虚函数会把 `super().eventFilter(...)` 重新派发回**本方法**：
+    mac2 的配对页实测 870 层 `RuntimeError`，win2 在解释器退出时实测 909 层
+    （`Exception ignored in atexit callback`）。而 `QObject.eventFilter` 的默认行为
+    就是「不拦截」，所以 `return False` 语义完全相同、且不会递归。
+    """
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1] / "src" / "dualswitch" / "ui" / "win2"
+    bad = [
+        f"{p.name}:{i}"
+        for p in sorted(root.glob("*.py"))
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        # 只看代码部分：解释这条坑的注释里会出现同样的字面量
+        if "super().eventFilter" in line.split("#", 1)[0]
+    ]
+    assert not bad, f"这些地方调了 super().eventFilter，会递归爆栈：{bad}"
+
+
+def test_preview_hide_now_survives_hover(app, cfg):
+    """气泡是置顶顶层窗口，切页时必须能**强制**关掉。
+
+    2026-11-08 用户报「设置完鼠标后点菜单没反应」：`PreviewBubble` 是
+    `Qt.Tool | WindowStaysOnTopHint` 的顶层窗口，一 `show()` 鼠标通常就落在它
+    范围内 → `_bubble_hovered` 立刻为真 → 切页的 `hide_now()` 被「鼠标还在气泡上
+    就不关」那条规则拦住 → 气泡永久置顶，把主窗口的点击全吃掉（它的窗口矩形
+    含阴影/箭头留白，整体吃事件）。
+    """
+    ctrl = PreviewController(None)
+    ctrl.bubble.show()
+    app.processEvents()
+    assert ctrl.bubble.isVisible()
+    ctrl.notify_bubble_hover(True)          # 模拟「鼠标正停在气泡上」
+
+    ctrl.hide_now()
+    assert not ctrl.bubble.isVisible(), "hide_now() 必须强制关，不能被悬停拦住"
+    assert ctrl._bubble_hovered is False, "强制关之后要清掉悬停标志"
+
+
+def test_preview_hover_flag_cleared_on_hide(app, cfg):
+    """Qt 不给被隐藏的窗口补发 leaveEvent → 标志必须由 hideEvent 清。
+
+    不清的话 `_bubble_hovered` 永久停在 True，之后 `schedule_close()` 全部失效，
+    气泡再弹出来就关不掉了。
+    """
+    ctrl = PreviewController(None)
+    ctrl.bubble.show()
+    app.processEvents()
+    ctrl.notify_bubble_hover(True)
+    assert ctrl._bubble_hovered is True
+
+    ctrl.bubble.hide()
+    app.processEvents()
+    assert ctrl._bubble_hovered is False
+
+
+def test_window_hide_closes_preview_bubble(app, cfg):
+    """收托盘 / 最小化时必须收掉气泡：它是无 parent 的置顶顶层窗口，不跟主窗隐藏。"""
+
+    class _Ctrl:
+        def __init__(self):
+            self.hidden = 0
+
+        def hide_now(self):
+            self.hidden += 1
+
+    ctrl = _Ctrl()
+    win = MainWindow(cfg, "Alt+Space", "v0")
+    win.clip_page = type("_Clip", (), {"preview_controller": ctrl})()
+    win.show()
+    app.processEvents()
+    win.hide()
+    app.processEvents()
+    assert ctrl.hidden == 1, "主窗口隐藏时要主动收气泡"
+
+
 def test_preview_delays(app, cfg):
     assert PreviewController.OPEN_DELAY_MS == 450
     assert PreviewController.CLOSE_DELAY_MS == 220
@@ -748,7 +851,7 @@ def test_chips_height_and_counts(app, cfg):
 
 
 # --------------------------------------------------------------------------- #
-# 8. 设置页四组（与 mac2 同构：显示器 / 通用 / 剪贴板 / 热键）
+# 8. 设置页五组（与 mac2 同构：显示器 / 鼠标跟随 / 通用 / 剪贴板 / 热键）
 # --------------------------------------------------------------------------- #
 def test_settings_has_four_groups_like_mac(app, cfg, tmp_path):
     """2026-11-07 用户：设置页内容以 mac 端为准。
@@ -758,7 +861,7 @@ def test_settings_has_four_groups_like_mac(app, cfg, tmp_path):
     """
     page = SettingsPage(cfg, tmp_path / "config.json")
     titles = [lb.text() for lb in page.findChildren(QLabel) if lb.objectName() == "setSec"]
-    assert titles == ["显示器", "通用", "剪贴板", "热键"]
+    assert titles == ["显示器", "鼠标跟随", "通用", "剪贴板", "热键"]
     # 三个调试入口不许回来（要查环境用 CLI：dualswitch probe / doctor）
     assert not hasattr(page, "probeRequested")
     assert not hasattr(page, "openLogRequested")
@@ -766,7 +869,7 @@ def test_settings_has_four_groups_like_mac(app, cfg, tmp_path):
 
 
 def test_settings_row_counts_match_mac(app, cfg, tmp_path):
-    """每组行数也要和 mac2 一致：显示器 3 / 通用 2 / 剪贴板 3 / 热键 3。"""
+    """每组行数也要和 mac2 一致：显示器 3 / 鼠标跟随 3 / 通用 2 / 剪贴板 3 / 热键 3。"""
     page = SettingsPage(cfg, tmp_path / "config.json")
 
     def rows_of(title: str) -> int:
@@ -781,9 +884,48 @@ def test_settings_row_counts_match_mac(app, cfg, tmp_path):
             and lay.itemAt(i).widget().objectName() != "setSep"
         )
 
-    assert {t: rows_of(t) for t in ("显示器", "通用", "剪贴板", "热键")} == {
-        "显示器": 3, "通用": 2, "剪贴板": 3, "热键": 3,
+    assert {t: rows_of(t) for t in ("显示器", "鼠标跟随", "通用", "剪贴板", "热键")} == {
+        "显示器": 3, "鼠标跟随": 3, "通用": 2, "剪贴板": 3, "热键": 3,
     }
+
+
+def test_settings_mouse_slots_write_config(app, cfg, tmp_path):
+    """鼠标跟随的槽位/延时必须能在界面上改（以前只能手改 config.json）。
+
+    槽位没配时切屏页的开关是隐藏的，等于「有功能但打不开」。
+    """
+    from dualswitch.config import load
+
+    path = tmp_path / "config.json"
+    page = SettingsPage(cfg, path)
+    assert page.pick_slot_local.value() == 0
+    assert page.pick_slot_peer.value() == 0
+
+    page.pick_slot_local.set_value(2)
+    page._on_slot_changed(2)
+    page.pick_slot_peer.set_value(1)
+    page._on_slot_changed(1)
+    page.edit_settle.setText("600")
+    page._apply()
+
+    disk = load(path)
+    assert disk.mouse_switch.local_slot == 2
+    assert disk.mouse_switch.peer_slot == 1
+    assert disk.mouse_switch.settle_ms == 600
+
+
+def test_settings_mouse_slots_reject_same_slot(app, cfg, tmp_path):
+    """两端选同一个槽位要拦住：否则打开跟随会把两边互相推走。"""
+    page = SettingsPage(cfg, tmp_path / "config.json")
+    toasts: list[str] = []
+    page.toastRequested.connect(toasts.append)
+    page.pick_slot_local.set_value(3)
+    page._on_slot_changed(3)
+    page.pick_slot_peer.set_value(3)
+    page._on_slot_changed(3)
+    assert toasts and "同一个槽位" in toasts[-1]
+    assert page.cfg.mouse_switch.local_slot == 3
+    assert page.cfg.mouse_switch.peer_slot == 0
 
 
 def test_settings_writes_config(app, cfg, tmp_path):
@@ -1491,7 +1633,7 @@ def test_paused_state_uses_warn_tone_and_windows_wording(app, cfg):
 def test_mouse_row_hides_the_switch_when_slots_are_unconfigured(app, cfg):
     """槽位没配时打开开关也不会有任何效果，所以不给开关 —— 置灰会被当成「待会儿能开」。"""
     page = SwitchPage(cfg, "Alt+Space", "")
-    page.set_mouse_follow(False, "槽位未配置 · 在 config.json 填 mouse_switch",
+    page.set_mouse_follow(False, "槽位未配置 · 去「设置 › 鼠标跟随」选好两端槽位",
                           "idle", usable=False)
     row = page.follow.mouse
     assert row.switch.isHidden() is True

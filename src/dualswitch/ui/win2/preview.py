@@ -529,6 +529,18 @@ class PreviewBubble(QFrame):
             ctrl.schedule_close()
         super().leaveEvent(event)
 
+    def hideEvent(self, event):  # noqa: N802
+        """气泡一隐藏就清掉悬停标志。
+
+        **必须清**：Qt 不会给被隐藏的窗口补发 `leaveEvent`，所以「鼠标在气泡上时
+        气泡被隐藏」会让 `_bubble_hovered` 永久停在 True —— 之后
+        `schedule_close()` 全部失效，气泡再弹出来就关不掉了（2026-11-08 实测）。
+        """
+        ctrl = getattr(self, "_preview_controller", None)
+        if ctrl is not None:
+            ctrl.notify_bubble_hover(False)
+        super().hideEvent(event)
+
     # ------------------------------------------------------------------ 填充
     def clear_body(self) -> None:
         while self._body_lay.count():
@@ -795,11 +807,21 @@ class PreviewController(QObject):
             self._close_timer.stop()
 
     def hide_now(self) -> None:
-        """滚动 / 换页 / 换行：立即关，不等延时。"""
+        """滚动 / 换页 / 换行：立即关，不等延时。
+
+        **必须强制**（`force=True`）：气泡是 `Qt.Tool | WindowStaysOnTopHint` 的
+        **顶层窗口**，一旦它没被关掉，就会一直浮在主窗口上面 —— 它的窗口矩形
+        （含阴影/箭头留白）整体吃鼠标事件，表现就是「点哪都没反应」。
+        而「鼠标还停在气泡上就不关」这条规则会让 `hide_now()` 也失效：
+        气泡一显示，鼠标通常就落在它范围内 → `_bubble_hovered` 立刻为真 →
+        切页时关不掉 → 永久置顶。2026-11-08 用户报的「设置完鼠标后点菜单没反应」
+        就是这条（`enterEvent` 在 show 后马上把标志置真）。
+        """
         self._open_timer.stop()
         self._close_timer.stop()
         self._pending = None
-        self._do_close()
+        self._bubble_hovered = False
+        self._do_close(force=True)
 
     def is_open(self) -> bool:
         return self.bubble.isVisible()
@@ -825,8 +847,10 @@ class PreviewController(QObject):
         self.bubble.show()
         self._animate_in()
 
-    def _do_close(self) -> None:
-        if self._bubble_hovered and self.bubble.isVisible():
+    def _do_close(self, force: bool = False) -> None:
+        """关气泡。`force=False` 时尊重「鼠标还停在气泡上就不关」；
+        `hide_now()` / 换记录这类必须关的调用点传 `force=True`。"""
+        if not force and self._bubble_hovered and self.bubble.isVisible():
             return                      # 鼠标还在气泡上：不关
         if self.bubble.isVisible():
             self.bubble.hide()

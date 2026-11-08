@@ -519,6 +519,80 @@ dualswitch/
 
 ## 8. 变更日志
 
+- 2026-11-08 15:1x **定位并修掉「所有按钮都点不动」：layered 窗口点击整片穿透**
+  · 用户报「现在桌面上的 V3，各个按钮都不能按了」，程序还活着 → **活的现场**，直接取证。
+  · **现象全对不上常见猜测**：`SendMessageTimeout(WM_NULL)` **0ms 返回 1**（UI 线程活着，
+    不是卡死）；`IsWindowEnabled=True`、`WS_DISABLED` 未置位（不是被模态窗口禁用）；
+    `GetForegroundWindow()` **就是主窗口**（前台）；枚举该进程 7 个顶层窗口只有主窗口可见
+    （**没有浮层、没有 tooltip**）；`GetCapture()` 空（没人抢鼠标）。
+  · **决定性两条**：① 主窗口内**每一个点**的 `WindowFromPoint` 都返回下层窗口
+    （当时是 WorkBuddy 的 `Chrome_WidgetWin_1`），而截图证明画面还好好显示着；
+    ② 用 `PostMessage` 往侧栏按钮投 `WM_LBUTTONDOWN/UP`，页面**正常切换**
+    （设置 → 切换 → 配对）—— 说明 Qt 内部、布局、信号全都正常。
+  · **机制**：主窗口是 `WS_EX_LAYERED`（`WA_TranslucentBackground` + 自绘圆角）。
+    全局 `app.setStyleSheet()` 会让所有 widget 重新 polish，layered 窗口的绘制 buffer
+    与 **hit-test 区域**脱节 —— 画面留在屏幕上（DWM 缓存），Windows 却认为那块像素全透明，
+    鼠标整片穿透给下层窗口。**验证**：`SW_MINIMIZE` → `SW_RESTORE` 强制重建 buffer 后，
+    hit-test 立刻回到主窗口（用户当场恢复可点）。
+  · **触发点**：`on_config_saved()` 每次保存配置都无条件 `app.setStyleSheet(theme.qss())`。
+    外观固定 light，QSS 内容永远不变 —— 纯属重复劳动且有害。日志佐证：
+    15:00:45 / 15:00:47 两次「热键已重建」（= 两次 `on_config_saved`，用户在设置页点
+    「严格区分左右 Alt」），之后按钮全失效。
+  · 修：新增 `UiRunner2._sync_stylesheet()`，内容没变就一个字节都不动；`__init__` 里
+    缓存首份 QSS。守卫 `test_config_saved_never_resets_global_stylesheet`（扫
+    `on_config_saved` 函数体，不许出现裸 `setStyleSheet`）。
+  · 这也**解释了昨天那个「浮窗遮挡」的误判**：删掉 hover 浮层后问题照旧，因为根因不是浮层。
+  · 顺带记下两个未解项（与本 bug 无关，恢复后依旧存在）：
+    ① 主窗口实际 780×628，而 `WIN_H(550)+extra(58)` 应为 608（628 = 570+58，即 mac2 的
+    `WIN_H`；`grep WIN_H` 全仓库只有 550，来源仍未定位 —— 与 2026-11-08 09:50 条目同源）；
+    ② `apply_port_count` 的 `setFixedSize` 若哪天真的改变尺寸，同样可能触发 buffer 脱节。
+  · 文档：`docs/TROUBLESHOOTING.md` §15.2 新增（含完整取证表格 + **临时自救：最小化再恢复**）。
+  · 基线：**629 tests / 619 passed / 0 failed / 10 skipped**。
+- 2026-11-08 13:0x **修「点哪都不好使」：悬浮预览气泡关不掉 → 永久置顶吃点击**
+  · 用户报：V3 界面一开始能点，改完鼠标设置后点侧栏/菜单全没反应；昨天就出现过，
+    当时归因于「浮窗遮挡」，删掉浮窗后仍在。
+  · **真因（实测复现）**：`ui/win2/preview.py::PreviewBubble` 是
+    `Qt.Tool | WindowStaysOnTopHint` 的**无 parent 顶层窗口**，窗口矩形（含阴影/箭头
+    留白）整体吃鼠标事件；而 `hide_now()` 走 `_do_close()`，后者开头有
+    「`_bubble_hovered` 为真就直接 return」。气泡一 `show()`，鼠标通常就落在它范围内
+    → `enterEvent` 立刻把标志置真 → **切页的 `hide_now()` 变成空操作** → 气泡永久置顶。
+    离屏实测：`show()` 后 `_bubble_hovered` 自动为 True，`hide_now()` 后仍可见。
+  · 第二重：Qt 不给被隐藏的窗口补发 `leaveEvent`，标志一旦卡 True 就再也不会复位。
+    第三重：气泡不跟主窗口隐藏，**收托盘后它会孤零零留在桌面上**（此时更关不掉）。
+  · 修三处：① `hide_now()` 传 `force=True`（`_do_close(force=...)`，保留「悬停时
+    `schedule_close` 不关」的设计意图）；② `PreviewBubble.hideEvent` 清 `_bubble_hovered`；
+    ③ `MainWindow.hideEvent`（收托盘/最小化）主动 `hide_now()`。
+  · 顺手修：`on_config_saved` 每次都 `self.toast = Toast(self.window)` 新建一个 —— 旧的
+    没人 delete，连点几十次设置就攒一堆子控件 + QTimer；改为复用（`show_text` 自带 raise_()）。
+  · 排除项（都实测过，不是它们）：侧栏按钮在 `app.setStyleSheet()` 全局重设后仍能点、
+    `apply_port_count()` 改窗口尺寸后仍能点、`FollowRow.set_state` 只改文字不重建控件、
+    `ConfirmOverlay` 点卡片外即关、`runner.eventFilter` 只处理 `ApplicationActivate` 不吞鼠标。
+  · 新增现场取证工具 `tools/diag_click_block.py`：读光标位置 → `WindowFromPoint` →
+    打印该点最上层窗口的进程/类名/尺寸/是否置顶/是否鼠标穿透，再列所有可见置顶窗口。
+    出问题时把鼠标放在点不动的按钮上跑一次即可指认遮挡源（只读，不碰 DDC/剪贴板）。
+  · 文档：`docs/TROUBLESHOOTING.md` 新增 §15（含 tooltip、HID++ 切走鼠标、标定对话框
+    模态、双实例四种「点不动」的分诊表）。
+  · 基线：**627 tests / 617 passed / 0 failed / 10 skipped**（新增 3 条气泡守卫）。
+- 2026-11-08 12:5x **合并远端 `d351ff3`（Mac 端鼠标跟随设置页 + 解除配对浮出卡），Windows 端补同款设置组**
+  · 远端一个提交两件事：① 配对页「解除配对」确认从「卡片下方多长一块」改成贴按钮浮出的
+    `PopConfirm`（`ui/mac2/widgets.py`）；② 设置页新增「鼠标跟随」组，把原先只能手改
+    config.json 的 `mouse_switch.local_slot / peer_slot / settle_ms` 摊到界面上。
+  · **① 按设计决定不跟**：`docs/UI-WINDOWS2-DESIGN.md` §14.1 已写明两端确认样式暂时不同、
+    Windows 继续用 §8 窗口内遮罩（别为了对齐返工能用的遮罩）。Windows 配对页未改。
+  · **② 照做**：`ui/win2/settings_page.py` 加 `SlotPicker`（1·2·3 三个 34×28 方块、对象名
+    `slotBtn`、`0 = 全不选`）+ `_on_slot_changed / _settle_control / _settle_value`，
+    `_apply` 写回 `mouse_switch`。分组顺序变五组：显示器 / 鼠标跟随 / 通用 / 剪贴板 / 热键，
+    行数 3/3/2/3/3（与 mac2 逐字一致）。`ui/win2/theme.py` 补 `#slotBtn` 三态样式。
+  · **两端同槽位就地拦住**：撞了退回原值 + toast「本机和对端不能选同一个槽位」——
+    否则打开跟随会两边互相把对方推走（config 的 `_validate_mouse_switch` 也会拦，但那时
+    已经落盘失败、用户只看到「保存失败」）。
+  · 切屏页文案：`ui/win2/runner.py` 的「在 config.json 填 mouse_switch」→
+    「去「设置 › 鼠标跟随」选好两端槽位」（`docs/KEYBOARD-BRIDGE.md` 同步）。
+  · 顺手修 `settings_page.py` 模块 docstring：还写着已删除的「高级」组。
+  · 新增 2 条用例（槽位/延时写盘、同槽位拒绝）+ 改 3 条（五组组名、行数、槽位未配文案）。
+  · 界面复核（真字体 + 主题 QSS，`tools/shots_win2.py` + 选中态离屏抓图）：三行都单行、
+    1·2·3 方块 34×28 不被压、选中态蓝底白字清晰、`800 ms` 与单位对齐，无裁切/重叠。
+  · 基线：**624 tests / 614 passed / 0 failed / 10 skipped**。
 - 2026-11-08 09:50 **排查「启动两次、第一次点击不生效」→ 加单实例保护**
   · 日志（`%APPDATA%\dualswitch-v3\logs\dualswitch.log`）证实今早确实起了两次：
     **09:28:32** 与 **09:28:56**，两次都没有退出记录。进程列表里**两个真实实例都还活着**

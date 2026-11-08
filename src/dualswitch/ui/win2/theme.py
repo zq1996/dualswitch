@@ -731,6 +731,16 @@ def qss(t: Tokens | None = None) -> str:
     }}
     QPushButton#segBtn:hover {{ color: {t.ink}; }}
     QPushButton#segBtn:checked {{ background: {t.accent}; color: {t.on_accent}; font-weight: 650; }}
+    /* 鼠标 Easy-Switch 槽位 1·2·3（设置页） */
+    QPushButton#slotBtn {{
+        background: {t.card}; color: {t.ink2}; border: 1px solid {t.line};
+        border-radius: 7px; font-size: 11.5px; font-weight: 600; padding: 0;
+    }}
+    QPushButton#slotBtn:hover {{ border-color: {t.accent}; color: {t.accent_deep}; }}
+    QPushButton#slotBtn:checked {{
+        background: {t.accent}; color: {t.on_accent}; border-color: {t.accent};
+        font-weight: 650;
+    }}
     QPushButton#recordBtn {{
         background: transparent; border: 1px dashed {t.line}; border-radius: 8px;
         color: {t.ink2}; font-size: 11px; padding: 0 10px;

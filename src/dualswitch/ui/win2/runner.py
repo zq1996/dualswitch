@@ -14,6 +14,8 @@ Windows 特有的三件事都在这里：
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import threading
 from pathlib import Path
 
@@ -216,7 +218,55 @@ class ConfirmOverlay(QWidget):
             if key in (Qt.Key_Return, Qt.Key_Enter):
                 self.confirm()
                 return True
-        return super().eventFilter(obj, event)
+        # 不能写 `super().eventFilter(...)`：PySide6 会把 super() 调用派回本方法，
+        # 递归到解释器栈上限（mac2 实测 870 层，win2 在 atexit 实测 909 层）。
+        # `QObject.eventFilter` 默认就是「不拦截」，返回 False 语义相同。
+        return False
+
+
+# --------------------------------------------------------------------------- #
+# 输入异常自检（Windows）：Qt 侧看不出「被别的进程盖住」
+# --------------------------------------------------------------------------- #
+def _covering_window(window: QWidget) -> str | None:
+    """主窗口中心点最上层的顶层窗口是否属于**别的进程**。
+
+    被别的进程的窗口盖住时，Qt 侧一切正常（`isVisible()` 全 True、没有模态、
+    没有 grab），只有问 Win32 才知道上面压着一层。返回一句人话或 None。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+
+        user32 = ctypes.windll.user32
+        # 64 位下 HWND 是 8 字节，按默认 int 传会被截断
+        user32.WindowFromPoint.argtypes = [wt.POINT]
+        user32.WindowFromPoint.restype = wt.HWND
+        user32.GetAncestor.argtypes = [wt.HWND, ctypes.c_uint]
+        user32.GetAncestor.restype = wt.HWND
+        user32.GetClassNameW.argtypes = [wt.HWND, ctypes.c_wchar_p, ctypes.c_int]
+        user32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+
+        own = int(window.winId())
+        if user32.IsIconic(own):          # 最小化时中心点必然落在别的窗口上
+            return None
+
+        center = window.frameGeometry().center()
+        root = user32.GetAncestor(
+            user32.WindowFromPoint(wt.POINT(center.x(), center.y())), 2  # GA_ROOT
+        )
+        if not root:
+            return None
+        pid = wt.DWORD()
+        user32.GetWindowThreadProcessId(root, ctypes.byref(pid))
+        if not pid.value or pid.value == os.getpid():
+            return None
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(root, buf, 256)
+        return f"主窗口中心被别的进程的窗口盖住：{buf.value}（pid {pid.value}）"
+    except Exception:  # noqa: BLE001 - 自检本身失败不该影响主流程
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -243,6 +293,8 @@ class UiRunner2(QObject):
         #: 收到消息只把窗口叫到前台，不开新窗口。
         self.guard = guard
         self._first_switch_hint_shown = False
+        #: 输入异常自检已报过的问题（同一个问题只报一次，别刷屏）
+        self._input_warned: set[str] = set()
 
         self.app = QApplication.instance() or QApplication([])
         from ...config import APP_DISPLAY_NAME
@@ -257,7 +309,8 @@ class UiRunner2(QObject):
         self.app.setFont(font)
         # 外观固定浅色（§2「主题」）
         theme.set_appearance("light")
-        self.app.setStyleSheet(theme.qss())
+        self._applied_qss = theme.qss()
+        self.app.setStyleSheet(self._applied_qss)
         # 点过的按钮不留灰色虚线焦点框（噪音，见 ui/win2/focus_style.py）
         focus_style.install(self.app)
 
@@ -781,7 +834,10 @@ class UiRunner2(QObject):
                     self.pairing_page.activate()
             if self._retry_on_activate and self.hotkey is None and not self._hotkey_suspended:
                 QTimer.singleShot(250, self.retry_hotkey)
-        return super().eventFilter(obj, event)
+        # 见 `ConfirmOverlay.eventFilter` 的注释：作为 **QApplication 级**过滤器时
+        # `super().eventFilter(...)` 会派回本方法（atexit 实测 909 层递归）。
+        # 这里只关心 `ApplicationActivate`，其余一律放行。
+        return False
 
     _retry_on_activate = False
 
@@ -869,6 +925,51 @@ class UiRunner2(QObject):
         if changed:
             self._refresh_menu()
         self._refresh_tooltip()
+        # 输入异常自检：250ms 轮询里每 12 次跑一遍（≈3 秒），别每次都调 Win32
+        self._poll_tick = (getattr(self, "_poll_tick", 0) + 1) % 12
+        if self._poll_tick == 0:
+            self._self_check_input()
+
+    def _self_check_input(self) -> None:
+        """「点哪都没反应」的现场留痕：每 3 秒一次，**正常时一个字节都不写**。
+
+        指针能正常移动、但点哪都没反应，在 Qt 侧只有三种可能，这里各查一遍：
+
+        1. **有可见的模态窗口** —— 主窗口被禁用，所有点击都被路由到它；
+        2. **鼠标被某个控件 grab 住** —— 之后所有鼠标事件都发给它，别处收不到；
+        3. **主窗口被别的进程的顶层窗口盖住** —— Qt 侧一切正常（`isVisible()`
+           全是 True），只有问 Win32 才知道上面还压着一层。
+
+        2026-11-08 用户报过一次「改完鼠标设置后点菜单全没反应」，现场没留住证据；
+        这条自检就是为了下次能直接从日志指认。只记日志，不改任何行为。
+        """
+        if self._quitting or not self.window.isVisible():
+            return
+        problems: list[str] = []
+
+        modal = QApplication.activeModalWidget()
+        if modal is not None and modal is not self.window:
+            problems.append(f"模态窗口未关闭：{type(modal).__name__}")
+        if not self.window.isEnabled():
+            problems.append("主窗口被禁用（通常由模态窗口导致）")
+        grabber = QWidget.mouseGrabber()
+        if grabber is not None:
+            problems.append(f"鼠标被 grab：{type(grabber).__name__}")
+        if sys.platform == "win32":
+            cover = _covering_window(self.window)
+            # 连续两次命中同一个外部窗口才报：窗口刚移动/刚最小化/抓屏瞬间都可能
+            # 误判一次，偶发噪音会把真正的问题淹掉。
+            if cover and cover == getattr(self, "_cover_last", None):
+                problems.append(cover)
+            self._cover_last = cover
+
+        if not problems:
+            self._input_warned.clear()
+            return
+        key = "|".join(problems)
+        if key not in self._input_warned:      # 同一个问题只报一次，别刷屏
+            self._input_warned.add(key)
+            log.warning("输入异常自检：%s", "；".join(problems))
 
     def _apply_owner(self, source: str | None = None) -> None:
         """把画面归属刷进切换页：windows/mac → 「画面在 X」，否则「未检测」。
@@ -926,7 +1027,8 @@ class UiRunner2(QObject):
             # 槽位没配时开关打开也不会有任何效果（MouseSwitcher 先校验槽位），
             # 所以直接不给开关，别让人点了以为生效。
             page.set_mouse_follow(
-                False, "槽位未配置 · 在 config.json 填 mouse_switch", "idle", usable=False
+                False, "槽位未配置 · 去「设置 › 鼠标跟随」选好两端槽位", "idle",
+                usable=False,
             )
         elif bool(getattr(ms, "enabled", False)):
             page.set_mouse_follow(
@@ -1112,6 +1214,31 @@ class UiRunner2(QObject):
         self.window.set_side_hotkey(label)
         self._refresh_menu()
 
+    def _sync_stylesheet(self) -> bool:
+        """按需重设全局样式表 —— **内容没变就一个字节都不动**。
+
+        外观固定 light（§2），`theme.qss()` 每次返回同样内容，所以无条件
+        `app.setStyleSheet()` 纯属重复劳动，而且**有害**：
+
+        主窗口是 `WS_EX_LAYERED`（`WA_TranslucentBackground` + 自绘圆角）。全局重设
+        样式表会让所有 widget 重新 polish，layered 窗口的 buffer 与 **hit-test 区域**
+        可能因此脱节 —— 画面还留在屏幕上（DWM 缓存），但 Windows 认为那块像素全透明，
+        鼠标就整片穿透给下层窗口：**按钮看得见、点哪都没反应**。
+
+        2026-11-08 现场实测（用户报「各个按钮都不能按」）：主窗口前台、可见、
+        未禁用、`SendMessageTimeout(WM_NULL)` 0ms 响应、枚举窗口无遮挡，但窗口内
+        **每一个点**的 `WindowFromPoint` 都返回下层窗口；最小化再恢复后立刻恢复
+        （强制重建 layered buffer）。触发点就是每次保存配置都重设样式表。
+
+        返回是否真的重设了。
+        """
+        qss = theme.qss()
+        if qss == getattr(self, "_applied_qss", None):
+            return False
+        self.app.setStyleSheet(qss)
+        self._applied_qss = qss
+        return True
+
     def on_config_saved(self, cfg) -> None:  # noqa: ANN001
         old_hotkey = self._hotkey_spec
         old_clip_on = bool(
@@ -1138,8 +1265,10 @@ class UiRunner2(QObject):
         from . import icons
 
         icons.clear_cache()
-        self.app.setStyleSheet(theme.qss())
-        self.toast = Toast(self.window)
+        self._sync_stylesheet()
+        # 这里**不要**重建 Toast：旧的那个没人 delete，会一直挂在窗口上当子控件
+        # （它带 WA_TransparentForMouseEvents 不挡点击，但对象和它的 QTimer 都留着，
+        # 连点几十次设置就攒一堆）。样式表换过之后复用同一个即可，`show_text` 自带 raise_()。
         self.clipboard_page.mark_dirty()
         self.clipboard_page.refresh()
         self._apply_owner()                # 换了配置也保留「画面在 X」
