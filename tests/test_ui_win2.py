@@ -445,6 +445,27 @@ def test_single_click_copies_double_click_previews(app, cfg):
     page.close()
 
 
+def test_no_super_eventfilter_in_win2():
+    """`super().eventFilter()` 会递归爆栈 —— 一律 `return False`。
+
+    PySide6 对 QObject 虚函数会把 `super().eventFilter(...)` 重新派发回**本方法**：
+    mac2 的配对页实测 870 层 `RuntimeError`，win2 在解释器退出时实测 909 层
+    （`Exception ignored in atexit callback`）。而 `QObject.eventFilter` 的默认行为
+    就是「不拦截」，所以 `return False` 语义完全相同、且不会递归。
+    """
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1] / "src" / "dualswitch" / "ui" / "win2"
+    bad = [
+        f"{p.name}:{i}"
+        for p in sorted(root.glob("*.py"))
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        # 只看代码部分：解释这条坑的注释里会出现同样的字面量
+        if "super().eventFilter" in line.split("#", 1)[0]
+    ]
+    assert not bad, f"这些地方调了 super().eventFilter，会递归爆栈：{bad}"
+
+
 def test_preview_hide_now_survives_hover(app, cfg):
     """气泡是置顶顶层窗口，切页时必须能**强制**关掉。
 
