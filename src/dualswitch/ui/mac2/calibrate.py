@@ -485,11 +485,18 @@ class CalibrationDialog(QDialog):
         self.blue_hint.setText("请稍候")
 
         def work() -> None:
+            # 这块屏的读成功率大约一半，起始口只读一次经常是空的；空着会让
+            # 整个流程失去「起始口」（不能自动切回、读数全被判成 same-as-start），
+            # 所以先重试几次再认命。
             value = None
-            try:
-                value = int(self.backend.get_input())
-            except Exception:  # noqa: BLE001
-                value = None
+            for _ in range(3):
+                try:
+                    value = int(self.backend.get_input())
+                except Exception:  # noqa: BLE001
+                    value = None
+                if value is not None:
+                    break
+                time.sleep(0.2)
             self.started.emit(value)
 
         threading.Thread(target=work, name="calib-start", daemon=True).start()
@@ -518,19 +525,58 @@ class CalibrationDialog(QDialog):
             self.kv_lay.addWidget(row)
             self._kv_rows[port] = (name, value)
 
+    def _local_port(self) -> str:
+        """本机接的那个口（`wiring.local`）—— 码表对不上时用来认起始口。"""
+        cfg = getattr(self.controller, "cfg", None)
+        fn = getattr(cfg, "port_for_role", None)
+        if not callable(fn):
+            return ""
+        try:
+            return str(fn("local") or "")
+        except Exception:  # noqa: BLE001 - 认不出就退回旧行为
+            return ""
+
     def _on_started(self, value) -> None:
-        self._plan = CalibrationPlan.create(self.profile, self._selected, current_value=value)
+        self._plan = CalibrationPlan.create(
+            self.profile,
+            self._selected,
+            current_value=value,
+            fallback_port=self._local_port(),
+        )
         self._read_failures = 0
         self._plan.begin()
-        self.start_hint.setText(
-            f"从 {port_label(self._plan.start_port)} 开始" if self._plan.start_port else ""
-        )
+        if self._plan.start_port and self._plan.start_inferred:
+            # 码表里没有起始口这个值 —— 说明表过时了，起始口是按接线认的
+            self.start_hint.setText(
+                f"{port_label(self._plan.start_port)} = {self._plan.start_value}（按接线认定）"
+            )
+        else:
+            self.start_hint.setText(
+                f"从 {port_label(self._plan.start_port)} 开始" if self._plan.start_port else ""
+            )
         if self._plan.finished:
             self._show_confirm()
             return
         self._set_step(2)
         self._update_run()
         self._poll.start()
+
+    def _invalidate_ddc(self) -> None:
+        """作废 DDC 句柄缓存。
+
+        **标定期必须每次读之前都作废一次**：显示器切到别的输入口之后，macOS 侧
+        那个 `DCPAVServiceProxy` 会变成哑句柄——读回来的是切换前那份快照
+        （2026-11-08 实测：切走后一直读 18，写也返回成功但不生效），必须重新
+        枚举句柄才能拿到真值。旧实现只在「外接屏停用/启用」时作废，标定时永远
+        拿不到新读数，看到的就是「读到 18，一直不稳定」。
+        """
+        fn = getattr(self.backend, "invalidate_ddc_cache", None)
+        if not callable(fn):
+            return
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 - 作废失败不该中断标定
+            pass
 
     def _poll_once(self) -> None:
         if self._poll_busy or self._plan is None or self._plan.state != "waiting":
@@ -540,6 +586,7 @@ class CalibrationDialog(QDialog):
         def work() -> None:
             value = None
             try:
+                self._invalidate_ddc()
                 value = int(self.backend.get_input())
             except Exception:  # noqa: BLE001
                 value = None
@@ -555,6 +602,9 @@ class CalibrationDialog(QDialog):
         port = self._plan.current_step.port if self._plan.current_step else ""
         if value is None:
             self._read_failures += 1
+            # 行内也要写「读不到」：只改蓝色提示的话，行里会一直挂着上一次的
+            # 「18 · 读到了，等待稳定…」，看起来就像「读到了 18 但不稳定」。
+            self._update_kv(port, f"读不到（第 {self._read_failures} 次）", "warn")
             self.blue_hint.setText(f"读不到（第 {self._read_failures} 次），稍等…")
             if self._read_failures >= 6:
                 self.btn_retry.setVisible(True)
@@ -570,6 +620,9 @@ class CalibrationDialog(QDialog):
         elif event == "same-as-start":
             self.btn_manual.setVisible(True)
             self._update_kv(port, "读数没变 · 若画面已切到这个口请点「已切到」", "warn")
+        elif event == "same-as-known":
+            self.btn_manual.setVisible(True)
+            self._update_kv(port, "与上一个口同码 · 切过去后请点「已切到」", "warn")
 
     def _update_kv(self, port: str, text: str, tone: str) -> None:
         row = self._kv_rows.get(port)
@@ -600,13 +653,16 @@ class CalibrationDialog(QDialog):
         self.blue_caption.setText("现在请切到")
         self.blue_port.setText(port_label(step.port))
         self.blue_hint.setText("切走后画面不在这台电脑上——读到我就会把画面送回来的")
-        self.btn_manual.setVisible(False)
+        # 「已切到」常驻：同码口、读通道抽风、读数抖成瞬时值（实测见过 50）时，
+        # 都得有一条不用等状态机点头的出路，否则只能取消重来。
+        self.btn_manual.setVisible(True)
         self.btn_retry.setVisible(False)
         self.btn_skip.setVisible(True)
         self.progress.setValue(int((plan.index / max(1, plan.total)) * 100))
         for port, (name, value) in self._kv_rows.items():
             if port == plan.start_port:
-                value.setText(f"{plan.start_value} · 起始口，最后跳过")
+                tag = "起始口（按接线认定）" if plan.start_inferred else "起始口，最后跳过"
+                value.setText(f"{plan.start_value} · {tag}")
                 name.setStyleSheet(f"color:{theme.tokens().ink3};font-size:12px;")
             elif port == step.port:
                 value.setText("等待中…")
@@ -618,6 +674,23 @@ class CalibrationDialog(QDialog):
                 name.setStyleSheet(f"color:{theme.tokens().ink2};font-size:12px;")
 
     # ------------------------------------------------------------------ 切回
+    def _read_back(self) -> int | None:
+        """重建句柄后读一次当前输入（切回校验用）。"""
+        try:
+            self._invalidate_ddc()
+            return int(self.backend.get_input())
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _wait_until(self, target: int, timeout: float) -> bool:
+        """等到显示器真的报 `target`。切走后旧句柄会一直回快照，所以每次重读。"""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(0.4)
+            if self._read_back() == target:
+                return True
+        return False
+
     def _switch_back(self) -> None:
         plan = self._plan
         if plan is None:
@@ -630,13 +703,22 @@ class CalibrationDialog(QDialog):
             self._manual_is_back = True
             return
         self._manual_is_back = False
+        target = int(plan.start_value)
 
         def work() -> None:
-            try:
-                self.controller.set_input_local(int(plan.start_value), source="calibrate")
-            except Exception:  # noqa: BLE001
-                pass
-            time.sleep(2.5)
+            # 只发一次很容易「返回成功但没生效」（切走后的哑句柄 / 显示器还在
+            # 扫描输入），所以发完必须**读回来验证**，不对就再发一次。
+            for attempt in range(2):
+                try:
+                    self._invalidate_ddc()
+                    self.controller.set_input_local(target, source="calibrate")
+                except Exception:  # noqa: BLE001
+                    pass
+                if self._wait_until(target, 2.6):
+                    break
+                if attempt == 0:
+                    time.sleep(0.5)
+            time.sleep(0.6)          # 让画面真正回来再进下一步
             self.switchBackDone.emit()
 
         threading.Thread(target=work, name="calib-back", daemon=True).start()
@@ -685,6 +767,8 @@ class CalibrationDialog(QDialog):
             port = self._plan.current_step.port
             self._mark_caught(port, self._plan.current_step.value or 0)
             self._switch_back()
+        else:
+            self.blue_hint.setText("这个口还没读到过值，请点「手工填码」直接填。")
 
     # ------------------------------------------------------------------ 确认
     def _show_confirm(self) -> None:
@@ -698,10 +782,15 @@ class CalibrationDialog(QDialog):
             if widget is not None:
                 widget.deleteLater()
         self._confirm_edits = {}
-        values = dict(self.profile.ports)
+        # 只认这一次真正读到的值：没抓到的口不能把码表里的旧值当成实测值显示，
+        # 否则会像 HDMI2 那样把「上一口的 18」当成自己的码存下去。
+        caught = dict(self._plan.result()) if self._plan is not None else {}
         if self._plan is not None:
-            values.update(self._plan.result())
-        ports = self._plan.selected_ports if self._plan is not None else list(values)
+            ports = self._plan.selected_ports
+        else:
+            # 还没跑过标定就点「手工填码」：把码表原样摆出来给用户改
+            ports = list(self.profile.ports)
+            caught = dict(self.profile.ports)
         card = QFrame()
         card.setObjectName("calibConfirmCard")
         t = theme.tokens()
@@ -721,13 +810,24 @@ class CalibrationDialog(QDialog):
             row = QWidget()
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 7, 0, 7)
-            rl.addWidget(label(port_label(port), "actPort"))
+            got = port in caught
+            name = label(port_label(port), "actPort")
+            if not got:
+                name.setText(f"{port_label(port)} · 未抓到")
+                name.setStyleSheet(
+                    f"color:{t.warn};font-size:12px;font-weight:600;background:transparent;"
+                )
+            rl.addWidget(name)
             rl.addStretch(1)
-            edit = QLineEdit(str(values.get(port, "") or ""))
+            old = self.profile.value(port)
+            edit = QLineEdit(str(caught[port]) if got else "")
             edit.setFixedWidth(62)
             edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             edit.setValidator(QIntValidator(0, 255, self))
             edit.setFont(theme.qfont(15, 600, mono=True))
+            if not got and old is not None:
+                # 留空 = 沿用旧值；灰字只是提示旧值是什么，不会被当成实测结果
+                edit.setPlaceholderText(str(old))
             edit.setStyleSheet(
                 f"QLineEdit{{background:transparent;border:0;color:{t.ink};"
                 "font-size:15px;font-weight:600;}"
@@ -755,6 +855,10 @@ class CalibrationDialog(QDialog):
         for port, edit in self._confirm_edits.items():
             text = str(edit.text()).strip()
             if not text:
+                # 没抓到又没手填：沿用码表里的旧值，但绝不把「别的口的读数」写进来
+                old = self.profile.value(port)
+                if old is not None:
+                    ports[port] = int(old)
                 continue
             try:
                 value = int(text)

@@ -116,9 +116,17 @@ BUILTIN_PROFILES: dict[str, MonitorProfile] = {
     "AOC:9987": MonitorProfile(
         key="AOC:9987",
         name="U27N3G6R4B",
-        ports={"hdmi1": 17, "hdmi2": 17, "dp": 15, "usb_c": 100},
+        # 2026-11-08 复测（AOC U27N3G6R4B / SN UTHN8HA014094，macOS 直读）：
+        # USB-C 读回来一直是 18（连读 20+ 次），不是旧表里的 100；100 是坏帧读到的
+        # 垃圾值。同一天还扫了一遍输入码：**只有 15 / 17 / 18 被接受**，
+        # 19 / 20 / 21 / 27 一律被拒（读回原值），所以 HDMI1/HDMI2 只能是同码 17
+        # —— 这两个口靠读数区分不了，标定时必须让用户手动确认。
+        ports={"hdmi1": 17, "hdmi2": 17, "dp": 15, "usb_c": 18},
         readback="unreliable",
-        notes="max 恒报 14 不可用于校验；macOS 读成功率约 50%，切走后句柄会返陈旧值",
+        notes=(
+            "max 恒报 14 不可用于校验；macOS 读成功率约 50%，切走后句柄会返陈旧值；"
+            "输入码只有 15/17/18 可用，HDMI1 与 HDMI2 同码 17"
+        ),
         builtin=True,
     ),
     "AOC:10128": MonitorProfile(

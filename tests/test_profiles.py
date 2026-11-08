@@ -29,12 +29,13 @@ def test_builtin_aoc_10128_is_a_three_port_screen():
 
 
 def test_builtin_aoc_9987_matches_measured_values():
+    """2026-11-08 复测：USB-C 是 18（旧表的 100 是坏帧读到的垃圾值）。"""
     profile = profiles.BUILTIN_PROFILES["AOC:9987"]
     assert profile.items() == [
         ("hdmi1", 17),
         ("hdmi2", 17),
         ("dp", 15),
-        ("usb_c", 100),
+        ("usb_c", 18),
     ]
     assert profile.readback == "unreliable"
 
@@ -43,7 +44,7 @@ def test_resolve_active_prefers_builtin_for_known_screen():
     cfg = from_dict({})
     profile = profiles.resolve_active(cfg, _identity())
     assert profile.key == "AOC:9987"
-    assert profile.ports["usb_c"] == 100
+    assert profile.ports["usb_c"] == 18
     # 接线仍是平台的默认（Windows 本机 HDMI 1、对端 USB-C；mac 反过来）
     local_port = "hdmi1" if cfg.effective_host() == "windows" else "usb_c"
     peer_port = "usb_c" if local_port == "hdmi1" else "hdmi1"
