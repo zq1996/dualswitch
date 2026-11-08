@@ -944,6 +944,26 @@ def cmd_ui2(args) -> int:
     winenv.log_environment(log)
     _install_term_handler()
 
+    # 单实例保护：关窗只是收进托盘、进程还在，再双击一次就会变成两个实例
+    # （2026-11-08 早上实测：两个 47833 监听、两个托盘图标、抢同一个热键）。
+    # 第二次启动只负责把已有窗口叫到前台，然后退出。
+    guard = None
+    if sys.platform == "win32":
+        from PySide6.QtWidgets import QApplication
+
+        from . import single_instance
+
+        # 管道要靠事件循环送信号，先把 QApplication 建出来（runner 会复用同一个实例）
+        if QApplication.instance() is None:
+            QApplication([])
+        guard = single_instance.acquire()
+        if guard is None:
+            log.info("已有实例在运行：本次启动只把它叫到前台，然后退出")
+            if not single_instance.notify_existing():
+                log.warning("没叫醒已有实例（管道连不上）：它可能刚退出，再双击一次即可")
+            print("屏幕切换已经在运行，已把它叫到前台。")
+            return 0
+
     try:
         backend = create_backend(cfg)
     except Exception as exc:
@@ -990,14 +1010,20 @@ def cmd_ui2(args) -> int:
 
     # v2 界面按平台分发：Windows → ui/win2（自绘标题栏 + 托盘），其它 → ui/mac2。
     # 旧 `ui` 子命令一行不动（两条路并行，验收后旧树才删）。
+    # `guard` 只有 Windows 端实现了「叫回已有窗口」，mac2 的 run_ui2 还没有这个参数，
+    # 所以按平台分开调 —— 别为了一个 kwarg 去改对端的文件。
     if sys.platform == "win32":
         from .ui.win2.runner import run_ui2
+
+        ui_kwargs = {"guard": guard}
     else:
         from .ui.mac2.runner import run_ui2
 
+        ui_kwargs = {}
+
     try:
         return run_ui2(cfg, cfg_file, log_file, backend, controller, hotkey, warning,
-                       clip_engine=clip_engine)
+                       clip_engine=clip_engine, **ui_kwargs)
     finally:
         if clip_engine is not None:
             clip_engine.stop()

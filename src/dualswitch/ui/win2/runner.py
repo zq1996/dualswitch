@@ -229,7 +229,7 @@ class UiRunner2(QObject):
     uiCall = Signal(object)
 
     def __init__(self, cfg, cfg_file: Path, log_file: Path, backend, controller, hotkey,
-                 warning=None, clip_engine=None):
+                 warning=None, clip_engine=None, guard=None):
         super().__init__()
         self.cfg = cfg
         self.cfg_file = Path(cfg_file)
@@ -239,6 +239,9 @@ class UiRunner2(QObject):
         self.hotkey = hotkey
         self.warning = warning
         self.clip_engine = clip_engine
+        #: 单实例名额（`dualswitch.single_instance`）。拿到就监听「第二次启动」，
+        #: 收到消息只把窗口叫到前台，不开新窗口。
+        self.guard = guard
         self._first_switch_hint_shown = False
 
         self.app = QApplication.instance() or QApplication([])
@@ -382,6 +385,12 @@ class UiRunner2(QObject):
         self.app.installEventFilter(self)
         self._center(self.window)
         self.window.show()
+        log.info(
+            "主窗口：%dx%d（端口行 %d）",
+            self.window.width(), self.window.height(), len(self.cfg.active_ports()),
+        )
+        if self.guard is not None:
+            self.guard.newConnection.connect(self._on_second_launch)
         QTimer.singleShot(1200, self._maybe_onboard)
         if self.status is not None:
             # 托盘图标注册完 3 秒再报一次「看得见吗、在哪」（排查「进程在、图标没了」）
@@ -501,6 +510,23 @@ class UiRunner2(QObject):
         self.window.activateWindow()
         if self.window.current_page() == PAGE_PAIR:
             self.pairing_page.activate()
+
+    def _on_second_launch(self) -> None:
+        """又有人双击了启动脚本：把已有窗口叫到前台，**不再开第二个窗口**。
+
+        2026-11-08：两个实例并存会双绑 47833、注册两个托盘图标、抢同一个热键，
+        而且两个窗口默认都居中在同一位置，叠在一起看着像「点了没反应」。
+        """
+        while self.guard is not None and self.guard.hasPendingConnections():
+            sock = self.guard.nextPendingConnection()
+            try:
+                sock.waitForReadyRead(200)
+                sock.readAll()
+            finally:
+                sock.disconnectFromServer()
+                sock.deleteLater()
+        log.info("收到第二次启动请求：把已有窗口叫到前台")
+        self.show_window()
 
     def hide_window(self) -> None:
         self.window.hide()
@@ -1279,7 +1305,7 @@ class UiRunner2(QObject):
 
 
 def run_ui2(cfg, cfg_file, log_file, backend, controller, hotkey, warning=None,
-            clip_engine=None) -> int:
+            clip_engine=None, guard=None) -> int:
     runner = UiRunner2(cfg, cfg_file, log_file, backend, controller, hotkey, warning,
-                       clip_engine=clip_engine)
+                       clip_engine=clip_engine, guard=guard)
     return runner.run()
