@@ -86,8 +86,9 @@ FADE_KEYS: tuple[tuple[float, float], ...] = (
 )
 #: 动画步进：Qt 的动画驱动本身也是这个量级，16ms ≈ 60Hz
 ANIM_TICK_MS = 16
-#: 换条目时窗口滑动过去的时间（内容已经换好，只滑位置）
-SWAP_MOVE_MS = 140
+#: 换条目：旧画面交叉淡出的时间。窗口**一次性**摆到新位置（不做逐帧 move：
+#: 半透明顶层窗口在 macOS 上逐帧挪，边缘那块透明留白不会重绘，箭头会整块掉）。
+SWAP_FADE_MS = 240
 #: 关窗：淡出 + 轻微回缩。Frset 的关闭是带过渡的状态迁移（PopoverCloseReason），
 #: 不是 hide() 硬切；120ms 是照入场 473ms 的收尾段估的。
 CLOSE_ANIM_MS = 120
@@ -332,6 +333,8 @@ class ZoomLayer(QWidget):
         self._pix = QPixmap()
         self._anchor = QPoint(0, 0)
         self._factor = 1.0
+        #: 换条目用：把旧画面按这个矩形（居中、保比例）画出来，做交叉淡出
+        self._fit = QRectF()
         #: 淡入做在层内（画的时候 setOpacity），**不动窗口 windowOpacity** ——
         #: 顶层窗口设成 0 透明后销毁时序会乱（offscreen 下实测报
         #: `QObject: shared QObject was deleted directly`），而且 offscreen 平台本来就不支持。
@@ -341,6 +344,10 @@ class ZoomLayer(QWidget):
     def set_frame(self, pix: QPixmap, anchor: QPoint) -> None:
         self._pix = pix
         self._anchor = anchor
+        self.update()
+
+    def set_fit(self, rect: QRectF | None) -> None:
+        self._fit = rect or QRectF()
         self.update()
 
     def set_factor(self, factor: float) -> None:
@@ -364,7 +371,10 @@ class ZoomLayer(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         p.setOpacity(self._alpha)
-        p.drawPixmap(QRectF(x, y, w, h), self._pix, QRectF(self._pix.rect()))
+        if not self._fit.isNull():
+            p.drawPixmap(self._fit, self._pix, QRectF(self._pix.rect()))
+        else:
+            p.drawPixmap(QRectF(x, y, w, h), self._pix, QRectF(self._pix.rect()))
         p.end()
 
 
@@ -423,11 +433,10 @@ class PreviewBubble(QFrame):
         act_lay.setSpacing(2)
         for b in (self._btn_preview, self._btn_find, self._btn_link, self._btn_copy):
             act_lay.addWidget(b, 0, Qt.AlignVCenter)
+        # 常显（用户 2026-11-09：不要悬浮才出现，直接显示）
         self._act_effect = QGraphicsOpacityEffect(self._act_box)
-        self._act_effect.setOpacity(0.0)
+        self._act_effect.setOpacity(1.0)
         self._act_box.setGraphicsEffect(self._act_effect)
-        # 透明不等于点不到：默认连鼠标一起挡掉，免得点到看不见的图标
-        self._act_box.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._act_anim = QPropertyAnimation(self._act_effect, b"opacity", self)
         self._act_anim.setDuration(120)
         self._act_anim.setEasingCurve(QEasingCurve.OutCubic)
@@ -718,6 +727,7 @@ class PreviewBubble(QFrame):
         这样就不必把窗口设成透明来「藏」那一下——不用 `setWindowOpacity`。
         """
         self._zoom.setGeometry(self.rect())
+        self._zoom.set_fit(None)          # 入场走「从锚点长出来」，不是换条目的居中铺
         self._zoom.set_factor(0.0)
         self._zoom.set_alpha(0.0)
         self._inner.hide()
@@ -737,6 +747,7 @@ class PreviewBubble(QFrame):
         self._inner.hide()
         self._arrow.hide()
         self._zoom.setGeometry(self.rect())
+        self._zoom.set_fit(None)
         self._zoom.set_frame(pix, self.anchor_point)
         self._zoom.set_factor(0.0)
         self._zoom.show()
@@ -756,16 +767,25 @@ class PreviewBubble(QFrame):
         self._arrow.raise_()
 
     # ------------------------------------------------------------------ 操作入口
-    def reveal_actions(self, on: bool) -> None:
-        """鼠标进/出气泡时淡入淡出操作图标（默认透明，卡片保持「纯」）。"""
-        target = 1.0 if on else 0.0
-        self._act_box.setAttribute(Qt.WA_TransparentForMouseEvents, not on)
-        if abs(self._act_effect.opacity() - target) < 0.01:
+    def show_swap_overlay(self, pix: QPixmap) -> None:
+        """换条目：把**旧画面**铺在新气泡上面，随后由控制器淡到 0。
+
+        旧画面按新窗口居中、保比例缩放；淡出期间新内容已经在下面排好版，
+        中间不会露出桌面（`_inner` 一直是可见的）。
+        """
+        dpr = pix.devicePixelRatio() or 1.0
+        pw, ph = pix.width() / dpr, pix.height() / dpr
+        if pw <= 0 or ph <= 0:
             return
-        self._act_anim.stop()
-        self._act_anim.setStartValue(self._act_effect.opacity())
-        self._act_anim.setEndValue(target)
-        self._act_anim.start()
+        scale = min(self.width() / pw, self.height() / ph, 1.0)
+        w, h = pw * scale, ph * scale
+        self._zoom.setGeometry(self.rect())
+        self._zoom.set_fit(QRectF((self.width() - w) / 2, (self.height() - h) / 2, w, h))
+        self._zoom.set_frame(pix, QPoint(0, 0))
+        self._zoom.set_factor(1.0)
+        self._zoom.set_alpha(1.0)
+        self._zoom.show()
+        self._zoom.raise_()
 
     def begin_close_frame(self) -> None:
         """关窗动画：把当前卡片拍成位图交给缩放层，从 1.0 起缩、同步淡出。
@@ -784,7 +804,6 @@ class PreviewBubble(QFrame):
 
     def enterEvent(self, event):  # noqa: N802
         # 预览窗自身 hover 可停留（__isPreviewPopoverHovered）
-        self.reveal_actions(True)
         ctrl = getattr(self.window(), "_preview_controller", None)
         if ctrl is not None:
             ctrl.notify_bubble_hover(True)
@@ -793,7 +812,6 @@ class PreviewBubble(QFrame):
     def leaveEvent(self, event):  # noqa: N802
         # 鼠标离开气泡就该收起来（用户 2026-10-21）：原来是「离开缩略图才关」，
         # 从缩略图直接移到窗外/别的应用时气泡会挂着不走。留 220ms 缓冲给「移回缩略图」。
-        self.reveal_actions(False)
         ctrl = getattr(self.window(), "_preview_controller", None)
         if ctrl is not None:
             ctrl.notify_bubble_hover(False)
@@ -1136,15 +1154,11 @@ class PreviewController(QObject):
         self._anim_timer.setInterval(ANIM_TICK_MS)
         self._anim_timer.timeout.connect(self._anim_step)
         self._anim_t0 = 0.0
-        # 换条目：内容原地替换后只滑位置，不重播入场（Frset 的 PopoverSlot 语义）
-        self._move_timer = QTimer(self)
-        self._move_timer.setInterval(ANIM_TICK_MS)
-        self._move_timer.timeout.connect(self._move_step)
-        self._move_from = QRect()
-        self._move_to = QRect()
-        self._move_center = 0
-        self._move_arrow_right = True
-        self._move_t0 = 0.0
+        # 换条目：同槽位换内容 + 旧画面交叉淡出（Frset 的 PopoverSlot 语义）
+        self._swap_anim = QTimer(self)
+        self._swap_anim.setInterval(ANIM_TICK_MS)
+        self._swap_anim.timeout.connect(self._swap_step)
+        self._swap_t0 = 0.0
         # 关窗：淡出 + 轻微回缩，替代原来的 hide() 硬切
         self._close_anim = QTimer(self)
         self._close_anim.setInterval(ANIM_TICK_MS)
@@ -1211,7 +1225,7 @@ class PreviewController(QObject):
         # 滚动时缩略图从鼠标底下走开，会触发一次「离开缩略图」→ 220ms 后关。
         # 那不是真的离开，是列表在动，这里把那个延时撤掉。
         self._close_timer.stop()
-        self._move_timer.stop()
+        self._swap_anim.stop()
         rect, arrow_right, center = self._target_geometry(anchor, self.bubble.size())
         self.bubble.setGeometry(rect)
         self.bubble.set_arrow(arrow_right, center - rect.top())
@@ -1238,36 +1252,31 @@ class PreviewController(QObject):
     def _swap(self, record, ui_kind: str, anchor: QWidget) -> None:  # noqa: ANN001
         self._cancel_zoom()
         self._cancel_close_anim()
+        self._swap_anim.stop()
         self.bubble._screen_hint = self._screen_for(anchor)   # noqa: SLF001
+        old = self.bubble.grab() if self.bubble.isVisible() else None
         self.bubble.show_record(record, ui_kind)
         self._anchor = anchor
         self._current_id = record.id
-        self._glide_to(anchor)
-
-    def _glide_to(self, anchor: QWidget) -> None:  # noqa: ANN001
-        """内容已按新尺寸排好，只把**位置**滑过去（尺寸立刻到位）。"""
+        # 一次性摆到新锚点（**不逐帧 move**：半透明顶层窗口在 macOS 上逐帧挪时，
+        # 边缘透明留白不重绘，箭头会整块掉 —— 用户 2026-11-09 实测到的就是这个）
         rect, arrow_right, center = self._target_geometry(anchor, self.bubble.size())
-        cur = self.bubble.geometry()
-        start = QRect(cur.x(), cur.y(), rect.width(), rect.height())
-        self.bubble.resize(rect.size())
-        self._move_from, self._move_to = start, rect
-        self._move_arrow_right, self._move_center = arrow_right, center
-        self._move_t0 = time.perf_counter()
-        self._move_timer.start()
+        self.bubble.setGeometry(rect)
+        self.bubble.set_arrow(arrow_right, center - rect.top())
+        if old is not None and not old.isNull():
+            self.bubble.show_swap_overlay(old)
+            self._swap_t0 = time.perf_counter()
+            self._swap_anim.start()
 
-    def _move_step(self) -> None:
-        p = min(1.0, (time.perf_counter() - self._move_t0) * 1000.0 / SWAP_MOVE_MS)
+    def _swap_step(self) -> None:
+        p = min(1.0, (time.perf_counter() - self._swap_t0) * 1000.0 / SWAP_FADE_MS)
         e = 1.0 - (1.0 - p) ** 3
-        x = round(self._move_from.x() + (self._move_to.x() - self._move_from.x()) * e)
-        y = round(self._move_from.y() + (self._move_to.y() - self._move_from.y()) * e)
-        self.bubble.move(x, y)
-        self.bubble.set_arrow(self._move_arrow_right, self._move_center - y)
+        self.bubble.set_zoom_alpha(1.0 - e)
         if p >= 1.0:
-            self._move_timer.stop()
-            self.bubble.setGeometry(self._move_to)
-            self.bubble.set_arrow(
-                self._move_arrow_right, self._move_center - self._move_to.top()
-            )
+            self._swap_anim.stop()
+            self.bubble.zoom_end()
+            # zoom_end 会把箭头重新 show/raise，再补一次，保证落地后箭头在
+            self.bubble._arrow.raise_()          # noqa: SLF001
 
     def _on_start_timeout(self) -> None:
         self._start_zoom(self._zoom_token)
@@ -1324,7 +1333,7 @@ class PreviewController(QObject):
         self._zoom_token += 1           # 作废还没跑的那次入场
         self._start_timer.stop()
         self._anim_timer.stop()
-        self._move_timer.stop()
+        self._swap_anim.stop()
         if animate and self.bubble.isVisible() and not self._closing:
             self._closing = True
             self.bubble.begin_close_frame()

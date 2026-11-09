@@ -936,12 +936,27 @@ pytest -q tests/test_ui_mac2.py -k "zoom"
 
 | 项 | 改前 | 改后 | 依据 |
 |---|---|---|---|
-| **换条目** | `schedule_open()` 先 `_do_close()` 硬关 → 等 450ms → **整段 473ms 入场重播** | 气泡已开时直接 `_swap()`：同槽位换内容 + 位置滑 140ms；**不关窗、不等延时、不重播** | Frset 有 `MainPanelPreviewPopoverCoordinator` / `PopoverSlot` / `PopoverSlotState` / `MainPanelPreviewRequestID` —— 预览是**常驻槽位**，不是每次新建窗口 |
+| **换条目** | `schedule_open()` 先 `_do_close()` 硬关 → 等 450ms → **整段 473ms 入场重播** | 气泡已开时直接 `_swap()`：同槽位换内容，**旧画面交叉淡出 240ms**；不关窗、不等延时、不重播 | Frset 有 `MainPanelPreviewPopoverCoordinator` / `PopoverSlot` / `PopoverSlotState` / `MainPanelPreviewRequestID` —— 预览是**常驻槽位**，不是每次新建窗口 |
 | **滚动** | 完全没接线：气泡僵在原地，靠 220ms「离开缩略图」延时收掉 | `scrollBar.valueChanged → follow()`：气泡贴锚点跟过去，锚点滚出视口才收；跟随期间撤掉那个 220ms 延时（滚动时缩略图从鼠标底下走开会误触发它） | Frset 有 `MainPanelStreamingPopoverScrollState / ScrollPhase / ScrollAction`，滚动是分阶段处理的 |
 | **出场** | `_do_close()` 直接 `hide()`，零动画 | 复用缩放层：从 1.0 缩到 0.94 + 淡出 **120ms**，再 hide | Frset 有 `MainPanelPreviewPopoverCloseReason` + `PopoverTransitionStyle`，关闭是带过渡的状态迁移 |
 | **尺寸上限** | `text`/`code` 高度上限 100000（由屏幕兜底） | **不动**：试着按 §10.29 的 376×278 封顶，被用户真机截图否掉了 | 用户 2026-11-09 截 Frset 的「140 行 / 3849 字符」代码气泡，是一张**长到几百点的高卡**、内部滚到底——376×278 只对应「276 字」那一档，不是上限。长度上限本就该由屏幕兜底，这条原本就是对的 |
 | **多屏** | `_position()` / `_screen_cap()` 全用 `primaryScreen()` | `screenAt(锚点中心)`，高度上限也按那块屏算 | 副屏上原来会按主屏边界夹取，气泡直接错位 |
-| **操作入口** | 头部 4 个图标常驻，窄卡上「类型名 + 状态胶囊 + 4 图标」像三块拼的 | 收进一个 `QGraphicsOpacityEffect` 容器：**默认透明**（占位不塌，标题不重新省略），鼠标进气泡才 120ms 淡入；透明时同时 `WA_TransparentForMouseEvents`，防点到看不见的图标 | 用户反馈「组合出来的硬凑感，没有人家的纯」；Frset 另有独立的 `FloatingClipboardItemActionPopover` |
+| **操作入口** | 头部 4 个图标常驻 | **保持常驻**（一度改成悬浮淡入，用户当天否掉：「为什么做成了鼠标悬浮显示？做成直接显示」） | — |
+
+#### 换条目的第二版：改交叉淡出 + 修「箭头消失」（2026-11-09 当天返工）
+
+第一版是「内容瞬间替换 + 窗口位置滑 140ms」，用户实测抓到两个问题：
+
+1. **滑到第二个预览时箭头没了**。根因不是箭头控件，是**逐帧 `move()` 半透明顶层窗口**：
+   `WA_TranslucentBackground` 下窗口边缘那圈透明留白（`ARROW_MARGIN`）在逐帧移动时
+   不会重绘，箭头就整块掉。离屏 `grab()` 里箭头一直在（所以自动化看不出），只有真机才现。
+   改法：窗口**一次性** `setGeometry` 到新锚点，不再逐帧挪。
+2. **切换不连贯、偏快**。改成旧画面铺在新气泡上做**交叉淡出 240ms**（`ZoomLayer` 新增
+   `set_fit()`：把旧位图居中、保比例铺进新窗口，`_inner` 全程可见，中途不会露桌面）。
+   入场仍是「从锚点长出来」，两条路径共用同一个缩放层，只是 `_fit` 一个设一个不设。
+
+顺带：`zoom_prepare` / `zoom_capture` 里要 `set_fit(None)`，否则入场会沿用换条目时的
+居中矩形（复用层必须清状态）。
 
 #### 图片左右留白：注释与实现对齐（用户只要求改注释）
 
