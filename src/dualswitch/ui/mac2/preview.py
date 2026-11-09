@@ -17,8 +17,10 @@ import os
 import time
 
 from PySide6.QtCore import (
+    QEasingCurve,
     QObject,
     QPoint,
+    QPropertyAnimation,
     QRect,
     QRectF,
     Qt,
@@ -27,6 +29,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor,
+    QCursor,
     QFontMetrics,
     QImage,
     QPainter,
@@ -37,6 +40,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -82,6 +86,11 @@ FADE_KEYS: tuple[tuple[float, float], ...] = (
 )
 #: 动画步进：Qt 的动画驱动本身也是这个量级，16ms ≈ 60Hz
 ANIM_TICK_MS = 16
+#: 换条目时窗口滑动过去的时间（内容已经换好，只滑位置）
+SWAP_MOVE_MS = 140
+#: 关窗：淡出 + 轻微回缩。Frset 的关闭是带过渡的状态迁移（PopoverCloseReason），
+#: 不是 hide() 硬切；120ms 是照入场 473ms 的收尾段估的。
+CLOSE_ANIM_MS = 120
 #: 正文字体行距（Frset 1.3.16 实测约 1.7 倍：15px 字，行高约 26px）。
 #: QSS 的 line-height 对 QLabel 无效，只能走富文本，见 `_rich_text`。
 LINE_HEIGHT_PCT = 170
@@ -376,6 +385,8 @@ class PreviewBubble(QFrame):
         self._arrow_right = True
         self._arrow_y = 40
         self._record_id = ""
+        #: 气泡要出现的那块屏（控制器在 show_record 前设好；多屏用）
+        self._screen_hint = None
 
         # 圆角卡片（箭头贴在它朝锚点的那条边上）
         self._inner = QFrame(self)
@@ -403,8 +414,24 @@ class PreviewBubble(QFrame):
         self._btn_copy = IconButton("copy", "复制", "pv")
         hl.addWidget(self._head_title, 1)
         hl.addLayout(self._pill_box, 0)
+        # 操作入口收进一个容器：**默认透明**（不删、不塌，标题不会因为出现/消失
+        # 而重新省略），鼠标进气泡才淡入。之前四个图标常驻在标题右边，一条 376 宽
+        # 的窄卡上挤着「文本 + 状态胶囊 + 四个按钮」，看起来像三块东西拼起来的。
+        self._act_box = QWidget(head)
+        act_lay = QHBoxLayout(self._act_box)
+        act_lay.setContentsMargins(0, 0, 0, 0)
+        act_lay.setSpacing(2)
         for b in (self._btn_preview, self._btn_find, self._btn_link, self._btn_copy):
-            hl.addWidget(b, 0, Qt.AlignVCenter)
+            act_lay.addWidget(b, 0, Qt.AlignVCenter)
+        self._act_effect = QGraphicsOpacityEffect(self._act_box)
+        self._act_effect.setOpacity(0.0)
+        self._act_box.setGraphicsEffect(self._act_effect)
+        # 透明不等于点不到：默认连鼠标一起挡掉，免得点到看不见的图标
+        self._act_box.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._act_anim = QPropertyAnimation(self._act_effect, b"opacity", self)
+        self._act_anim.setDuration(120)
+        self._act_anim.setEasingCurve(QEasingCurve.OutCubic)
+        hl.addWidget(self._act_box, 0, Qt.AlignVCenter)
         self._head = head
         inner_lay.addWidget(head)
 
@@ -539,13 +566,20 @@ class PreviewBubble(QFrame):
             h = max(h, min(theme.PV_IMG_MIN_H, max_h))
         return min(w, max_w), min(h, max_h)
 
-    @staticmethod
-    def _screen_cap() -> int:
-        """预览窗最高能长到多少：屏幕可用高度减去一点边距（不超出屏幕）。"""
+    def _screen_cap(self) -> int:
+        """预览窗最高能长到多少：**气泡将要出现的那块屏**的可用高度 − 120。
+
+        原来固定用 `primaryScreen()`，副屏上高度会按主屏算（多屏用户直接错位）。
+        控制器在 show_record 之前把 `_screen_hint` 设成锚点所在的屏。
+        """
         from PySide6.QtWidgets import QApplication
 
+        screen = getattr(self, "_screen_hint", None)
         app = QApplication.instance()
-        screen = app.primaryScreen() if app is not None else None
+        if screen is None and app is not None:
+            screen = QApplication.screenAt(QCursor.pos())
+        if screen is None and app is not None:
+            screen = app.primaryScreen()
         if screen is None:
             return 720
         return max(240, int(screen.availableGeometry().height()) - 120)
@@ -721,8 +755,36 @@ class PreviewBubble(QFrame):
         self._arrow.show()
         self._arrow.raise_()
 
+    # ------------------------------------------------------------------ 操作入口
+    def reveal_actions(self, on: bool) -> None:
+        """鼠标进/出气泡时淡入淡出操作图标（默认透明，卡片保持「纯」）。"""
+        target = 1.0 if on else 0.0
+        self._act_box.setAttribute(Qt.WA_TransparentForMouseEvents, not on)
+        if abs(self._act_effect.opacity() - target) < 0.01:
+            return
+        self._act_anim.stop()
+        self._act_anim.setStartValue(self._act_effect.opacity())
+        self._act_anim.setEndValue(target)
+        self._act_anim.start()
+
+    def begin_close_frame(self) -> None:
+        """关窗动画：把当前卡片拍成位图交给缩放层，从 1.0 起缩、同步淡出。
+
+        和入场用同一套缩放层，只是起始 factor 是 1.0 —— 出场不再是 `hide()` 硬切。
+        """
+        pix = self.grab()
+        self._zoom.setGeometry(self.rect())
+        self._zoom.set_frame(pix, self.anchor_point)
+        self._zoom.set_factor(1.0)
+        self._zoom.set_alpha(1.0)
+        self._inner.hide()
+        self._arrow.hide()
+        self._zoom.show()
+        self._zoom.raise_()
+
     def enterEvent(self, event):  # noqa: N802
         # 预览窗自身 hover 可停留（__isPreviewPopoverHovered）
+        self.reveal_actions(True)
         ctrl = getattr(self.window(), "_preview_controller", None)
         if ctrl is not None:
             ctrl.notify_bubble_hover(True)
@@ -731,6 +793,7 @@ class PreviewBubble(QFrame):
     def leaveEvent(self, event):  # noqa: N802
         # 鼠标离开气泡就该收起来（用户 2026-10-21）：原来是「离开缩略图才关」，
         # 从缩略图直接移到窗外/别的应用时气泡会挂着不走。留 220ms 缓冲给「移回缩略图」。
+        self.reveal_actions(False)
         ctrl = getattr(self.window(), "_preview_controller", None)
         if ctrl is not None:
             ctrl.notify_bubble_hover(False)
@@ -759,7 +822,7 @@ class PreviewBubble(QFrame):
         self._replace_pill(record)
         self.clear_body()
 
-        # Frset 实测结构：图片类的图**直接铺满**（没有白卡、没有左右留白）；
+        # 结构：图片类**不套白卡**（pvBodyFlat），正文左右仍留 IMG_PAD 的外壳色留白；
         # 文本/代码/链接/文件是「浅灰底上浮一张白卡」，左右各内缩 12。
         flat = ui_kind == "image"
         self._inner_lay.setContentsMargins(*(0, 0, 0, 0) if flat else (12, 0, 12, 6))
@@ -794,7 +857,9 @@ class PreviewBubble(QFrame):
     #: 分类上限（INTERACTIONS §3.4），值是**窗口**尺寸，不是内容尺寸
     SIZE_CAPS = {
         "image": (theme.PV_IMG_MAX_W, theme.PV_IMG_MAX_H),
-        # 文本/代码的高度上限交给屏幕：内容多长就长多高，长到屏幕放不下时内部滚动
+        # **高度不封顶**：长文本是长高的（用户 2026-11-09 用 Frset 截图为证：
+        # 140 行 / 3849 字符的代码气泡是一张高卡，内部滚动到底）。
+        # §10.29 的 376×278 只对应「276 字」这一档短文本，不是上限。
         "text": (theme.PV_TXT_MAX_W, 100_000),
         "code": (theme.PV_CODE_MAX_W, 100_000),
         # 文件卡带了图片预览，上限要放得下「图 200 + 文件名 + 目录」
@@ -809,14 +874,17 @@ class PreviewBubble(QFrame):
     IMG_PAD = 12
 
     #: 窗口上限里不能给图片的部分：头部 40 + 底栏 49
-    #: 图片类是铺满的，正文不再有 14×2 内边距（Frset 实测 562×522，图正好 562×449）
+    #: 图片类不套白卡（pvBodyFlat）：正文上下 0 内边距、左右各留 IMG_PAD 的外壳色
+    #: 留白，所以 562 宽的窗口里图区是 562−12−24 = **526**，不是铺满。
+    #: （§10.29 记的「562×522，图 562×449」是另一轮实测口径，与这里的实现不一致，
+    #:   以代码为准；要改成真铺满得同时动 IMG_PAD 和 _image_area。）
     IMG_CHROME_H = 40 + 49
 
     @classmethod
     def _image_area(cls) -> tuple[int, int]:
-        """图片最大可渲染区域 = 窗口上限 − chrome（与 sync_size 用的是同一组数）。
+        """图片最大可渲染区域 = 窗口上限 − arrow 留白 − 左右 IMG_PAD − chrome。
 
-        图片四周留一圈外壳色的 padding（Frset 1.3.16 实测），不顶到气泡边缘。
+        图**不顶到气泡边缘**：左右各留 IMG_PAD，上下由头部/底栏自然挤出来。
         """
         return (
             theme.PV_IMG_MAX_W - ARROW_MARGIN - 2 * cls.IMG_PAD,
@@ -1068,6 +1136,22 @@ class PreviewController(QObject):
         self._anim_timer.setInterval(ANIM_TICK_MS)
         self._anim_timer.timeout.connect(self._anim_step)
         self._anim_t0 = 0.0
+        # 换条目：内容原地替换后只滑位置，不重播入场（Frset 的 PopoverSlot 语义）
+        self._move_timer = QTimer(self)
+        self._move_timer.setInterval(ANIM_TICK_MS)
+        self._move_timer.timeout.connect(self._move_step)
+        self._move_from = QRect()
+        self._move_to = QRect()
+        self._move_center = 0
+        self._move_arrow_right = True
+        self._move_t0 = 0.0
+        # 关窗：淡出 + 轻微回缩，替代原来的 hide() 硬切
+        self._close_anim = QTimer(self)
+        self._close_anim.setInterval(ANIM_TICK_MS)
+        self._close_anim.timeout.connect(self._close_step)
+        self._close_t0 = 0.0
+        self._closing = False
+        self._anchor: QWidget | None = None
 
     # ---- 触发口 ----
     def schedule_open(self, record, ui_kind: str, anchor: QWidget) -> None:  # noqa: ANN001
@@ -1076,7 +1160,13 @@ class PreviewController(QObject):
             return
         self._close_timer.stop()
         self._open_timer.stop()
-        self._do_close()
+        if self.bubble.isVisible() and self._anchor_ok(anchor):
+            # 换条目 = **同一个槽位换内容**（Frset 的 PopoverSlot）：不关窗、不再等
+            # 450ms、不重播 473ms 入场，只把内容换掉再把窗口滑到新锚点旁边。
+            # 旧实现是 _do_close() → 等延时 → 整段 zoom 重来，换个条目要等近 1 秒。
+            self._swap(record, ui_kind, anchor)
+            return
+        self._do_close(animate=False)
         self._pending = (record, ui_kind, anchor)
         self._open_timer.start()
 
@@ -1084,6 +1174,9 @@ class PreviewController(QObject):
         """单击行 = 立即预览（不走 450ms 延时）。"""
         self._close_timer.stop()
         self._open_timer.stop()
+        if self.bubble.isVisible() and self._anchor_ok(anchor):
+            self._swap(record, ui_kind, anchor)
+            return
         self._pending = (record, ui_kind, anchor)
         self._do_open()
 
@@ -1098,38 +1191,83 @@ class PreviewController(QObject):
             self._close_timer.stop()
 
     def hide_now(self) -> None:
-        """滚动 / 换页 / 换行：立即关，不等延时。"""
+        """列表重建 / 窗口改尺寸：立即关，不等延时（也不播出场动画）。"""
         self._open_timer.stop()
         self._close_timer.stop()
         self._pending = None
-        self._do_close()
+        self._do_close(animate=False)
+
+    def follow(self, anchor: QWidget | None = None) -> None:  # noqa: ANN001
+        """列表滚动：气泡跟着锚点走，锚点滚出视口才收（原来滚动完全没接）。
+
+        跟随时不滑、不重播——手指还在滚轮上，任何动画都会被读成"卡"。
+        """
+        if not self.bubble.isVisible() or self._closing:
+            return
+        anchor = anchor if anchor is not None else self._anchor
+        if not self._anchor_ok(anchor) or anchor.visibleRegion().isEmpty():
+            self._do_close()
+            return
+        # 滚动时缩略图从鼠标底下走开，会触发一次「离开缩略图」→ 220ms 后关。
+        # 那不是真的离开，是列表在动，这里把那个延时撤掉。
+        self._close_timer.stop()
+        self._move_timer.stop()
+        rect, arrow_right, center = self._target_geometry(anchor, self.bubble.size())
+        self.bubble.setGeometry(rect)
+        self.bubble.set_arrow(arrow_right, center - rect.top())
 
     def is_open(self) -> bool:
-        return self.bubble.isVisible()
+        """可见 **且没在收**。加了 120ms 出场动画后，窗口在动画期间还 visible，
+        但对调用方（含用例）来说「延时到了就已经关了」。"""
+        return self.bubble.isVisible() and not self._closing
 
     def current_id(self) -> str | None:
         return self._current_id
 
     # ---- 内部 ----
-    def _do_open(self) -> None:
-        if self._pending is None:
-            return
-        record, ui_kind, anchor = self._pending
-        self._pending = None
+    @staticmethod
+    def _anchor_ok(anchor: QWidget | None) -> bool:  # noqa: ANN001
         if anchor is None:
-            return
+            return False
         try:
-            anchor.objectName()          # 控件被 deleteLater 后这里会抛 RuntimeError
+            anchor.objectName()          # deleteLater 之后访问会抛 RuntimeError
         except RuntimeError:
-            return
+            return False
+        return True
+
+    def _swap(self, record, ui_kind: str, anchor: QWidget) -> None:  # noqa: ANN001
+        self._cancel_zoom()
+        self._cancel_close_anim()
+        self.bubble._screen_hint = self._screen_for(anchor)   # noqa: SLF001
         self.bubble.show_record(record, ui_kind)
-        self._position(anchor)
+        self._anchor = anchor
         self._current_id = record.id
-        # 先盖一层 factor=0 的缩放层再 show：第一帧什么都不画，不会闪一下整卡
-        self.bubble.zoom_prepare()
-        self.bubble.show()
-        self._zoom_token += 1
-        self._start_timer.start()
+        self._glide_to(anchor)
+
+    def _glide_to(self, anchor: QWidget) -> None:  # noqa: ANN001
+        """内容已按新尺寸排好，只把**位置**滑过去（尺寸立刻到位）。"""
+        rect, arrow_right, center = self._target_geometry(anchor, self.bubble.size())
+        cur = self.bubble.geometry()
+        start = QRect(cur.x(), cur.y(), rect.width(), rect.height())
+        self.bubble.resize(rect.size())
+        self._move_from, self._move_to = start, rect
+        self._move_arrow_right, self._move_center = arrow_right, center
+        self._move_t0 = time.perf_counter()
+        self._move_timer.start()
+
+    def _move_step(self) -> None:
+        p = min(1.0, (time.perf_counter() - self._move_t0) * 1000.0 / SWAP_MOVE_MS)
+        e = 1.0 - (1.0 - p) ** 3
+        x = round(self._move_from.x() + (self._move_to.x() - self._move_from.x()) * e)
+        y = round(self._move_from.y() + (self._move_to.y() - self._move_from.y()) * e)
+        self.bubble.move(x, y)
+        self.bubble.set_arrow(self._move_arrow_right, self._move_center - y)
+        if p >= 1.0:
+            self._move_timer.stop()
+            self.bubble.setGeometry(self._move_to)
+            self.bubble.set_arrow(
+                self._move_arrow_right, self._move_center - self._move_to.top()
+            )
 
     def _on_start_timeout(self) -> None:
         self._start_zoom(self._zoom_token)
@@ -1150,43 +1288,101 @@ class PreviewController(QObject):
             self._anim_timer.stop()
             self.bubble.zoom_end()
 
-    def _do_close(self) -> None:
+    def _cancel_zoom(self) -> None:
+        self._start_timer.stop()
+        self._anim_timer.stop()
+        self._zoom_token += 1
+        self.bubble.zoom_end()
+
+    def _cancel_close_anim(self) -> None:
+        if self._closing:
+            self._close_anim.stop()
+            self.bubble.zoom_end()
+            self._closing = False
+
+    def _do_open(self) -> None:
+        if self._pending is None:
+            return
+        record, ui_kind, anchor = self._pending
+        self._pending = None
+        if not self._anchor_ok(anchor):
+            return
+        self.bubble._screen_hint = self._screen_for(anchor)   # noqa: SLF001
+        self.bubble.show_record(record, ui_kind)
+        self._position(anchor)
+        self._anchor = anchor
+        self._current_id = record.id
+        # 先盖一层 factor=0 的缩放层再 show：第一帧什么都不画，不会闪一下整卡
+        self.bubble.zoom_prepare()
+        self.bubble.show()
+        self._zoom_token += 1
+        self._start_timer.start()
+
+    def _do_close(self, animate: bool = True) -> None:
         if self._bubble_hovered and self.bubble.isVisible():
             return                      # 鼠标还在气泡上：不关
         self._zoom_token += 1           # 作废还没跑的那次入场
         self._start_timer.stop()
         self._anim_timer.stop()
+        self._move_timer.stop()
+        if animate and self.bubble.isVisible() and not self._closing:
+            self._closing = True
+            self.bubble.begin_close_frame()
+            self._close_t0 = time.perf_counter()
+            self._close_anim.start()
+            return
+        self._finish_close()
+
+    def _close_step(self) -> None:
+        p = min(1.0, (time.perf_counter() - self._close_t0) * 1000.0 / CLOSE_ANIM_MS)
+        self.bubble.set_zoom(1.0 - 0.06 * p)
+        self.bubble.set_zoom_alpha(1.0 - p)
+        if p >= 1.0:
+            self._finish_close()
+
+    def _finish_close(self) -> None:
+        self._close_anim.stop()
         self.bubble.zoom_end()
         if self.bubble.isVisible():
             self.bubble.hide()
+        self._closing = False
         self._current_id = None
+        self._anchor = None
 
-    def _position(self, anchor: QWidget) -> None:
-        screen = QApplication.primaryScreen().availableGeometry()
-        thumb_tl = anchor.mapToGlobal(anchor.rect().topLeft())
-        thumb_r = QRect(thumb_tl, anchor.size())
-        size = self.bubble.size()
+    @staticmethod
+    def _screen_for(anchor: QWidget):  # noqa: ANN001, ANN205
+        """锚点所在的屏 —— 副屏不再按主屏的边界摆气泡。"""
+        return (
+            QApplication.screenAt(anchor.mapToGlobal(anchor.rect().center()))
+            or QApplication.primaryScreen()
+        )
+
+    def _target_geometry(self, anchor: QWidget, size) -> tuple[QRect, bool, int]:  # noqa: ANN001
+        """算气泡该摆哪：优先缩略图左侧、箭头朝右；放不下翻右侧；夹在本屏内。"""
+        screen = self._screen_for(anchor)
+        screen_rect = screen.availableGeometry()
+        thumb_r = QRect(anchor.mapToGlobal(anchor.rect().topLeft()), anchor.size())
         w, h = size.width(), size.height()
         margin = 14
 
-        # 优先左侧，箭头朝右（不遮挡列表文字）；放不下翻右侧
-        if thumb_r.left() - w - margin >= screen.left() + 12:
+        if thumb_r.left() - w - margin >= screen_rect.left() + 12:
             left = thumb_r.left() - w - margin
             arrow_right = True
         else:
             left = thumb_r.right() + margin
             arrow_right = False
         top = thumb_r.center().y() - 24
-        if top + h > screen.bottom() - 12:
-            top = screen.bottom() - h - 12
-        if top < screen.top() + 12:
-            top = screen.top() + 12
-        # 翻到右侧时可能顶出屏幕右缘（窗口上限放宽到 562 后更容易），夹回来
-        left_min = screen.left() + 12
-        left_max = screen.right() - w - 12
+        if top + h > screen_rect.bottom() - 12:
+            top = screen_rect.bottom() - h - 12
+        if top < screen_rect.top() + 12:
+            top = screen_rect.top() + 12
+        left_min = screen_rect.left() + 12
+        left_max = screen_rect.right() - w - 12
         left = left_min if left_max < left_min else min(max(left, left_min), left_max)
-        self.bubble.setGeometry(left, top, w, h)
+        return QRect(left, top, w, h), arrow_right, thumb_r.center().y()
+
+    def _position(self, anchor: QWidget) -> None:  # noqa: ANN001
+        rect, arrow_right, center = self._target_geometry(anchor, self.bubble.size())
+        self.bubble.setGeometry(rect)
         # 箭头对准缩略图中线
-        self.bubble.set_arrow(arrow_right, thumb_r.center().y() - top)
-
-
+        self.bubble.set_arrow(arrow_right, center - rect.top())

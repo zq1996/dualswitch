@@ -929,6 +929,33 @@ pytest -q tests/test_ui_mac2.py -k "zoom"
 `test_preview_zoom_curve_matches_frset_measurement`（起点为 0、峰值 1.8%、61ms 处约 46%、时长 473ms）/
 `test_preview_zoom_layer_hands_back_to_real_widgets`（动画期画位图、结束交回真实控件）。
 
+### 10.30 预览气泡追平 Frset：换条目 / 滚动 / 出场 / 尺寸上限 / 多屏（2026-11-09，V3 分支）
+
+拿 Frset 1.3.17 的二进制与 §10.29 的实测数据对照后，用户点名五项「它做得更细」。
+逐项改成 Frset 的语义，其余（入场曲线、箭头、最小高）不动。
+
+| 项 | 改前 | 改后 | 依据 |
+|---|---|---|---|
+| **换条目** | `schedule_open()` 先 `_do_close()` 硬关 → 等 450ms → **整段 473ms 入场重播** | 气泡已开时直接 `_swap()`：同槽位换内容 + 位置滑 140ms；**不关窗、不等延时、不重播** | Frset 有 `MainPanelPreviewPopoverCoordinator` / `PopoverSlot` / `PopoverSlotState` / `MainPanelPreviewRequestID` —— 预览是**常驻槽位**，不是每次新建窗口 |
+| **滚动** | 完全没接线：气泡僵在原地，靠 220ms「离开缩略图」延时收掉 | `scrollBar.valueChanged → follow()`：气泡贴锚点跟过去，锚点滚出视口才收；跟随期间撤掉那个 220ms 延时（滚动时缩略图从鼠标底下走开会误触发它） | Frset 有 `MainPanelStreamingPopoverScrollState / ScrollPhase / ScrollAction`，滚动是分阶段处理的 |
+| **出场** | `_do_close()` 直接 `hide()`，零动画 | 复用缩放层：从 1.0 缩到 0.94 + 淡出 **120ms**，再 hide | Frset 有 `MainPanelPreviewPopoverCloseReason` + `PopoverTransitionStyle`，关闭是带过渡的状态迁移 |
+| **尺寸上限** | `text`/`code` 高度上限 100000（由屏幕兜底） | **不动**：试着按 §10.29 的 376×278 封顶，被用户真机截图否掉了 | 用户 2026-11-09 截 Frset 的「140 行 / 3849 字符」代码气泡，是一张**长到几百点的高卡**、内部滚到底——376×278 只对应「276 字」那一档，不是上限。长度上限本就该由屏幕兜底，这条原本就是对的 |
+| **多屏** | `_position()` / `_screen_cap()` 全用 `primaryScreen()` | `screenAt(锚点中心)`，高度上限也按那块屏算 | 副屏上原来会按主屏边界夹取，气泡直接错位 |
+| **操作入口** | 头部 4 个图标常驻，窄卡上「类型名 + 状态胶囊 + 4 图标」像三块拼的 | 收进一个 `QGraphicsOpacityEffect` 容器：**默认透明**（占位不塌，标题不重新省略），鼠标进气泡才 120ms 淡入；透明时同时 `WA_TransparentForMouseEvents`，防点到看不见的图标 | 用户反馈「组合出来的硬凑感，没有人家的纯」；Frset 另有独立的 `FloatingClipboardItemActionPopover` |
+
+#### 图片左右留白：注释与实现对齐（用户只要求改注释）
+
+`IMG_CHROME_H` 的注释写着「图片类是铺满的」，但实现一直减 `2*IMG_PAD`：
+562 宽的窗口里图区是 **526**。已把这处注释改成描述实现（图不顶边、左右各 12），
+并注明 §10.29 记的「562×449」是另一轮口径、与当前实现不一致，以代码为准。
+
+#### 未改（留作后续）
+
+- **短文本不弹窗**：§10.29 就记着 Frset 对一行内文本不弹，产品语义仍待定。
+- **长文本高度**：确认「长高 + 屏内滚动」是对的，不再尝试按 376×278 封顶。
+- **投影**：`mac2` 仍无外投影（`win2` 有自绘 `SHADOW=14`），气泡和背景的分离度差一截。
+- **代码行号 / 语法高亮**：Frset 有，我们只有等宽 + 浅底。
+
 ### 10.29 预览窗按 Frset 逐窗口实测定稿：尺寸 / 结构 / 字号（2026-11-08）
 
 用户要求「1:1 复刻 Frset 的缩略图和弹窗预览图」。之前所有尺寸都是**看设计稿估的**
