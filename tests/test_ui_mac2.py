@@ -456,6 +456,56 @@ def test_pairing_page_goes_through_states(app):
     assert page.success_title.text() == "已和 DESKTOP-8Q2K 配对"
 
 
+def test_pairing_peer_click_shows_code_when_peer_not_waiting(app):
+    """对端没在显示码：点「配对」= 本机出码，不再把人送进输入页空等。"""
+    engine = FakePairEngine()
+    engine.peers[0]["pairing"] = False
+    page = PairingPage(engine)
+    page.activate()
+    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "配对"
+    page._select_peer(engine.peers[0])
+    assert page._state == "showcode"
+    assert engine.begin_calls == 1
+    assert page._show_code_peer["device"] == "windows-3f2a91c4"
+
+
+def test_pairing_peer_button_says_enter_when_peer_shows_code(app):
+    engine = FakePairEngine()
+    page = PairingPage(engine)
+    page.activate()
+    assert page._peer_rows["windows-3f2a91c4"]["btn"].text() == "输入配对码"
+    page._select_peer(engine.peers[0])
+    assert page._state == "entercode"
+
+
+def test_pairing_both_showing_code_switches_loser_to_enter(app):
+    """两端同时出码：设备 ID 大的一端撤码改输入，ID 小的一端保留显示。"""
+    engine = FakePairEngine()
+    engine.device_id = "windows-zzzz"
+    engine.peers = [dict(engine.peers[0], device="macos-aaaa", pairing=True)]
+    page = PairingPage(engine)
+    page.activate()
+    page._start_show_code_for({"device": "macos-aaaa"})
+    assert page._state == "showcode"
+    page._check_show_race()
+    assert page._state == "entercode"
+    assert engine.cancel_calls == 1
+    assert not page.enter_note.isHidden()
+
+
+def test_pairing_both_showing_code_keeper_stays_on_code(app):
+    engine = FakePairEngine()
+    engine.device_id = "macos-0000"          # 比对方 ID 小 → 保留自己的码
+    engine.peers = [dict(engine.peers[0], pairing=True)]
+    page = PairingPage(engine)
+    page.activate()
+    page._start_show_code_for({"device": "windows-3f2a91c4"})
+    page._check_show_race()
+    assert page._state == "showcode"
+    assert engine.cancel_calls == 0
+    assert not page.race_note.isHidden()
+
+
 def test_pairing_page_unpair_needs_inline_confirm(app):
     engine = FakePairEngine(paired=True, peer_device="windows-3f2a91c4",
                             peer_name="DESKTOP-8Q2K", addr="192.168.1.31:47823")
@@ -486,6 +536,26 @@ def test_pairing_unpair_confirm_survives_tick(app):
     assert page._state == "paired"
     assert not page.confirm_box.isHidden(), "轮询把二次确认藏走了（按钮点不到）"
     assert page.confirm_title.text() == "解除和 DESKTOP-8Q2K 的配对？"
+
+
+def test_pairing_unpair_confirm_closes_on_outside_click(app):
+    """浮出的确认卡：点页面别处收起；点锚点本身也收起（不许「关掉又开一次」）。"""
+    engine = FakePairEngine(paired=True, peer_device="windows-3f2a91c4",
+                            peer_name="DESKTOP-8Q2K", addr="192.168.1.31:47823")
+    page = PairingPage(engine)
+    page.resize(592, 560)
+    page.show()
+    page.activate()
+
+    page._ask_unpair()
+    assert not page.confirm_box.isHidden()
+    QTest.mouseClick(page.paired_name, Qt.LeftButton)
+    assert page.confirm_box.isHidden(), "点卡片外没把确认卡收掉"
+
+    page._ask_unpair()
+    assert not page.confirm_box.isHidden()
+    QTest.mouseClick(page._unpair_btn, Qt.LeftButton)
+    assert page.confirm_box.isHidden(), "点锚点应该只收起，不该重新弹出来"
 
 
 def test_pairing_replace_confirm_survives_peer_rebuild(app):

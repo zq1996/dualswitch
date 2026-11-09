@@ -10,12 +10,13 @@ QSS 改不了图片颜色，所以带状态的图标控件（`IconButton` / `Nav
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -1099,3 +1100,211 @@ def settings_row(title: str, sub: str, control: QWidget | None) -> QFrame:
     if control is not None:
         lay.addWidget(control, 0, Qt.AlignVCenter)
     return row
+
+
+# --------------------------------------------------------------------------- #
+# 页内浮出确认
+# --------------------------------------------------------------------------- #
+class _PopTail(QWidget):
+    """确认卡下沿的小尖。颜色跟卡片一致，只负责「指着哪个按钮」。"""
+
+    def __init__(self, parent: QWidget, half: int = 6, height: int = 6):
+        super().__init__(parent)
+        self.setFixedSize(half * 2, height)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, event):  # noqa: N802, ARG002
+        t = theme.tokens()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(Qt.NoPen)
+        p.setBrush(theme.qcolor(t.card))
+        p.drawPolygon(QPolygonF([
+            QPointF(0, 0),
+            QPointF(self.width() / 2, self.height()),
+            QPointF(self.width(), 0),
+        ]))
+        p.end()
+
+
+class PopConfirm(QWidget):
+    """贴在触发按钮上方的一张小确认卡（popover 观感）。
+
+    刻意**不是** QMessageBox / QDialog，也不铺满整页：
+
+    * 这是一次「别点错」的二级确认，不是独立任务。系统弹窗会把人的注意力
+      从页面里拎出去、层级也重；铺满整页的遮罩同样过头。
+    * 卡浮在按钮上方、右缘对齐，页面布局一个像素都不动 —— 这就避免了
+      「卡片下面又长出一块」的观感。
+    * 点卡片以外 / `Esc` / 再点一次触发按钮 = 取消；`Enter` 不绑定确认，
+      破坏性操作必须用鼠标点。
+
+    用法：`pop.ask(anchor_widget, title, sub, "解除配对", on_confirm)`。
+    父控件选页面（不是会被整块重建的列表），坐标按 `anchor` 现算。
+    """
+
+    #: 卡片宽度；副文案按这个宽度换行，所以先定宽再量高
+    CARD_W = 268
+    #: 卡片底边与锚点顶边的间距
+    GAP = 10
+    #: 外圈留给阴影的边距（阴影模糊 26 + 下偏移 7，要留够，否则会被裁成硬边）
+    MARGIN = 22
+    #: 卡片下沿小尖的尺寸（指着触发按钮，popover 的锚定感全靠它）
+    TAIL_H = 6
+    TAIL_W = 6
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("popWrap")
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self._on_confirm = None
+        self._tail_x: int | None = None
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(self.MARGIN, self.MARGIN, self.MARGIN, self.MARGIN)
+        lay.setSpacing(0)
+
+        self.card = QFrame()
+        self.card.setObjectName("popCard")
+        self.card.setFixedWidth(self.CARD_W)
+        cl = QVBoxLayout(self.card)
+        cl.setContentsMargins(14, 12, 12, 10)
+        cl.setSpacing(6)
+
+        self.title = label("", "popTitle")
+        self.title.setWordWrap(True)
+        self.sub = label("", "popSub")
+        self.sub.setWordWrap(True)
+        cl.addWidget(self.title)
+        cl.addWidget(self.sub)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 4, 0, 0)
+        row.setSpacing(4)
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("取消")
+        self.btn_cancel.setObjectName("popGhost")
+        self.btn_cancel.setFixedHeight(26)
+        self.btn_cancel.setCursor(Qt.PointingHandCursor)
+        self.btn_cancel.setFocusPolicy(Qt.NoFocus)
+        self.btn_cancel.clicked.connect(self.cancel)
+        self.btn_ok = QPushButton("")
+        self.btn_ok.setObjectName("popDanger")
+        self.btn_ok.setFixedHeight(26)
+        self.btn_ok.setCursor(Qt.PointingHandCursor)
+        self.btn_ok.setFocusPolicy(Qt.NoFocus)
+        self.btn_ok.clicked.connect(self.confirm)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        cl.addLayout(row)
+
+        shadow = QGraphicsDropShadowEffect(self.card)
+        shadow.setBlurRadius(30)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QColor(0, 0, 0, 62))
+        self.card.setGraphicsEffect(shadow)
+
+        lay.addWidget(self.card)
+        self._tail = _PopTail(self, self.TAIL_W, self.TAIL_H)
+        self._tail.hide()
+        # 按钮上的 Esc 不会冒泡到卡片，自己装过滤器吃键
+        for btn in (self.btn_cancel, self.btn_ok):
+            btn.installEventFilter(self)
+        self.hide()
+
+    # ------------------------------------------------------------------ 显示
+    def ask(self, anchor: QWidget, title: str, sub: str, confirm_text: str,
+            on_confirm) -> None:  # noqa: ANN001
+        self._on_confirm = on_confirm
+        self.title.setText(title)
+        self.sub.setText(sub)
+        self.sub.setVisible(bool(sub))
+        self.btn_ok.setText(confirm_text)
+        self._relayout()
+        self._place(anchor)
+        self.show()
+        self.raise_()
+
+    def _relayout(self) -> None:
+        """定宽 → 重新量高（副文案换行后高度会变，必须先 setFixedWidth）。"""
+        self.card.setFixedWidth(self.CARD_W)
+        lay = self.card.layout()
+        if lay is not None:
+            lay.activate()
+        self.card.adjustSize()
+        self.resize(
+            self.card.width() + self.MARGIN * 2,
+            self.card.height() + self.MARGIN * 2,
+        )
+
+    def _place(self, anchor: QWidget) -> None:
+        parent = self.parentWidget()
+        if parent is None or anchor is None:
+            return
+        top_left = anchor.mapTo(parent, QPoint(0, 0))
+        # 右缘对齐按钮右缘；上方放不下就翻到按钮下方
+        x = top_left.x() + anchor.width() - self.card.width() - self.MARGIN
+        y = top_left.y() - self.height() - self.GAP + self.MARGIN
+        if y < 2:
+            y = top_left.y() + anchor.height() + self.GAP - self.MARGIN
+        x = max(2, min(x, parent.width() - self.width() - 2))
+        y = max(2, min(y, parent.height() - self.height() - 2))
+        self.move(x, y)
+        # 小尖对准按钮中心，且不许贴到圆角上
+        tail = int(top_left.x() + anchor.width() / 2 - x)
+        self._tail_x = max(
+            self.MARGIN + 14, min(tail, self.MARGIN + self.card.width() - 14)
+        )
+        self._sync_tail()
+
+    def reposition(self, anchor: QWidget) -> None:
+        """窗口尺寸变化后重新贴回锚点（可见时才动）。"""
+        if self.isVisible():
+            self._place(anchor)
+
+    # ------------------------------------------------------------------ 绘制
+    def _sync_tail(self) -> None:
+        """把指向按钮的小尖摆到卡片下沿。
+
+        小尖单独做成一个**后创建**的子控件：卡片挂着 QGraphicsDropShadowEffect，
+        阴影在父控件 paintEvent 之后合成，会把画在父上的三角压成灰影；
+        晚创建的子控件排在卡片之后绘制，才不会被阴影吃掉。
+        """
+        if self._tail_x is None:
+            return
+        self._tail.move(self._tail_x - self.TAIL_W, self.MARGIN + self.card.height() - 1)
+        self._tail.show()
+        self._tail.raise_()
+
+    # ------------------------------------------------------------------ 结果
+    def cancel(self) -> None:
+        self._on_confirm = None
+        self.hide()
+
+    def confirm(self) -> None:
+        callback = self._on_confirm
+        self._on_confirm = None
+        self.hide()
+        if callback is not None:
+            callback()
+
+    def is_open(self) -> bool:
+        return self.isVisible()
+
+    # ------------------------------------------------------------------ 事件
+    def eventFilter(self, obj, event):  # noqa: N802
+        if event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self.cancel()
+                return True
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                # 破坏性操作不给回车直通
+                return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() == Qt.Key_Escape:
+            self.cancel()
+            return
+        super().keyPressEvent(event)

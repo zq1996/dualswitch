@@ -11,7 +11,7 @@ import threading
 import time
 from typing import Any
 
-from PySide6.QtCore import QRegularExpression, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QRegularExpression, Qt, QTimer, Signal
 from PySide6.QtGui import QPainter, QPen, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QApplication,
@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from ...sync.engine import parse_peer
 from . import icons, theme
-from .widgets import destroy, label, plate_pixmap
+from .widgets import PopConfirm, destroy, label, plate_pixmap
 
 PIN_LEN = 6
 SCAN_EMPTY_S = 10.0
@@ -232,6 +232,8 @@ class PairingPage(QWidget):
         self._repairing = False
         self._built = False
         self._replace_box: QFrame | None = None
+        #: 本次出码是点哪台设备的「配对」进来的（用于两端同时出码时的裁决）
+        self._show_code_peer: dict[str, Any] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -244,6 +246,13 @@ class PairingPage(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
         outer.addWidget(scroll, 1)
+        self._scroll = scroll
+        # 点页面任何地方（含侧栏切页）= 收起浮层。装在 QApplication 上而不是
+        # viewport：页面空白其实被 host / QStackedWidget / 各状态页一层层盖着，
+        # 只过滤 viewport 根本收不到那几下点击。销毁时 Qt 会自动摘掉监听。
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
         host = QWidget()
         self._lay = QVBoxLayout(host)
@@ -284,6 +293,10 @@ class PairingPage(QWidget):
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
+
+        # 「解除配对」的确认：贴按钮浮出的小卡，页面布局不动（不是弹窗）
+        self.confirm_box = PopConfirm(self)
+        self.confirm_title = self.confirm_box.title   # 老名字保留给测试/调用方
 
     # ------------------------------------------------------------------ 状态页
     def _add_state(self, name: str, widget: QWidget) -> None:
@@ -463,6 +476,14 @@ class PairingPage(QWidget):
         self.pin_count.setAlignment(Qt.AlignCenter)
         cl.addWidget(self.pin_count)
 
+        # 两端同时出码的提示放在卡片外：卡片内是居中布局，长提示会被挤窄
+        self.race_note = QFrame()
+        self.race_note.setObjectName("pairNote")
+        rn = QHBoxLayout(self.race_note)
+        rn.setContentsMargins(11, 9, 11, 9)
+        rn.addWidget(_small("另一台电脑也在显示配对码。请以本页的码为准，在另一台电脑上输入。", "pairNoteText"), 1)
+        self.race_note.hide()
+
         steps = QVBoxLayout()
         steps.setContentsMargins(8, 8, 8, 0)
         steps.setSpacing(3)
@@ -493,6 +514,7 @@ class PairingPage(QWidget):
         cl.addLayout(actions)
 
         lay.addWidget(card)
+        lay.addWidget(self.race_note)
         lay.addStretch(1)
         self._add_state("showcode", page)
 
@@ -525,6 +547,15 @@ class PairingPage(QWidget):
         b_change.clicked.connect(self._change_peer)
         sr.addWidget(b_change, 0)
         cl.addWidget(self.selected_row)
+
+        self.enter_note = QFrame()
+        self.enter_note.setObjectName("pairNote")
+        en = QHBoxLayout(self.enter_note)
+        en.setContentsMargins(11, 9, 11, 9)
+        self.enter_note_text = _small("", "pairNoteText")
+        en.addWidget(self.enter_note_text, 1)
+        self.enter_note.hide()
+        cl.addWidget(self.enter_note)
 
         kicker = _small("输入另一台电脑上显示的 6 位配对码", "pairHint")
         kicker.setAlignment(Qt.AlignCenter)
@@ -699,40 +730,10 @@ class PairingPage(QWidget):
         b_unpair.setFixedHeight(34)
         b_unpair.setCursor(Qt.PointingHandCursor)
         b_unpair.clicked.connect(self._ask_unpair)
+        self._unpair_btn = b_unpair          # 确认卡的锚点
         row.addWidget(b_repair)
         row.addWidget(b_unpair)
         cl.addLayout(row)
-
-        self.confirm_box = QFrame()
-        self.confirm_box.setObjectName("pairConfirm")
-        cb = QVBoxLayout(self.confirm_box)
-        cb.setContentsMargins(14, 12, 14, 12)
-        cb.setSpacing(4)
-        self.confirm_title = label("", "pairConfirmTitle")
-        cb.addWidget(self.confirm_title)
-        eb = _small(
-            "解除后本机剪贴板只在本机记录，不再同步到这台电脑；历史记录会保留，另一台电脑不会收到通知。",
-            "pairConfirmText",
-        )
-        cb.addWidget(eb)
-        crow = QHBoxLayout()
-        crow.setContentsMargins(0, 6, 0, 0)
-        crow.setSpacing(9)
-        b_no = QPushButton("取消")
-        b_no.setObjectName("ghostBtn")
-        b_no.setFixedHeight(30)
-        b_no.setCursor(Qt.PointingHandCursor)
-        b_no.clicked.connect(self._hide_unpair)
-        b_yes = QPushButton("解除配对")
-        b_yes.setObjectName("dangerBtn")
-        b_yes.setFixedHeight(30)
-        b_yes.setCursor(Qt.PointingHandCursor)
-        b_yes.clicked.connect(self._do_unpair)
-        crow.addWidget(b_no)
-        crow.addWidget(b_yes, 1)
-        cb.addLayout(crow)
-        self.confirm_box.hide()
-        cl.addWidget(self.confirm_box)
 
         lay.addWidget(card)
 
@@ -829,11 +830,39 @@ class PairingPage(QWidget):
         self._state = name
         if name in self._states:
             self.stack.setCurrentIndex(self._states[name])
+        if name != "paired":
+            # 换页了就把浮层一起收掉（它不是页面的一部分，留着会悬在半空）
+            self.confirm_box.cancel()
         if name == "connecting":
             self.spinner.start()
         elif hasattr(self, "spinner"):
             self.spinner.stop()
         self._update_pill()
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        """点浮层以外的地方就收起它（浮层内部按钮的点击不算）。
+
+        点锚点本身（「解除配对」）时要把这次点击吞掉：不吞的话 press 收了浮层、
+        release 又触发一次 clicked，表现成「点两次才关得掉」。
+        """
+        if event.type() == QEvent.MouseButtonPress:
+            pop = getattr(self, "confirm_box", None)
+            if pop is not None and pop.isVisible():
+                widget = obj if isinstance(obj, QWidget) else None
+                inside = widget is not None and (widget is pop or pop.isAncestorOf(widget))
+                if not inside:
+                    pop.cancel()
+                    if widget is getattr(self, "_unpair_btn", None):
+                        return True
+        # 注意：这里**不能**写 `super().eventFilter(...)` —— 作为 QApplication 级
+        # 过滤器时 PySide6 会把它派回本方法，870 层递归后 RuntimeError。
+        return False
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        anchor = getattr(self, "_unpair_btn", None)
+        if anchor is not None and hasattr(self, "confirm_box"):
+            self.confirm_box.reposition(anchor)
 
     def _update_pill(self) -> None:
         st = self._status()
@@ -855,6 +884,7 @@ class PairingPage(QWidget):
     def _show_discover(self, notice: str = "") -> None:
         self._selected = {}
         self._pending_peer = None
+        self._show_code_peer = {}
         self._hide_replace_confirm()
         self._scan_started = time.monotonic()
         self._last_peer_refresh = 0.0
@@ -872,13 +902,17 @@ class PairingPage(QWidget):
     def _show_show_code(self, pin: str) -> None:
         self._selected = {}
         self._pair_started = time.monotonic()
+        self.race_note.hide()
         self._set_state("showcode")
         self._render_pin(pin)
         st = self._status()
         left = float(st.get("expires_in") or 300.0)
         self.pin_count.setText(f"{_fmt_left(left)} 后失效 · 只能使用一次")
 
-    def _show_enter(self) -> None:
+    def _show_enter(self, notice: str = "") -> None:
+        self._show_code_peer = {}
+        self.enter_note_text.setText(notice)
+        self.enter_note.setVisible(bool(notice))
         self.pin_group.clear()
         self.pin_group.set_editable(True)
         self.pin_group.focus_first()
@@ -905,7 +939,7 @@ class PairingPage(QWidget):
     def _show_paired(self) -> None:
         """进入「已配对」页：刷字段 + 收掉二次确认 + 切页。"""
         self._render_paired()
-        self.confirm_box.hide()
+        self.confirm_box.cancel()
         self._hide_replace_confirm()
         self._set_state("paired")
         self._update_pill()
@@ -970,7 +1004,7 @@ class PairingPage(QWidget):
             "port": peer[1],
             "host": info.get("host") or peer[0],
         })
-        self._select_peer(info)
+        self._select_peer(info, enter_only=True)
 
     def _peers(self) -> list[dict[str, Any]]:
         if self._engine is None:
@@ -1083,6 +1117,8 @@ class PairingPage(QWidget):
             return ("重新配对" if self._repairing else "管理"), True
         if peer.get("paired"):
             return "替换配对", True
+        if peer.get("pairing"):
+            return "输入配对码", False
         return "配对", False
 
     def _pick_peer_by_id(self, device: str) -> None:
@@ -1106,7 +1142,7 @@ class PairingPage(QWidget):
             return
         self._select_peer(peer)
 
-    def _select_peer(self, peer: dict[str, Any]) -> None:
+    def _select_peer(self, peer: dict[str, Any], *, enter_only: bool = False, notice: str = "") -> None:
         self._selected = dict(peer)
         self._repairing = False
         self._pending_peer = None
@@ -1116,9 +1152,12 @@ class PairingPage(QWidget):
         )
         self.selected_name.setText(str(peer.get("host") or peer.get("ip") or "另一台电脑"))
         self.selected_meta.setText(_peer_meta(peer, with_state=False))
-        self._show_enter()
-        if peer.get("pairing") is False:
-            self.toastRequested.emit("请先在另一台电脑上点「显示配对码」")
+        # 对端正在显示码 → 输入；否则就在本机出码，让对端来输入。
+        # 手动 IP 拿不到对端状态，保持「输入」这一确定性行为。
+        if not enter_only and not peer.get("pairing"):
+            self._start_show_code_for(peer)
+            return
+        self._show_enter(notice)
 
     def _change_peer(self) -> None:
         self._cancel_to_discover()
@@ -1179,6 +1218,9 @@ class PairingPage(QWidget):
 
     # ------------------------------------------------------------------ 显示 / 输入码
     def _start_show_code(self) -> None:
+        self._start_show_code_for(None)
+
+    def _start_show_code_for(self, peer: dict[str, Any] | None) -> None:
         if self._engine is None:
             self.toastRequested.emit("剪贴板同步未启用，无法配对")
             return
@@ -1187,6 +1229,7 @@ class PairingPage(QWidget):
         except Exception as exc:  # noqa: BLE001
             self.toastRequested.emit(f"无法显示配对码：{exc}")
             return
+        self._show_code_peer = dict(peer) if peer else {}
         self._show_show_code(pin)
 
     def _renew_code(self) -> None:
@@ -1329,11 +1372,16 @@ class PairingPage(QWidget):
     def _ask_unpair(self) -> None:
         st = self._status()
         name = st.get("peer_name") or st.get("peer_device") or "对端"
-        self.confirm_title.setText(f"解除和 {name} 的配对？")
-        self.confirm_box.show()
+        self.confirm_box.ask(
+            self._unpair_btn,
+            f"解除和 {name} 的配对？",
+            "解除后本机剪贴板只在本机记录，不再同步到这台电脑；历史记录会保留。",
+            "解除配对",
+            self._do_unpair,
+        )
 
     def _hide_unpair(self) -> None:
-        self.confirm_box.hide()
+        self.confirm_box.cancel()
 
     def _do_unpair(self) -> None:
         if self._engine is not None:
@@ -1374,6 +1422,7 @@ class PairingPage(QWidget):
                 f"{_fmt_left(float(st.get('expires_in') or 0))} 后失效 · 只能使用一次"
             )
             self._update_pill()
+            self._check_show_race()
             return
         if st.get("outcome") == "ok":
             self._show_success(
@@ -1387,6 +1436,43 @@ class PairingPage(QWidget):
             self.toastRequested.emit(str(st.get("error") or "配对码已失效"))
             self._show_discover()
             return
+
+    def _check_show_race(self) -> None:
+        """两端几乎同时点「配对」时，都出了码 —— 谁也不会有输入页。
+
+        用设备 ID 做确定性裁决（两端算出的结果一致）：ID 小的一端保留自己的码，
+        另一端撤掉自己的码、自动切到输入页，让用户照着对方屏幕输入。
+        """
+        peer = self._race_peer()
+        if peer is None:
+            self.race_note.hide()
+            return
+        own = str(getattr(self._engine, "device_id", "") or "")
+        if not own or own <= str(peer.get("device") or ""):
+            self.race_note.show()
+            return
+        self.race_note.hide()
+        if self._engine is not None:
+            try:
+                self._engine.cancel_pairing()
+            except Exception:  # noqa: BLE001
+                pass
+        self.toastRequested.emit("另一台电脑也在显示配对码，已切换为输入")
+        self._select_peer(
+            peer,
+            enter_only=True,
+            notice="另一台电脑也在显示配对码，请在这台输入它屏幕上显示的 6 位码",
+        )
+
+    def _race_peer(self) -> dict[str, Any] | None:
+        """点「配对」时选中的那台设备，如果它此刻也在显示码就返回它。"""
+        device = str(self._show_code_peer.get("device") or "")
+        if not device:
+            return None
+        return next(
+            (p for p in self._peers() if str(p.get("device") or "") == device and p.get("pairing")),
+            None,
+        )
 
     def _tick_connecting(self) -> None:
         st = self._status()
