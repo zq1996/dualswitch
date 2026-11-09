@@ -10,6 +10,8 @@ QSS 改不了图片颜色，所以带状态的图标控件（`IconButton` / `Nav
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
@@ -58,6 +60,8 @@ NAV_ICONS = {
     "settings": "settings",
 }
 
+
+log = logging.getLogger("dualswitch.ui.mac2.widgets")
 
 # --------------------------------------------------------------------------- #
 # 图标取用
@@ -1279,10 +1283,12 @@ class PopConfirm(QWidget):
 
     # ------------------------------------------------------------------ 结果
     def cancel(self) -> None:
+        log.debug("PopConfirm.cancel：可见=%s", self.isVisible())
         self._on_confirm = None
         self.hide()
 
     def confirm(self) -> None:
+        log.debug("PopConfirm.confirm：callback 存在=%s", self._on_confirm is not None)
         callback = self._on_confirm
         self._on_confirm = None
         self.hide()
