@@ -86,9 +86,12 @@ FADE_KEYS: tuple[tuple[float, float], ...] = (
 )
 #: 动画步进：Qt 的动画驱动本身也是这个量级，16ms ≈ 60Hz
 ANIM_TICK_MS = 16
-#: 换条目：旧画面交叉淡出的时间。窗口**一次性**摆到新位置（不做逐帧 move：
-#: 半透明顶层窗口在 macOS 上逐帧挪，边缘那块透明留白不会重绘，箭头会整块掉）。
-SWAP_FADE_MS = 240
+#: 换条目：旧画面先**驻留**一会再交叉淡出。直接替换 + 240ms 淡出被用户评为
+#: 「太快、观感差」——因为内容在 t=0 就跳成了新的，淡的只是一层残影。
+#: 现在 80ms 驻留（这段时间看到的是完整的旧卡）+ 300ms 溶解，总 380ms。
+#: 时长按 Frset 入场曲线（473ms 弹簧 + 200ms 淡入）的同量级取。
+SWAP_DWELL_MS = 80
+SWAP_FADE_MS = 300
 #: 关窗：淡出 + 轻微回缩。Frset 的关闭是带过渡的状态迁移（PopoverCloseReason），
 #: 不是 hide() 硬切；120ms 是照入场 473ms 的收尾段估的。
 CLOSE_ANIM_MS = 120
@@ -484,10 +487,21 @@ class PreviewBubble(QFrame):
 
     # ------------------------------------------------------------------ 几何
     def set_arrow(self, right: bool, y: int) -> None:
+        """换边时必须**同时**把卡片让出 ARROW_MARGIN**。
+
+        旧实现只挪箭头、不动 `_inner`：气泡从「在缩略图左边」翻到「右边」时，
+        卡片还贴在 x=0，箭头被压在卡片里面、同色看不见 —— 用户 2026-11-09
+        截图报的「挪到右边箭头没了」就是这个（离屏 grab 也看不出来，因为
+        `_inner` 和箭头同色，重叠后就是一条直边）。
+        """
+        changed = self._arrow_right != right
         self._arrow_right = right
         self._arrow_y = y
         self._arrow.set_direction(right)
-        self._place_arrow()
+        if changed:
+            self._apply_inner_geometry()
+        else:
+            self._place_arrow()
 
     @property
     def arrow_right(self) -> bool:
@@ -1269,10 +1283,15 @@ class PreviewController(QObject):
             self._swap_anim.start()
 
     def _swap_step(self) -> None:
-        p = min(1.0, (time.perf_counter() - self._swap_t0) * 1000.0 / SWAP_FADE_MS)
-        e = 1.0 - (1.0 - p) ** 3
-        self.bubble.set_zoom_alpha(1.0 - e)
-        if p >= 1.0:
+        elapsed = (time.perf_counter() - self._swap_t0) * 1000.0
+        if elapsed < SWAP_DWELL_MS:
+            alpha = 1.0                      # 驻留：先让旧卡完整停一下
+        else:
+            p = min(1.0, (elapsed - SWAP_DWELL_MS) / SWAP_FADE_MS)
+            smooth = p * p * (3.0 - 2.0 * p)  # smoothstep：两头缓、中间快
+            alpha = 1.0 - smooth
+        self.bubble.set_zoom_alpha(alpha)
+        if alpha <= 0.0:
             self._swap_anim.stop()
             self.bubble.zoom_end()
             # zoom_end 会把箭头重新 show/raise，再补一次，保证落地后箭头在
