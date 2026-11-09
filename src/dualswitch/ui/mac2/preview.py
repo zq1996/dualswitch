@@ -23,6 +23,7 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QRect,
     QRectF,
+    QSizeF,
     Qt,
     QTimer,
     Signal,
@@ -86,12 +87,18 @@ FADE_KEYS: tuple[tuple[float, float], ...] = (
 )
 #: 动画步进：Qt 的动画驱动本身也是这个量级，16ms ≈ 60Hz
 ANIM_TICK_MS = 16
-#: 换条目：旧画面先**驻留**一会再交叉淡出。直接替换 + 240ms 淡出被用户评为
-#: 「太快、观感差」——因为内容在 t=0 就跳成了新的，淡的只是一层残影。
-#: 现在 80ms 驻留（这段时间看到的是完整的旧卡）+ 300ms 溶解，总 380ms。
-#: 时长按 Frset 入场曲线（473ms 弹簧 + 200ms 淡入）的同量级取。
-SWAP_DWELL_MS = 80
-SWAP_FADE_MS = 300
+#: 换条目 —— 数值全部来自 2026-11-09 对 Frset 1.3.17 的 **60fps 录屏逐帧实测**
+#: （`screencapture -V` → ffmpeg 拆帧 → 逐帧测气泡左/上边界与外壳灰度）：
+#:
+#:   · 旧气泡原地淡出，**不缩、不位移**，约 60ms 走完；
+#:   · 新气泡**从右下角以约 0.6 倍大小长到 1.0**，同时淡入；
+#:   · 新气泡生长进度实测 0 → 0.49 → 0.78 → 0.93 → 0.99 → 1.0
+#:     对应 t = 0 → 34 → 67 → 100 → 133 → 167ms，**精确匹配 easeOutCubic**；
+#:   · 两者部分重叠，整段 167ms（此前自拟的「80ms 驻留 + 300ms 溶解」是错的）。
+SWAP_OUT_MS = 45
+SWAP_IN_MS = 167
+#: 新气泡的起始缩放。实测起始宽度约 0.6 倍，锚点在右下角（靠近列表面板那侧）。
+SWAP_SCALE_FROM = 0.6
 #: 关窗：淡出 + 轻微回缩。Frset 的关闭是带过渡的状态迁移（PopoverCloseReason），
 #: 不是 hide() 硬切；120ms 是照入场 473ms 的收尾段估的。
 CLOSE_ANIM_MS = 120
@@ -375,7 +382,14 @@ class ZoomLayer(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         p.setOpacity(self._alpha)
         if not self._fit.isNull():
-            p.drawPixmap(self._fit, self._pix, QRectF(self._pix.rect()))
+            # 基准矩形（换条目时是内容层的位置），再在上面做右下角锚点的缩放：
+            # 右下角固定、向左上长出去 —— 这是实测的 Frset 生长方向。
+            r = QRectF(self._fit)
+            w = r.width() * self._factor
+            h = r.height() * self._factor
+            p.drawPixmap(
+                QRectF(r.right() - w, r.bottom() - h, w, h), self._pix, QRectF(self._pix.rect())
+            )
         else:
             p.drawPixmap(QRectF(x, y, w, h), self._pix, QRectF(self._pix.rect()))
         p.end()
@@ -478,6 +492,11 @@ class PreviewBubble(QFrame):
         # 入场缩放层：盖住整块（含箭头留白），动画期间只画这张位图
         self._zoom = ZoomLayer(self)
         self._zoom.setGeometry(self.rect())
+        # 换条目时的**旧画面**层：实测旧气泡只是原地淡出（不缩不位移），
+        # 所以它固定 factor=1.0、只改 alpha；压在新内容层下面
+        self._zoom_old = ZoomLayer(self)
+        self._zoom_old.setGeometry(self.rect())
+        self._zoom_old.stackUnder(self._zoom)
         # 文本正文（滚动容器）引用；换记录时 clear_body 会把它们销毁
         self._text_label: QLabel | None = None
         self._text_note: QLabel | None = None
@@ -727,6 +746,7 @@ class PreviewBubble(QFrame):
         super().resizeEvent(event)
         self._apply_inner_geometry()
         self._zoom.setGeometry(self.rect())
+        self._zoom_old.setGeometry(self.rect())
 
     # ------------------------------------------------------------- 入场缩放
     @property
@@ -776,30 +796,81 @@ class PreviewBubble(QFrame):
     def zoom_end(self) -> None:
         """收尾：位图只是动画载体，交回真实控件。"""
         self._zoom.hide()
+        self._zoom_old.hide()
         self._inner.show()
         self._arrow.show()
         self._arrow.raise_()
 
     # ------------------------------------------------------------------ 操作入口
-    def show_swap_overlay(self, pix: QPixmap) -> None:
-        """换条目：把**旧画面**铺在新气泡上面，随后由控制器淡到 0。
+    def begin_swap(self, old_pix: QPixmap | None) -> None:
+        """换条目：**旧画面原地淡出 + 新内容从右下角放大淡入**。
 
-        旧画面按新窗口居中、保比例缩放；淡出期间新内容已经在下面排好版，
-        中间不会露出桌面（`_inner` 一直是可见的）。
+        这是 2026-11-09 用 60fps 录屏逐帧量出来的 Frset 真实行为：
+        旧气泡只降透明度（不缩、不位移），新气泡以右下角为不动点从 0.6 倍
+        长到 1.0 并同步淡入，两段部分重叠、总 167ms。
+
+        新层压在旧层之上 —— 所以观感是「新气泡从旧气泡里长出来」，
+        而不是「新内容早就铺在下面、旧的在上面化开」（后者正是上一版被判「生硬」的原因）。
         """
-        dpr = pix.devicePixelRatio() or 1.0
-        pw, ph = pix.width() / dpr, pix.height() / dpr
-        if pw <= 0 or ph <= 0:
-            return
-        scale = min(self.width() / pw, self.height() / ph, 1.0)
-        w, h = pw * scale, ph * scale
+        # 抓新内容前先把缩放层藏起来
+        self._zoom.hide()
+
+        # 1) 旧画面：**右下角对齐**新卡右下角，只改 alpha
+        # （以前是居中铺，换条目时新旧尺寸不同会看成「两块卡」；Frset 全程是同一个
+        #   popover 在变形，所以这里让两者的右下角重合，观感才是一块在变）
+        has_old = old_pix is not None and not old_pix.isNull()
+        if has_old:
+            dpr = old_pix.devicePixelRatio() or 1.0
+            pw, ph = old_pix.width() / dpr, old_pix.height() / dpr
+            has_old = pw > 0 and ph > 0
+        if has_old:
+            self._zoom_old.setGeometry(self.rect())
+            self._zoom_old.set_fit(QRectF(self.width() - pw, self.height() - ph, pw, ph))
+            self._zoom_old.set_frame(old_pix, QPoint(0, 0))
+            self._zoom_old.set_factor(1.0)
+            self._zoom_old.set_alpha(1.0)
+            self._zoom_old.show()
+            self._zoom_old.raise_()
+        else:
+            self._zoom_old.hide()
+
+        # 2) 抓新内容：**先让旧画面盖住屏幕**，再 show 内容层并推进一轮事件。
+        #    QScrollArea 的 viewport 只有处理过事件后才有可绘制内容。这一轮事件里
+        #    如果屏幕露着，就会实打实闪一整帧新卡（2026-11-09 真机录屏抓到的）。
+        #    旧卡比新卡小，`_zoom_old` 遮不住整块，所以不能靠它当遮罩 ——
+        #    直接暂停重绘：这期间只跑布局、不往屏幕上画。
+        self._zoom_old.hide()          # grab 只抓内容层，但保险起见先藏掉旧画面
+        # 把内容层**移出窗口**再 show：子控件超出父范围会被裁剪，屏幕上不会出现；
+        # 而 `grab()` 渲染的是控件自身，与它在哪无关。这样既能让 QScrollArea 的
+        # viewport 处理完事件、抓得到真实画面，又不会让屏幕闪出这一帧新内容。
+        inner_pos = self._inner.pos()
+        self._inner.move(-4000, inner_pos.y())
+        self._inner.show()
+        for lay in (self._inner.layout(), self._inner_lay, self._body_lay,
+                    self._head.layout() if self._head is not None else None):
+            if lay is not None:
+                lay.invalidate()
+                lay.activate()
+        QApplication.processEvents()
+        new_pix = self._inner.grab()   # 只抓内容层：`self.grab()` 会连旧画面一起拍
+        self._inner.move(inner_pos)
+        self._inner.hide()
+        self._zoom_old.setVisible(has_old)
+
+        # 4) 新内容：基准矩形 = 内容层本身，factor < 1 时朝右下角收缩 = 从右下角长出来
         self._zoom.setGeometry(self.rect())
-        self._zoom.set_fit(QRectF((self.width() - w) / 2, (self.height() - h) / 2, w, h))
-        self._zoom.set_frame(pix, QPoint(0, 0))
-        self._zoom.set_factor(1.0)
-        self._zoom.set_alpha(1.0)
+        self._zoom.set_fit(QRectF(self._inner.pos(), QSizeF(self._inner.size())))
+        self._zoom.set_frame(new_pix, QPoint(0, 0))
+        self._zoom.set_factor(SWAP_SCALE_FROM)
+        self._zoom.set_alpha(0.0)
         self._zoom.show()
         self._zoom.raise_()
+
+    def set_swap_state(self, old_alpha: float, factor: float, new_alpha: float) -> None:
+        """换条目单帧状态：旧层透明度、新层缩放、新层透明度。"""
+        self._zoom_old.set_alpha(old_alpha)
+        self._zoom.set_factor(factor)
+        self._zoom.set_alpha(new_alpha)
 
     def begin_close_frame(self) -> None:
         """关窗动画：把当前卡片拍成位图交给缩放层，从 1.0 起缩、同步淡出。
@@ -927,7 +998,16 @@ class PreviewBubble(QFrame):
         while self._pill_box.count():
             item = self._pill_box.takeAt(0)
             destroy(item.widget())
-        self._pill_box.addWidget(state_pill(record))
+        pill = state_pill(record)
+        self._pill_box.addWidget(pill)
+        # 换条目时气泡是**藏起来刷新**的（`begin_swap` 会先 hide 再渲染）。新建的
+        # widget 不显式 show 就不参与布局：抓出来那一帧头部少一个胶囊，等它出现时
+        # 把右侧图标整体往右推一下 —— 就是用户看到的「右上角图标先少一个再向右闪」。
+        pill.show()
+        head_lay = self._head.layout() if self._head is not None else None
+        if head_lay is not None:
+            head_lay.invalidate()
+            head_lay.activate()
 
     def _build_image(self, record) -> None:  # noqa: ANN001
         self._body_text = ""
@@ -1278,20 +1358,25 @@ class PreviewController(QObject):
         self.bubble.setGeometry(rect)
         self.bubble.set_arrow(arrow_right, center - rect.top())
         if old is not None and not old.isNull():
-            self.bubble.show_swap_overlay(old)
+            # 旧画面淡出 + 新内容从右下角放大淡入（Frset 60fps 实测）
+            self.bubble.begin_swap(old)
+            self._swap_t0 = time.perf_counter()
+            self._swap_anim.start()
+        else:
+            self.bubble.begin_swap(None)      # 只有新层：直接从 0.6 长出来
             self._swap_t0 = time.perf_counter()
             self._swap_anim.start()
 
     def _swap_step(self) -> None:
         elapsed = (time.perf_counter() - self._swap_t0) * 1000.0
-        if elapsed < SWAP_DWELL_MS:
-            alpha = 1.0                      # 驻留：先让旧卡完整停一下
-        else:
-            p = min(1.0, (elapsed - SWAP_DWELL_MS) / SWAP_FADE_MS)
-            smooth = p * p * (3.0 - 2.0 * p)  # smoothstep：两头缓、中间快
-            alpha = 1.0 - smooth
-        self.bubble.set_zoom_alpha(alpha)
-        if alpha <= 0.0:
+        # 旧气泡：原地淡出，不缩不位移（实测 ~60ms）
+        old_alpha = max(0.0, 1.0 - elapsed / SWAP_OUT_MS)
+        # 新气泡：0.6 → 1.0 + alpha 0 → 1，easeOutCubic（实测曲线）
+        p = min(1.0, elapsed / SWAP_IN_MS)
+        e = 1.0 - (1.0 - p) ** 3
+        factor = SWAP_SCALE_FROM + (1.0 - SWAP_SCALE_FROM) * e
+        self.bubble.set_swap_state(old_alpha, factor, e)
+        if p >= 1.0:
             self._swap_anim.stop()
             self.bubble.zoom_end()
             # zoom_end 会把箭头重新 show/raise，再补一次，保证落地后箭头在
