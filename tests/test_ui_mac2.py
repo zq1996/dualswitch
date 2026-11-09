@@ -1862,7 +1862,12 @@ def test_text_preview_shows_everything(app, cfg):
 
 
 def test_text_preview_grows_beyond_old_cap(app, cfg):
-    """内容多就长高（以前被死板限制在 270px 高）。"""
+    """内容多就长高（以前被死板限制在 270px 高）。
+
+    2026-11-09：一度按 §10.29 的「376×278」把长文本压到 278，用户用 Frset 真机
+    截图否掉了（140 行 / 3849 字符是一张高卡）。376×278 只对应 276 字那一档，
+    不是上限——此契约恢复。
+    """
     from dualswitch.ui.mac2 import theme as _theme
 
     page = ClipboardPage(FakeEngine([]))

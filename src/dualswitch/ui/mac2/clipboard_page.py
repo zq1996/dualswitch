@@ -541,6 +541,9 @@ class ClipboardPage(QWidget):
         self.list_lay.setSpacing(0)
         self.list_lay.addStretch(1)
         self.scroll.setWidget(self.list_host)
+        # 滚动时气泡跟着锚点走（原来滚动完全没有接线：气泡会僵在原地，
+        # 缩略图滚走了它还挂着，直到 220ms 的「离开缩略图」延时把它收掉）
+        self.scroll.verticalScrollBar().valueChanged.connect(self._on_list_scrolled)
         outer.addWidget(self.scroll, 1)
 
         # ---- 双态空态 ----
@@ -854,6 +857,10 @@ class ClipboardPage(QWidget):
             return
         super().keyPressEvent(event)
 
+    def _on_list_scrolled(self) -> None:
+        """列表滚动：气泡贴着锚点跟过去；锚点滚出视口才收（由 controller 判断）。"""
+        self._preview.follow()
+
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
-        self._preview.hide_now()      # 滚动/尺寸变化立即关（§3.4）
+        self._preview.hide_now()      # 窗口改尺寸：锚点位置全变，直接关
