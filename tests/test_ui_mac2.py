@@ -21,7 +21,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6", reason="未安装 PySide6，跳过界面测试")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -556,6 +557,40 @@ def test_pairing_unpair_confirm_closes_on_outside_click(app):
     assert not page.confirm_box.isHidden()
     QTest.mouseClick(page._unpair_btn, Qt.LeftButton)
     assert page.confirm_box.isHidden(), "点锚点应该只收起，不该重新弹出来"
+
+
+def test_pairing_unpair_confirm_ignores_qwindow_press(app):
+    """真机点击先派给 QWindow（不是 QWidget），不能当成「点外面」把浮层收掉。
+
+    2026-11-09 真机 bug：eventFilter 只认 QWidget，QWindow 上来的 press 一律
+    inside=False，于是每点一下确认卡都被收起、点击也没送到按钮 —— 表现就是
+    「点解除配对的确认没反应」。QTest.mouseClick 直接投递给控件，复现不出来。
+    """
+    engine = FakePairEngine(paired=True, peer_device="windows-3f2a91c4",
+                            peer_name="DESKTOP-8Q2K", addr="192.168.1.31:47823")
+    page = PairingPage(engine)
+    page.resize(592, 560)
+    page.show()
+    page.activate()
+    page._ask_unpair()
+    assert not page.confirm_box.isHidden()
+
+    btn = page.confirm_box.btn_ok
+    inside_pt = btn.mapToGlobal(btn.rect().center())
+    page.eventFilter(
+        QObject(),   # 非 QWidget —— 真机上就是那个 QWindow
+        QMouseEvent(QEvent.MouseButtonPress, QPointF(0, 0), QPointF(inside_pt),
+                    Qt.LeftButton, Qt.LeftButton, Qt.NoModifier),
+    )
+    assert not page.confirm_box.isHidden(), "QWindow 上的点击被误判成「点外面」"
+
+    outside_pt = page.mapToGlobal(QPoint(2, 2))
+    page.eventFilter(
+        QObject(),
+        QMouseEvent(QEvent.MouseButtonPress, QPointF(0, 0), QPointF(outside_pt),
+                    Qt.LeftButton, Qt.LeftButton, Qt.NoModifier),
+    )
+    assert page.confirm_box.isHidden(), "卡片外的点击应当收起浮层"
 
 
 def test_pairing_replace_confirm_survives_peer_rebuild(app):

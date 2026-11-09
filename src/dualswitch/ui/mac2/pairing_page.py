@@ -849,10 +849,20 @@ class PairingPage(QWidget):
             pop = getattr(self, "confirm_box", None)
             if pop is not None and pop.isVisible():
                 widget = obj if isinstance(obj, QWidget) else None
-                inside = widget is not None and (widget is pop or pop.isAncestorOf(widget))
+                if widget is None:
+                    # 真实鼠标点击会先派给 **QWindow**，不是 QWidget。旧代码只认
+                    # QWidget，于是 inside 恒为 False：每点一下都当成「点在浮层外」
+                    # 先收起浮层，点击也没送到按钮 —— 表现就是「点确认没反应」
+                    # （2026-11-09 真机日志：点击落在 QWindow → 收起浮层）。
+                    gp = event.globalPosition().toPoint()
+                    inside = pop.rect().contains(pop.mapFromGlobal(gp))
+                    anchor_hit = QApplication.widgetAt(gp) is getattr(self, "_unpair_btn", None)
+                else:
+                    inside = widget is pop or pop.isAncestorOf(widget)
+                    anchor_hit = widget is getattr(self, "_unpair_btn", None)
                 if not inside:
                     pop.cancel()
-                    if widget is getattr(self, "_unpair_btn", None):
+                    if anchor_hit:
                         return True
         # 注意：这里**不能**写 `super().eventFilter(...)` —— 作为 QApplication 级
         # 过滤器时 PySide6 会把它派回本方法，870 层递归后 RuntimeError。
