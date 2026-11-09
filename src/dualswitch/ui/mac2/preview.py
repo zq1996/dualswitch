@@ -450,13 +450,9 @@ class PreviewBubble(QFrame):
         act_lay.setSpacing(2)
         for b in (self._btn_preview, self._btn_find, self._btn_link, self._btn_copy):
             act_lay.addWidget(b, 0, Qt.AlignVCenter)
-        # 常显（用户 2026-11-09：不要悬浮才出现，直接显示）
-        self._act_effect = QGraphicsOpacityEffect(self._act_box)
-        self._act_effect.setOpacity(1.0)
-        self._act_box.setGraphicsEffect(self._act_effect)
-        self._act_anim = QPropertyAnimation(self._act_effect, b"opacity", self)
-        self._act_anim.setDuration(120)
-        self._act_anim.setEasingCurve(QEasingCurve.OutCubic)
+        # **不挂 QGraphicsOpacityEffect**（用户 2026-11-09：图标常显，不需要淡入）。
+        # 挂着它会让 `grab()` 与真实控件的渲染走两条路径，换条目动画结束交回真实
+        # 控件时，头部图标会闪一下、位置也差一点点。
         hl.addWidget(self._act_box, 0, Qt.AlignVCenter)
         self._head = head
         inner_lay.addWidget(head)
@@ -846,8 +842,8 @@ class PreviewBubble(QFrame):
         inner_pos = self._inner.pos()
         self._inner.move(-4000, inner_pos.y())
         self._inner.show()
-        for lay in (self._inner.layout(), self._inner_lay, self._body_lay,
-                    self._head.layout() if self._head is not None else None):
+        for lay in (self._inner.layout(), self._inner_lay, self._head.layout(),
+                    self._act_box.layout(), self._body_lay):
             if lay is not None:
                 lay.invalidate()
                 lay.activate()
