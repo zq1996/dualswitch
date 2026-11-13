@@ -9,6 +9,7 @@ UI 线程只做绘制，不碰 DDC。「强制切」绕过本地优先策略直�
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -27,6 +28,42 @@ from .switch_page import SwitchPage
 from .window import PAGE_CLIP, PAGE_PAIR, PAGE_SETTINGS, PAGE_SWITCH, MainWindow
 
 log = logging_setup.get("ui")
+
+
+def _hard_exit(code: int) -> None:
+    """收尾做完后直接结束进程，绕开 PySide 的退出析构。
+
+    为什么需要（2026-11-13 实测）：解释器退出时 PySide 会跑
+    `destroyQCoreApplication()`，遍历所有 Python 侧 QWidget 挨个 `delete`。
+    谁的父亲先被析构，下一个 `~QObject` 就踩空 —— 表现是 `QObject: shared
+    QObject was deleted directly`，然后 SIGSEGV：
+
+      · 全量 pytest 用例全绿，进程却 exit=139（3 次里 2 次，界面用例密集时几乎必现）；
+      · 打包产物退出时冒出 atexit `RuntimeError: Error calling Python override
+        of QObject::eventFilter()`（runner/super() 与 pairing_page 互相派回）。
+
+    崩溃栈都是 `PySide::runCleanupFunctions → destructionVisitor → ~QPushButtonWrapper`，
+    属于「进程已经决定退出、正在拆设施」的阶段，与运行期无关。
+
+    退出路径上**没有**任何必须在 atexit 里完成的事：外接屏恢复（`display_power`
+    是幂等的，空状态什么也不做）和日志冲刷都在这里显式做完，然后 `os._exit`
+    把整段析构跳过 —— 这也正是 `docs/` 里记的「根治方案」。
+    """
+    try:  # 画面在对面时外接屏可能处于停用态，退出前必须还回去（幂等）
+        from ... import display_power
+
+        display_power.restore_pending()
+    except Exception:  # noqa: BLE001 - 救命动作失败不能挡住退出
+        log.debug("退出前恢复外接屏失败", exc_info=True)
+    try:
+        log.info("收尾完成，直接结束进程（退出码 %s，跳过 PySide 退出析构）", code)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        logging.shutdown()  # 冲刷日志 handler；os._exit 不走 atexit，得手动来
+    except Exception:  # noqa: BLE001
+        pass
+    os._exit(int(code))
 
 
 # --------------------------------------------------------------------------- #
@@ -843,7 +880,17 @@ class UiRunner2(QObject):
             self.app.quit()
 
     def run(self) -> int:
-        return self.app.exec()
+        """跑事件循环，收尾后硬退出（见 `_hard_exit` 的说明）。"""
+        code = 0
+        try:
+            code = self.app.exec()
+        except SystemExit as exc:  # SIGTERM/SIGHUP：term handler 在循环里抛 128+signum
+            code = exc.code if isinstance(exc.code, int) else 1
+        finally:
+            # 正常退出和信号退出都走这里：PySide 的退出析构会把父对象先死的
+            # QWidget 二次 delete（SIGSEGV），所以不能把控制权交回解释器。
+            _hard_exit(code)
+        return code  # pragma: no cover - _hard_exit 不会返回
 
 
 def run_ui2(cfg, cfg_file, log_file, backend, controller, hotkey, warning=None,

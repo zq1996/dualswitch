@@ -801,7 +801,18 @@ def _install_term_handler() -> None:
             display_power.restore_pending()
         except Exception:  # noqa: BLE001 - 救命动作失败也要继续退出
             log.exception("退出前恢复外接屏失败")
-        raise SystemExit(128 + signum)
+        # 不能只 raise SystemExit 就交给上层（2026-11-13 复测确认）：这个 handler 是在
+        # Qt 的 C++ 事件派发里被调起来的，异常一出来 PySide 就直接进解释器退出，接着
+        # 析构全部 QWidget —— 父对象先被销毁的那个 SIGSEGV。症状是退出码对了（143），
+        # 但 atexit 里冒一串 `Error calling Python override of QObject::eventFilter`，
+        # 偶尔还留一份崩溃报告。上层的 finally 同样跑不到，所以这里冲刷完日志直接结束
+        # 进程（与 ui2 的 `runner._hard_exit` 同一个道理）。
+        log.info("信号退出：收尾完成，直接结束进程（%s）", 128 + signum)
+        try:
+            logging.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(128 + signum)
 
     try:
         signal.signal(signal.SIGTERM, _raise)

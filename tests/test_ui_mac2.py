@@ -2428,3 +2428,41 @@ def test_hover_tip_wraps_long_text_and_waits_for_the_delay(app, cfg):
     bubble.hide()
     btn.hide()
 
+
+
+def test_ui_exit_bypasses_pyside_teardown(app, monkeypatch):
+    """退出必须绕开 PySide 的退出析构。
+
+    2026-11-13 实测：全量 pytest 用例全绿、进程却在解释器退出时 exit=139；
+    打包产物退出时冒出 atexit `eventFilter` 递归 RuntimeError。崩溃栈都落在
+    `PySide::destroyQCoreApplication → destructionVisitor → ~QPushButtonWrapper`：
+    解释器退出时 PySide 会遍历所有 Python 侧 QWidget 挨个 delete，父对象已被
+    先析构的那个直接段错误（测试里大量顶层页面同时存活，几乎必现）。
+
+    退出路径上没有任何「必须在 atexit 里做」的事（日志 flush、外接屏恢复都在
+    run() 收尾里做完），所以 run() 结尾必须直接 os._exit 把这段析构整段跳过。
+    """
+    import types
+
+    from dualswitch.ui.mac2 import runner
+
+    seen: list[int] = []
+    monkeypatch.setattr(runner, "_hard_exit", lambda code: seen.append(code))
+
+    class FakeApp:
+        def __init__(self, exc=None):
+            self._exc = exc
+
+        def exec(self):  # noqa: A003 - 模拟 QApplication.exec
+            if self._exc is not None:
+                raise self._exc
+            return 0
+
+    # 1) 界面里点「退出应用」：exec() 正常返回 0
+    runner.UiRunner2.run(types.SimpleNamespace(app=FakeApp()))
+    assert seen == [0], "正常退出没走硬退出 —— PySide 的析构会把进程带走"
+
+    # 2) SIGTERM / SIGHUP：_install_term_handler 在事件循环里抛 SystemExit(128+signum)
+    seen.clear()
+    runner.UiRunner2.run(types.SimpleNamespace(app=FakeApp(SystemExit(143))))
+    assert seen == [143], "被信号打断的退出没走硬退出"

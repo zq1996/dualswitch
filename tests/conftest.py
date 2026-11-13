@@ -162,3 +162,67 @@ def _no_discovery_broadcast(monkeypatch):
     这个开关让引擎在发现端口上彻底不起 socket（`discover_port=0`）。
     """
     monkeypatch.setenv("DUALSWITCH_NO_DISCOVER", "1")
+
+
+# --------------------------------------------------------------------------- #
+# Qt 退出清理：别把顶层控件留到解释器退出
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="session", autouse=True)
+def _qt_destroy_widgets_at_exit():
+    """全量跑完时，把界面用例 show() 过的顶层控件真的销毁掉。
+
+    **为什么**（2026-11-13 实测）：用例全绿、进程却 `exit=139`。PySide 在解释器
+    退出时跑 `destroyQCoreApplication()`，遍历所有 Python 侧 QWidget 挨个 `delete`；
+    测试里一堆页面同时活到那时，父对象先被销毁的那个直接把进程带走
+    （`~QPushButtonWrapper → QObject::~QObject` 踩空，3 次里 2 次必现）。
+
+    QApplication 还活着的时候先把它们 `deleteLater` 并转一圈事件循环，解释器退出
+    时就没有东西可删了。只在 Qt 已经被用例 import 过时动作，纯 CLI 用例不受影响。
+    """
+    yield
+    if "PySide6.QtWidgets" not in sys.modules:
+        return
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            return
+        for widget in list(app.topLevelWidgets()):
+            widget.setParent(None)
+            widget.deleteLater()
+        app.processEvents()
+    except Exception:  # noqa: BLE001 - 清理失败不该让整轮测试报错
+        pass
+
+
+# --------------------------------------------------------------------------- #
+# Qt 退出清理：别把顶层控件留到解释器退出
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="session", autouse=True)
+def _qt_destroy_widgets_at_exit():
+    """全量跑完时，把界面用例 show() 过的顶层控件真的销毁掉。
+
+    **为什么**（2026-11-13 实测）：用例全绿、进程却 `exit=139`。PySide 在解释器
+    退出时跑 `destroyQCoreApplication()`，遍历所有 Python 侧 QWidget 挨个 `delete`；
+    测试里一堆页面同时活到那时，父对象先被销毁的那个直接把进程带走
+    （`~QPushButtonWrapper → QObject::~QObject` 踩空，3 次里 2 次必现）。
+
+    QApplication 还活着的时候先把它们 `deleteLater` 并转一圈事件循环，解释器退出
+    时就没有东西可删了。只在 Qt 已经被用例 import 过时动作，纯 CLI 用例不受影响。
+    """
+    yield
+    if "PySide6.QtWidgets" not in sys.modules:
+        return
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            return
+        for widget in list(app.topLevelWidgets()):
+            widget.setParent(None)
+            widget.deleteLater()
+        app.processEvents()
+    except Exception:  # noqa: BLE001 - 清理失败不该让整轮测试报错
+        pass
