@@ -7,7 +7,7 @@ import json
 import pytest
 
 from dualswitch import config as config_mod
-from dualswitch.config import ConfigError, ReadbackConfig, from_dict
+from dualswitch.config import ConfigError, ReadbackConfig, from_dict, save
 
 
 def test_defaults_are_valid():
@@ -326,3 +326,45 @@ def test_strict_load_raises_on_invalid_value_without_backup(tmp_path):
         config_mod.load(path)
     assert not list(tmp_path.glob("config.json.unreadable-*"))
     assert config_mod.take_load_warnings() == []
+
+
+def test_save_logs_what_changed(tmp_path, caplog):
+    """每次落盘都要记「改了哪几个键」 —— 2026-11-14 配置被写回默认值，事后查不出是谁干的。"""
+    import logging as _logging
+
+    from dualswitch.config import from_dict
+
+    path = tmp_path / "config.json"
+    cfg = from_dict({})
+    save(cfg, path)
+
+    cfg.mouse_switch.local_slot = 2
+    cfg.clipboard.peer_name = "DESKTOP-X"
+    with caplog.at_level(_logging.INFO, logger="dualswitch.config"):
+        save(cfg, path)
+
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "配置已保存" in text
+    assert "mouse_switch.local_slot" in text
+    assert "clipboard.peer_name" in text
+
+
+def test_save_logs_what_changed(tmp_path, caplog):
+    """每次落盘都要记「改了哪几个键」 —— 2026-11-14 配置被写回默认值，事后查不出是谁干的。"""
+    import logging as _logging
+
+    from dualswitch.config import from_dict
+
+    path = tmp_path / "config.json"
+    cfg = from_dict({})
+    save(cfg, path)
+
+    cfg.mouse_switch.local_slot = 2
+    cfg.clipboard.peer_name = "DESKTOP-X"
+    with caplog.at_level(_logging.INFO, logger="dualswitch.config"):
+        save(cfg, path)
+
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "配置已保存" in text
+    assert "mouse_switch.local_slot" in text
+    assert "clipboard.peer_name" in text

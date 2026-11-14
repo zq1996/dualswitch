@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+log = logging.getLogger("dualswitch.config")
+
 APP_NAME = "dualswitch"
 CONFIG_FILENAME = "config.json"
 #: 每次落盘前，把上一份「能解析」的配置留成这个后缀（同目录）
@@ -784,6 +786,50 @@ def _backup_before_overwrite(target: Path) -> None:
         logging.getLogger(__name__).warning("配置备份失败：%s", exc)
 
 
+def _changed_keys(before: dict, after: dict) -> list[str]:
+    """列出两次配置之间的差异键（顶层 + 一层子项），用于「谁把配置改了」审计。"""
+    changed: list[str] = []
+    for key in sorted(set(before) | set(after)):
+        old, new = before.get(key), after.get(key)
+        if old == new:
+            continue
+        if isinstance(old, dict) and isinstance(new, dict):
+            for sub in sorted(set(old) | set(new)):
+                if old.get(sub) != new.get(sub):
+                    changed.append(f"{key}.{sub}")
+        else:
+            changed.append(key)
+    return changed
+
+
+def _audit_save(target: Path, data: dict) -> None:
+    """落盘前把「这次改了哪几个键」记进日志。
+
+    2026-11-14：鼠标槽位和配对信息（psk / peer_name）在用户眼皮底下被写成默认值，
+    事后完全查不出是谁写的 —— `save()` 当时一句话都不记。有这条审计，下次一眼就能
+    看到「哪个键、什么时刻、从什么变成什么」。
+    """
+    try:
+        before = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(before, dict):
+        return
+    changed = _changed_keys(before, data)
+    if not changed:
+        return
+    details = []
+    for key in changed[:8]:
+        section, _, sub = key.partition(".")
+        old = before.get(section)
+        new = data.get(section)
+        if sub and isinstance(old, dict) and isinstance(new, dict):
+            details.append(f"{key}: {old.get(sub)!r} → {new.get(sub)!r}")
+        else:
+            details.append(f"{key}: {old!r} → {new!r}")
+    log.info("配置已保存 %s（变更 %d 项）：%s", target.name, len(changed), "；".join(details))
+
+
 def save(cfg: Config, path: str | os.PathLike[str] | None = None) -> Path:
     """落盘。
 
@@ -812,6 +858,7 @@ def save(cfg: Config, path: str | os.PathLike[str] | None = None) -> Path:
         if key in data:
             data[key] = original
     text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    _audit_save(target, data)
     # 覆盖前先留一份可回滚的 .bak（旧版程序不认它，正好躲过它的覆盖）
     _backup_before_overwrite(target)
     tmp = target.with_name(f".{target.name}.tmp-{os.getpid()}")
