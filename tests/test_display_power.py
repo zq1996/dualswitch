@@ -14,8 +14,9 @@ from dualswitch.display_power import AwayDisplayPower
 
 
 class FakePlatform:
-    def __init__(self, host: str | None = "windows") -> None:
+    def __init__(self, host: str | None = "windows", ids: list[int] | None = None) -> None:
         self.host = host
+        self.ids = [3] if ids is None else ids
         self.disable_calls = 0
         self.enable_calls: list[list[int]] = []
         self.off = False
@@ -23,6 +24,10 @@ class FakePlatform:
     # ---- 注入给 guard 的四件套 ----
     def read_host(self) -> str | None:
         return self.host
+
+    def list_ids(self) -> list[int]:
+        """CGS 列表里的 id：停用后仍在（1×1 桩），拔线才消失。"""
+        return list(self.ids)
 
     def disable(self) -> list[int]:
         self.disable_calls += 1
@@ -50,6 +55,8 @@ def make_guard(tmp_path, fake: FakePlatform, **kwargs) -> AwayDisplayPower:
         enable=fake.enable,
         state_path=tmp_path / "display-power.json",
         available_check=FakePlatform.available,
+        list_ids=fake.list_ids,
+        blind_restore_s=0,          # 安全阀默认关，单独用例再打开
     )
     params.update(kwargs)
     return AwayDisplayPower(**params)
@@ -151,18 +158,88 @@ def test_stop_always_restores(tmp_path):
     assert fake.enable_calls == [[3]]
 
 
-def test_restores_after_repeated_read_failures(tmp_path):
-    """连着读不到就当「屏不在了」恢复：拔线/断电时不能把它留在停用态。"""
+def test_keeps_off_when_read_fails_but_display_still_listed(tmp_path):
+    """读不到 ≠ 屏没了。
+
+    2026-11-13 21:58 实测：真停用之后 DDC 读恒失败，旧逻辑「连续 5 次读不到就恢复」
+    让省电刚生效 7.5 秒就自我撤销。现在只要屏还在 CGS 列表里（停用后的 1×1 桩），
+    就必须保持停用。
+    """
     fake = FakePlatform("windows")
-    guard = make_guard(tmp_path, fake, probe_interval_ms=200)
+    guard = make_guard(tmp_path, fake, probe_interval_ms=100)
+    guard.start()
+    try:
+        guard.on_source("windows")
+        assert wait_until(lambda: fake.disable_calls == 1)
+
+        fake.host = None                       # 读通道哑了
+        time.sleep(1.2)                        # 远超旧逻辑的 5 次探测
+        assert fake.enable_calls == [], "屏还在列表里，不能因为读不到就恢复"
+        assert guard.mode == AwayDisplayPower.OFF
+    finally:
+        guard.stop()
+
+
+def test_restores_when_disabled_display_vanished(tmp_path):
+    """被停用的屏从 CGS 列表消失（拔线 / 断电）→ 必须恢复，别留个死 id。"""
+    fake = FakePlatform("windows")
+    guard = make_guard(tmp_path, fake, probe_interval_ms=100)
     guard.start()
     try:
         guard.on_source("windows")
         assert wait_until(lambda: fake.disable_calls == 1)
 
         fake.host = None
-        # 5 次探测 × 0.2s，留足余量
+        fake.ids = []                          # 拔线
+        assert wait_until(lambda: bool(fake.enable_calls), timeout=2.0)
+    finally:
+        guard.stop()
+
+
+def test_safety_valve_restores_after_long_blind(tmp_path):
+    """读通道彻底哑掉时的安全阀：到点恢复一次，别把屏永久留在黑屏。"""
+    fake = FakePlatform("windows")
+    guard = make_guard(tmp_path, fake, probe_interval_ms=100, blind_restore_s=0.4)
+    guard.start()
+    try:
+        guard.on_source("windows")
+        assert wait_until(lambda: fake.disable_calls == 1)
+
+        fake.host = None
         assert wait_until(lambda: bool(fake.enable_calls), timeout=3.0)
+    finally:
+        guard.stop()
+
+
+def test_trusted_arm_disables_even_when_read_is_dead(tmp_path):
+    """本机刚发出一条成功切到对面的 Set ⇒ 到点照停，不再被「读不出来」否决。
+
+    这正是 2026-11-14 的线上 bug：切到 Windows 后 2.5s 的二次确认读回 None，
+    整条省电路径被静默抛弃，屏一直 active。
+    """
+    fake = FakePlatform("windows")
+    guard = make_guard(tmp_path, fake, off_delay_ms=50)
+    guard.start()
+    try:
+        fake.host = None                       # 读通道已经哑了
+        guard.on_source("windows", trusted=True)
+        assert wait_until(lambda: fake.disable_calls == 1)
+        assert guard.mode == AwayDisplayPower.OFF
+    finally:
+        guard.stop()
+
+
+def test_untrusted_arm_aborts_when_read_is_dead(tmp_path):
+    """没有硬依据（只是「听说」画面在对面）又读不出来 ⇒ 宁可不省电。"""
+    fake = FakePlatform("windows")
+    guard = make_guard(tmp_path, fake, off_delay_ms=50)
+    guard.start()
+    try:
+        fake.host = None
+        guard.on_source("windows")
+        time.sleep(0.5)
+        assert fake.disable_calls == 0
+        assert guard.mode == AwayDisplayPower.IDLE
     finally:
         guard.stop()
 
@@ -221,6 +298,8 @@ def test_other_host_follows_local(tmp_path, local, other):
         enable=fake.enable,
         state_path=tmp_path / "display-power.json",
         available_check=FakePlatform.available,
+        list_ids=fake.list_ids,
+        blind_restore_s=0,
     )
     guard.start()
     try:
@@ -296,6 +375,8 @@ def test_controller_wires_ownership_to_display_power(tmp_path):
         enable=fake.enable,
         state_path=tmp_path / "display-power.json",
         available_check=FakePlatform.available,
+        list_ids=fake.list_ids,
+        blind_restore_s=0,
     )
     guard.start()
     ctl._display_power = guard
@@ -305,5 +386,46 @@ def test_controller_wires_ownership_to_display_power(tmp_path):
 
         ctl._commit_read_host("windows")      # 画面回来
         assert wait_until(lambda: bool(fake.enable_calls))
+    finally:
+        guard.stop()
+
+
+def test_after_screen_switch_arms_with_hard_evidence(tmp_path):
+    """接线守卫：本机发出的切换成功 ⇒ 必须带 `trusted=True` 通知省电模块。
+
+    没有这一条，2026-11-14 的 bug 会以另一种形式回来：切到对面后 DDC 读不出来，
+    `_arm_fire` 拿不到证据就把停用取消，屏一直 active。
+    """
+    from dualswitch.app import SwitchController
+    from dualswitch.config import from_dict
+    from dualswitch.ddc.mock import MockBackend
+
+    cfg = from_dict({
+        "this_host": "mac",
+        "readback": {"enabled": False},
+        "mouse_switch": {"enabled": False},     # 别让用例去动真鼠标
+    })
+    ctl = SwitchController(cfg, MockBackend(current=18, monitors=[]))
+
+    fake = FakePlatform("windows")
+    fake.host = None                            # 读通道已经哑了
+    guard = AwayDisplayPower(
+        enabled=True,
+        off_delay_ms=10,
+        probe_interval_ms=200,
+        read_host=fake.read_host,
+        local_host="mac",
+        disable=fake.disable,
+        enable=fake.enable,
+        state_path=tmp_path / "display-power.json",
+        available_check=FakePlatform.available,
+        list_ids=fake.list_ids,
+        blind_restore_s=0,
+    )
+    guard.start()
+    ctl._display_power = guard
+    try:
+        ctl._after_screen_switch("windows")
+        assert wait_until(lambda: fake.disable_calls == 1)
     finally:
         guard.stop()

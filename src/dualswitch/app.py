@@ -788,9 +788,11 @@ class SwitchController:
         """
         self._notify_keyboard(target_host)
         # 画面要去对面 ⇒ 到点把外接屏停掉（省电）；要回本机 ⇒ 立刻恢复。
-        # 这里先按「目标」通知一次，等回读拿到真值再校准，不必等 8 秒回读超时。
+        # `trusted=True`：这条归属有硬依据（Set 返回成功 / 对端 ACK），所以到点
+        # 即使 DDC 读不出来也照停 —— 否则这台显示器「切到对面后读通道不通」会把
+        # 省电整个废掉（2026-11-14 用户报「画面在 Windows，Mac 还留扩展屏」）。
         try:
-            self._display_power.on_source(target_host or None)
+            self._display_power.on_source(target_host or None, trusted=True)
         except Exception:  # noqa: BLE001
             log.exception("外接屏省电调度失败（已忽略）")
         try:

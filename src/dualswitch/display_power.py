@@ -31,12 +31,27 @@ active display，WindowServer 继续为它合成、继续扫描输出，GPU 与�
 这是私有 API，用错会留下「外接屏黑着但没人能叫醒它」的状态，所以：
 
 1. **只停外接屏**：内建屏（`CGDisplayIsBuiltin`）和主屏（`CGDisplayIsMain`）永不动；
-2. **只在自己确认「画面在对面」时停**，读不到（None / unknown）一律恢复；
+2. **只在有依据说「画面在对面」时停**：自己发出的切换成功（`trusted=True`），或
+   DDC 直读报「在对面」。两者都没有就恢复；
 3. **切回本机前先恢复**：`before_switch_to_local()` 在发 DDC Set 之前调用，
    保证画面落到一块活着的输出上；
 4. **退出即恢复**：`stop()` 一定恢复；崩溃时把 id 记进 `display-power.json`，
    下次启动 `restore_pending()` 自愈；
 5. 命令行兜底：`dualswitch display reset` 无条件恢复所有被停用的外接屏。
+
+## 停用期间怎么等画面回来（2026-11-14 改正）
+
+**不能拿「读不到」当「屏没了」**：这块屏在画面跑到对面时，DDC 读通道本来就
+可能不通（`ddc/avservice.py` 的句柄会随休眠/显示重配变哑），所以以前
+「连续 5 次读不到就恢复」等于省电刚生效 7.5 秒就自己撤销（2026-11-13 21:58
+实测，还撞上 enable 返回 1001 把屏留在停用态过夜）。
+
+现在的判据，按可信度排：
+
+* 读到本机 → 立刻恢复（唯一真值）；
+* 被停用的屏**从 `CGSGetDisplayList` 里消失** → 拔线/断电 → 恢复；
+* 以上都拿不到（读通道全哑）→ **保持停用**，只留一个安全阀：连续
+  `blind_restore_s`（默认 15 分钟）都读不到就恢复一次，别把屏永久留在黑屏。
 """
 
 from __future__ import annotations
@@ -240,6 +255,18 @@ def enable_displays(ids: list[int]) -> list[int]:
             # 注意别用 info.label()：那是启用**前**的快照，会打成「1×1 停用」
             log.info("外接屏已恢复输出：#%d（%s）", info.id, "内建" if info.builtin else "外接")
         except Exception as exc:  # noqa: BLE001
+            # 1001 = kCGSDisplayConfigInvalid：刚停用过/系统还在收尾时很常见，
+            # 隔一拍再来一次基本就好（2026-11-13 21:58 就是因为没重试，屏留在停用态过夜）
+            if "1001" in str(exc):
+                time.sleep(0.3)
+                try:
+                    set_enabled(info.id, True)
+                except Exception as exc2:  # noqa: BLE001
+                    log.warning("恢复外接屏 %s 失败：%s", info.label(), exc2)
+                    continue
+                done.append(info.id)
+                log.info("外接屏已恢复输出：#%d（重试成功）", info.id)
+                continue
             log.warning("恢复外接屏 %s 失败：%s", info.label(), exc)
     return done
 
@@ -299,6 +326,11 @@ class AwayDisplayPower:
     ARMED = "armed"      # 画面刚走，等着到点再停
     OFF = "off"          # 已经停了，盯着画面什么时候回来
 
+    #: 停用期间「读不到」多少次才去查一次 CGS 列表（0.4s/次 × 5 ≈ 2s）
+    _MISS_PROBE_EVERY = 5
+    #: 停用期间读不到的第几条才写一次日志（否则每 0.4s 一条，把日志刷满）
+    _MISS_LOG_EVERY = 30
+
     def __init__(
         self,
         *,
@@ -312,6 +344,8 @@ class AwayDisplayPower:
         state_path: Path | None = None,
         available_check: Callable[[], tuple[bool, str]] | None = None,
         on_change: Callable[[], None] | None = None,
+        list_ids: Callable[[], list[int]] | None = None,
+        blind_restore_s: float = 900.0,
     ) -> None:
         self._enabled = bool(enabled)
         self._off_delay = max(0.0, off_delay_ms / 1000.0)
@@ -323,6 +357,8 @@ class AwayDisplayPower:
         self._enable = enable or enable_displays
         self._state_path = state_path
         self._available = available_check or available
+        self._list_ids = list_ids or (lambda: [d.id for d in list_displays()])
+        self._blind_restore_s = max(0.0, float(blind_restore_s))
         # 停/启之后通知调用方（用来让 DDC 丢掉失效的接口句柄）
         self._on_change = on_change
 
@@ -333,8 +369,11 @@ class AwayDisplayPower:
         self._mode = self.IDLE
         self._deadline = 0.0
         self._off_ids: list[int] = []
-        # 读不到的次数：连续失败说明屏真的没了（拔线 / 断电），要恢复，别留个黑屏
+        # 这次 ARMED 是「自己发出的切换」触发的（有依据），还是一句「听说画面在对面」
+        self._trusted_arm = False
+        # 读不到的次数 / 从什么时候开始读不到
         self._read_misses = 0
+        self._blind_since = 0.0
 
     # ---- 查询（界面 / CLI 用） -------------------------------------------
     @property
@@ -377,8 +416,14 @@ class AwayDisplayPower:
         self.restore_now("程序退出")
 
     # ---- 外部事件 ---------------------------------------------------------
-    def on_source(self, host: str | None) -> None:
-        """画面归属变了（由 `SwitchController` 在读到真值时调）。"""
+    def on_source(self, host: str | None, trusted: bool = False) -> None:
+        """画面归属变了（由 `SwitchController` 在读到真值时调）。
+
+        `trusted=True` 表示这条归属有「硬依据」——本机刚发出一条成功切到对面的
+        Set（或对端代发回了 ACK）。这种情况下即使 2.5 秒后 DDC 读不出来，也照停：
+        这台显示器在画面跑到对面之后读通道经常不通（见模块注释），
+        拿「读不到」去否决「我刚亲手发出去的命令」是本末倒置。
+        """
         if not self._enabled or self._thread is None:
             return
         if host == self._local:
@@ -390,6 +435,7 @@ class AwayDisplayPower:
                     return                     # 已经停了，等着就行
                 self._mode = self.ARMED
                 self._deadline = time.monotonic() + self._off_delay
+                self._trusted_arm = self._trusted_arm or bool(trusted)
             self._wake.set()
             return
         # None / unknown：证明不了画面在对面，保守起见恢复
@@ -413,7 +459,9 @@ class AwayDisplayPower:
             self._off_ids = []
             self._mode = self.IDLE
             self._deadline = 0.0
+            self._trusted_arm = False
             self._read_misses = 0
+            self._blind_since = 0.0
         if not ids:
             # 不是这一代进程停的（上一个进程崩了 / CLI 手动 `display off` 过），
             # 内存里当然没有 id —— 这时候唯一的信息源是状态文件。
@@ -466,14 +514,20 @@ class AwayDisplayPower:
             self._wake.clear()
 
     def _arm_fire(self) -> None:
-        """到点了：再读一次确认画面确实不在本机，然后停。"""
+        """到点了：读得到就按读到的校准，读不到就按「自己发出的那条切换」执行。"""
         host = self._safe_read()
-        if host != self._other:
+        with self._lock:
+            trusted = self._trusted_arm
+        if host != self._other and not (host is None and trusted):
             with self._lock:
                 self._mode = self.IDLE
                 self._deadline = 0.0
+                self._trusted_arm = False
             if host == self._local:
                 log.debug("画面已回到本机，取消停用外接屏")
+            else:
+                # 读不到、也没有自己的切换作依据：宁可不省电，也别把用户在看的屏停掉
+                log.info("跳过停用外接屏：画面归属读不到，本次也没有本机发出的切换作依据")
             return
         try:
             ids = self._disable()
@@ -481,31 +535,77 @@ class AwayDisplayPower:
             log.warning("停用外接屏失败：%s", exc)
             with self._lock:
                 self._mode = self.IDLE
+                self._trusted_arm = False
             return
         with self._lock:
             self._off_ids = list(ids)
             self._mode = self.OFF if ids else self.IDLE
             self._deadline = 0.0
+            self._trusted_arm = False
             self._read_misses = 0
+            self._blind_since = 0.0
         if ids:
             _write_state(ids, self._state_path)
-            log.info("画面不在本机 → 已停用 %s 块外接屏：画面回来会自动恢复", len(ids))
+            log.info(
+                "画面不在本机 → 已停用 %s 块外接屏：画面回来会自动恢复（依据：%s）",
+                len(ids),
+                "DDC 直读" if host == self._other else "本机发出的切换",
+            )
             self._notify_change()
 
     def _poll(self) -> None:
-        """停用期间盯着 DDC：画面一回来立刻恢复。"""
+        """停用期间盯着画面什么时候回来。
+
+        **读不到不等于屏没了**：这块屏在画面跑到对面时读通道常常不通。
+        以前的「连续 5 次读不到就恢复」会让省电刚生效几秒就自我撤销
+        （2026-11-13 21:58 实测）。现在的判据见模块注释：读不到就保持停用，
+        只有「被停用的屏真从 CGS 列表消失」或安全阀超时才恢复。
+        """
         host = self._safe_read()
         if host == self._local:
             self.restore_now("画面回到本机")
             return
         if host == self._other:
             self._read_misses = 0
+            self._blind_since = 0.0
             return
-        # 读不到：可能是拔线 / 断电。连着几次都不行就恢复，别把屏留在停用态
+        # 读不到：先只记账
         self._read_misses += 1
-        if self._read_misses >= 5:
-            log.warning("连续 %d 次读不到显示器输入，按「屏不在了」恢复输出", self._read_misses)
-            self.restore_now("读不到显示器")
+        if not self._blind_since:
+            self._blind_since = time.monotonic()
+        if self._read_misses % self._MISS_LOG_EVERY == 1:
+            log.debug(
+                "停用期间读不到画面归属（第 %d 次），保持停用：读通道不可用不是「屏没了」的证据",
+                self._read_misses,
+            )
+        # 可信的「屏真没了」证据：被停用的屏从 CGS 列表里消失（拔线 / 断电）
+        if self._read_misses >= self._MISS_PROBE_EVERY and not self._any_off_present():
+            log.warning("被停用的外接屏已从显示器列表消失（拔线 / 断电），恢复输出")
+            self.restore_now("被停用的屏已不在")
+            return
+        # 安全阀：读通道彻底哑了又一直挂着，给个上限，别把屏永久留在黑屏
+        if self._blind_restore_s > 0 and time.monotonic() - self._blind_since >= self._blind_restore_s:
+            log.warning(
+                "连续 %.0f 秒读不到显示器输入，按「读通道不可用」恢复输出（安全阀）",
+                time.monotonic() - self._blind_since,
+            )
+            self.restore_now("读通道长时间不可用")
+
+    def _any_off_present(self) -> bool:
+        """被我们停用的那几块屏，还在 CGS 的显示器列表里吗？
+
+        停用后的屏会以 1×1 桩的形式留在列表里（见模块注释），所以「还在」
+        说明只是我们把它关了，不是被拔了；枚举失败时也当成还在 —— 宁可继续
+        省电，也别因为一次枚举异常把屏恢复成 active 白烧电。
+        """
+        ids = list(self._off_ids)
+        if not ids:
+            return True
+        try:
+            known = set(self._list_ids())
+        except Exception:  # noqa: BLE001
+            return True
+        return any(i in known for i in ids)
 
     def _safe_read(self) -> str | None:
         try:
