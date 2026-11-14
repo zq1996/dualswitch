@@ -49,3 +49,57 @@ def test_term_handler_restores_display_then_hard_exits(monkeypatch):
     assert captured.get("exit") == 128 + int(signal.SIGTERM), (
         "没走 os._exit —— 交回解释器后 PySide 会析构全部 QWidget，父对象先死的那个 SIGSEGV"
     )
+
+
+def test_serve_switch_request_goes_through_controller():
+    """对端请我切屏必须走控制器（先恢复被停用的屏），不能直连后端。
+
+    2026-11-14 事故：Windows 端切回 Mac 时，Mac 的外接屏被省电模块停用，
+    `backend.set_input` 直接报「Could not find a suitable external display」，
+    盘面再也没回来。走控制器才会先 `before_switch_to_local()` 恢复屏。
+    """
+    from dualswitch.cli import serve_switch_request
+    from dualswitch.config import from_dict
+
+    cfg = from_dict({"sources": {"windows": 17, "mac": 18}})
+
+    class _Backend:
+        def set_input(self, value):          # 直连后端就是这条错误路径
+            raise AssertionError("不能绕过控制器直接发 Set")
+
+    class _Controller:
+        def __init__(self):
+            self.calls: list[tuple[int, str]] = []
+
+        def set_input_local(self, value, source="ui"):
+            self.calls.append((value, source))
+
+            class _R:
+                ok = True
+                error = ""
+
+            return _R()
+
+    ctl = _Controller()
+    ok, detail = serve_switch_request(cfg, _Backend(), ctl, 18)
+
+    assert (ok, detail) == (True, "")
+    assert ctl.calls == [(18, "remote")]
+
+
+def test_serve_switch_request_reports_controller_failure():
+    from dualswitch.cli import serve_switch_request
+    from dualswitch.config import from_dict
+
+    cfg = from_dict({"sources": {"windows": 17, "mac": 18}})
+
+    class _Controller:
+        def set_input_local(self, value, source="ui"):
+            class _R:
+                ok = False
+                error = "屏已经被停用"
+
+            return _R()
+
+    ok, detail = serve_switch_request(cfg, object(), _Controller(), 18)
+    assert ok is False and detail == "屏已经被停用"

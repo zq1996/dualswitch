@@ -53,7 +53,7 @@
   },
 
   "display_power": {
-    "enabled": true,
+    "enabled": false,
     "off_delay_ms": 2500,
     "probe_interval_ms": 1500
   },

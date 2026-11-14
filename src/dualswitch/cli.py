@@ -633,6 +633,33 @@ def _on_keyboard_release(cfg, cfg_file) -> None:  # noqa: ANN001
         log.error("紧急停止后保存配置失败（本次仍已生效）：%s", exc)
 
 
+def serve_switch_request(cfg, backend, controller, value: int) -> tuple[bool, str]:
+    """对端说「替我切到 value」：校验后**走控制器**发 DDC Set。
+
+    必须走 `controller.set_input_local`，不能直接 `backend.set_input`
+    （2026-11-14 事故）：外接屏省电会把屏从 WindowServer 停掉，这时候屏在系统里
+    没有输出对象，`m1ddc` 连屏都枚举不到 —— `backend.set_input` 只会回一句
+    「Could not find a suitable external display」。走控制器才会先
+    `before_switch_to_local()` 把屏恢复出来再发 Set，界面/省电状态也一起对齐。
+    """
+    if cfg.dry_run:
+        return False, "本机处于演练模式，未真正发送指令"
+    allowed = {int(v) for v in cfg.sources.values()}
+    if int(value) not in allowed:
+        return False, f"输入源 {value} 不在本机配置里（允许 {sorted(allowed)}）"
+    if backend is None:
+        return False, "本机没有可用的 DDC 后端"
+    try:
+        result = controller.set_input_local(int(value), source="remote")
+    except DDCError as exc:
+        return False, str(exc)
+    except Exception as exc:  # noqa: BLE001 - 对端请求不能把引擎搞崩
+        return False, f"{type(exc).__name__}: {exc}"
+    if getattr(result, "ok", False):
+        return True, ""
+    return False, getattr(result, "error", "") or "本机发送失败"
+
+
 def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
     """把剪贴板引擎挂到切屏链路上。失败只降级，绝不影响切屏。
 
@@ -645,19 +672,7 @@ def _start_clip_engine(cfg, cfg_file, controller, backend=None):  # noqa: ANN001
         from .sync.engine import SyncEngine
 
         def _serve_switch(value: int) -> tuple[bool, str]:
-            """对端说「替我切到 value」：校验后用本机后端发 DDC Set。"""
-            if cfg.dry_run:
-                return False, "本机处于演练模式，未真正发送指令"
-            allowed = {int(v) for v in cfg.sources.values()}
-            if int(value) not in allowed:
-                return False, f"输入源 {value} 不在本机配置里（允许 {sorted(allowed)}）"
-            if backend is None:
-                return False, "本机没有可用的 DDC 后端"
-            try:
-                backend.set_input(int(value))
-                return True, ""
-            except DDCError as exc:
-                return False, str(exc)
+            return serve_switch_request(cfg, backend, controller, int(value))
 
         config_mod.ensure_device_id_persisted(cfg, cfg_file)
 

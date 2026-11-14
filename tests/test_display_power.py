@@ -429,3 +429,136 @@ def test_after_screen_switch_arms_with_hard_evidence(tmp_path):
         assert wait_until(lambda: fake.disable_calls == 1)
     finally:
         guard.stop()
+
+
+# --------------------------------------------------------------- 底层启停通道
+class _FakeCG:
+    """假的 CoreGraphics：只记录调用序列，永远不碰真显示器。"""
+
+    def __init__(self, complete_rc: int = 0) -> None:
+        import ctypes as _ct
+
+        self._ct = _ct
+        self.complete_rc = complete_rc
+        self.scopes: list[int] = []
+        self.cancelled = 0
+        self.enable_calls: list[tuple[int, bool]] = []
+
+    def CGSBeginDisplayConfiguration(self, refp):
+        self._ct.cast(refp, self._ct.POINTER(self._ct.c_void_p))[0] = 1
+        return 0
+
+    def CGSConfigureDisplayEnabled(self, ref, display_id, enabled):
+        self.enable_calls.append((display_id, enabled))
+        return 0
+
+    def CGSCompleteDisplayConfiguration(self, ref, scope):
+        self.scopes.append(scope)
+        return self.complete_rc
+
+    def CGSCancelDisplayConfiguration(self, ref):
+        self.cancelled += 1
+        return 0
+
+
+class _FakeSLS:
+    def __init__(self, rc: int = 0) -> None:
+        self.rc = rc
+        self.calls = 0
+
+    def SLSConfigureDisplayEnabled(self, ref, display_id, enabled):
+        self.calls += 1
+        return self.rc
+
+
+def test_enable_prefers_skylight(monkeypatch):
+    """启用必须优先走 SkyLight：CGS 那条路重新启用会稳定回 1001，屏醒不过来。"""
+    from dualswitch import display_power as dp
+
+    cg = _FakeCG(complete_rc=0)
+    sls = _FakeSLS(rc=0)
+    monkeypatch.setattr(dp, "_cg_lib", lambda: cg)
+    monkeypatch.setattr(dp, "_sl_lib", lambda: sls)
+
+    dp.set_enabled(3, True)
+
+    assert sls.calls == 1, "应该先用 SLS"
+    assert cg.enable_calls == [], "SLS 成功就不该再用 CGS 的 configure"
+    assert cg.scopes == [dp._CONFIGURE_FOR_SESSION]
+
+
+def test_enable_falls_back_to_permanent_scope(monkeypatch):
+    """会话作用域被拒（1001）时，启用允许再试永久作用域 —— 多一条活路。"""
+
+    class _CGTwoPhase(_FakeCG):
+        def CGSCompleteDisplayConfiguration(self, ref, scope):
+            self.scopes.append(scope)
+            return 1001 if len(self.scopes) == 1 else 0
+
+    from dualswitch import display_power as dp
+
+    cg = _CGTwoPhase()
+    monkeypatch.setattr(dp, "_cg_lib", lambda: cg)
+    monkeypatch.setattr(dp, "_sl_lib", lambda: None)     # 只有 CGS 可用
+
+    dp.set_enabled(3, True)
+
+    assert cg.scopes == [dp._CONFIGURE_FOR_SESSION, dp._CONFIGURE_FOR_PERMANENT]
+
+
+def test_restore_failure_raises_with_details(monkeypatch):
+    """全都失败时要抛错并带上各次尝试的错误码，调用方才知道「以为恢复了其实没有」。"""
+    from dualswitch import display_power as dp
+
+    cg = _FakeCG(complete_rc=1001)
+    monkeypatch.setattr(dp, "_cg_lib", lambda: cg)
+    monkeypatch.setattr(dp, "_sl_lib", lambda: None)
+
+    with pytest.raises(RuntimeError) as info:
+        dp.set_enabled(3, True)
+    message = str(info.value)
+    assert "1001" in message and "SLS" not in message
+    assert len(cg.scopes) == 2, "会话作用域 + 永久作用域都要试过"
+
+
+def test_disable_only_uses_session_scope(monkeypatch):
+    """停用绝不能写永久作用域：否则下次登录用户还是少一块屏。"""
+    from dualswitch import display_power as dp
+
+    cg = _FakeCG(complete_rc=1001)
+    monkeypatch.setattr(dp, "_cg_lib", lambda: cg)
+    monkeypatch.setattr(dp, "_sl_lib", lambda: _FakeSLS(rc=0))
+
+    with pytest.raises(RuntimeError):
+        dp.set_enabled(3, False)
+    assert set(cg.scopes) == {dp._CONFIGURE_FOR_SESSION}
+
+
+def test_start_heals_leftover_state_even_when_feature_is_off(tmp_path):
+    """省电关着也要把上个进程留下的停用态救回来 —— 否则用户开机就少一块屏。"""
+    fake = FakePlatform("windows")
+    state = tmp_path / "display-power.json"
+    state.write_text('{"ids": [3], "at": 0}', encoding="utf-8")
+
+    guard = make_guard(tmp_path, fake, enabled=False)
+    guard.start()
+    try:
+        assert fake.enable_calls == [[3]]
+        assert not state.exists()
+    finally:
+        guard.stop()
+
+
+def test_start_heals_leftover_state_even_when_feature_is_off(tmp_path):
+    """省电关着也要把上个进程留下的停用态救回来 —— 否则用户开机就少一块屏。"""
+    fake = FakePlatform("windows")
+    state = tmp_path / "display-power.json"
+    state.write_text('{"ids": [3], "at": 0}', encoding="utf-8")
+
+    guard = make_guard(tmp_path, fake, enabled=False)
+    guard.start()
+    try:
+        assert fake.enable_calls == [[3]]
+        assert not state.exists()
+    finally:
+        guard.stop()

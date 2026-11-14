@@ -280,14 +280,19 @@ def test_save_does_not_backup_a_corrupt_file(tmp_path):
 
 
 def test_display_power_defaults_and_partial_merge():
-    """外接屏省电默认开：画面不在本机时不再为它渲染（2026-11-06 发烫问题）。"""
+    """外接屏省电**默认关**（2026-11-14 改）。
+
+    停用之后这块屏在系统里就没有输出对象，DDC 读写一起失效；回程依赖
+    「先恢复再发 Set」，而恢复在部分状态下回 1001 就醒不过来 —— 当晚用户
+    因此丢了整块扩展屏。宁可白烧 4% CPU，也不能让屏消失在日常使用里。
+    """
     cfg = from_dict({})
-    assert cfg.display_power.enabled is True
+    assert cfg.display_power.enabled is False
     assert cfg.display_power.off_delay_ms == 2500
     assert cfg.display_power.probe_interval_ms == 1500
 
-    cfg = from_dict({"display_power": {"enabled": False, "off_delay_ms": 0}})
-    assert cfg.display_power.enabled is False
+    cfg = from_dict({"display_power": {"enabled": True, "off_delay_ms": 0}})
+    assert cfg.display_power.enabled is True
     assert cfg.display_power.off_delay_ms == 0
     assert cfg.display_power.probe_interval_ms == 1500   # 没写的用默认值
 

@@ -75,6 +75,8 @@ STATE_FILENAME = "display-power.json"
 #: CoreGraphics 私有接口的配置作用域：kCGConfigureForSession。
 #: 不用 Permanently —— 不能让「停用」写进显示设置活过这次登录。
 _CONFIGURE_FOR_SESSION = 1
+#: kCGConfigurePermanently：会话作用域被系统拒绝（1001）时的退路。
+_CONFIGURE_FOR_PERMANENT = 0
 
 
 # --------------------------------------------------------------------------- #
@@ -136,6 +138,38 @@ def _cg_lib() -> Any:
     return _cg
 
 
+_sl: Any = None
+_sl_tried = False
+
+
+def _sl_lib() -> Any:
+    """SkyLight 里的同名私有接口。**启用显示器必须优先走它**（2026-11-14 踩坑）。
+
+    用 `CGSConfigureDisplayEnabled` 重新启用一块被停用的屏时，
+    `CGSCompleteDisplayConfiguration` 会稳定返回 1001（kCGErrorIllegalArgument），
+    屏就再也回不来（用户当晚就是这么丢的扩展屏，最后靠拔插线才有一点救）；
+    换成 SkyLight 的 `SLSConfigureDisplayEnabled` 同样的调用序列就能成功，
+    屏和原来的排列（origin −1973,−1440）一起回来。
+    """
+    global _sl, _sl_tried
+    if _sl_tried:
+        return _sl
+    _sl_tried = True
+    if sys.platform != "darwin":
+        return None
+    try:
+        lib = ctypes.CDLL(
+            "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight"
+        )
+        lib.SLSConfigureDisplayEnabled.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_bool]
+        lib.SLSConfigureDisplayEnabled.restype = ctypes.c_int32
+        _sl = lib
+    except Exception as exc:  # noqa: BLE001
+        log.debug("SkyLight 私有接口不可用：%s", exc)
+        _sl = None
+    return _sl
+
+
 def available() -> tuple[bool, str]:
     """能不能用。返回 (可用, 原因)。"""
     if sys.platform != "darwin":
@@ -185,26 +219,50 @@ def set_enabled(display_id: int, enabled: bool) -> None:
     """停用 / 启用一块屏（等价于系统设置里勾掉「使用此显示器」）。
 
     没生效就抛 `RuntimeError` —— 调用方要知道「以为停了其实没停」。
+
+    **启用优先走 SkyLight**：CoreGraphics 那条路在「重新启用」时会稳定返回
+    1001，屏就醒不过来了（2026-11-14 用户因此丢了扩展屏）。停用两边都行，
+    统一按「SLS → CGS」顺序试，谁成功用谁。
     """
-    lib = _cg_lib()
-    if lib is None:
+    cg = _cg_lib()
+    if cg is None:
         raise RuntimeError("CoreGraphics 私有接口不可用")
-    ref = ctypes.c_void_p()
-    rc = lib.CGSBeginDisplayConfiguration(ctypes.byref(ref))
-    if rc != 0 or not ref.value:
-        raise RuntimeError(f"CGSBeginDisplayConfiguration 失败：{rc}")
-    completed = False
-    try:
-        rc = lib.CGSConfigureDisplayEnabled(ref, int(display_id), bool(enabled))
-        if rc != 0:
-            raise RuntimeError(f"CGSConfigureDisplayEnabled(#{display_id}, {enabled}) 失败：{rc}")
-        rc = lib.CGSCompleteDisplayConfiguration(ref, _CONFIGURE_FOR_SESSION)
-        completed = True
-        if rc != 0:
-            raise RuntimeError(f"CGSCompleteDisplayConfiguration 失败：{rc}")
-    finally:
-        if not completed:
-            lib.CGSCancelDisplayConfiguration(ref)
+    sl = _sl_lib()
+
+    errors: list[str] = []
+    attempts = []
+    if sl is not None:
+        attempts.append(("SLS", sl.SLSConfigureDisplayEnabled))
+    attempts.append(("CGS", cg.CGSConfigureDisplayEnabled))
+    # 停用只用会话作用域：写成「永久」会活过这次登录，用户下次开机就少一块屏
+    scopes = (_CONFIGURE_FOR_SESSION, _CONFIGURE_FOR_PERMANENT) if enabled else (
+        _CONFIGURE_FOR_SESSION,
+    )
+    for name, configure in attempts:
+        for scope in scopes:
+            ref = ctypes.c_void_p()
+            rc = cg.CGSBeginDisplayConfiguration(ctypes.byref(ref))
+            if rc != 0 or not ref.value:
+                errors.append(f"{name}/begin 失败：{rc}")
+                break
+            completed = False
+            try:
+                rc = configure(ref, int(display_id), bool(enabled))
+                if rc != 0:
+                    errors.append(f"{name}/configure({display_id}, {enabled}) = {rc}")
+                    continue
+                rc = cg.CGSCompleteDisplayConfiguration(ref, scope)
+                completed = True
+                if rc == 0:
+                    return
+                errors.append(f"{name}/complete(scope={scope}) = {rc}")
+            finally:
+                if not completed:
+                    cg.CGSCancelDisplayConfiguration(ref)
+    raise RuntimeError(
+        f"CGSConfigureDisplayEnabled(#{display_id}, {enabled}) 失败："
+        + ("; ".join(errors) or "没有可用的私有接口")
+    )
 
 
 def disable_external_displays(record: bool = True) -> list[int]:
@@ -300,14 +358,20 @@ def _write_state(ids: list[int], path: Path | None = None) -> None:
         log.warning("记录停用状态失败：%s", exc)
 
 
-def restore_pending(path: Path | None = None) -> list[int]:
-    """自愈：把上次进程留下的「停用」状态恢复掉（崩溃 / 被 kill 时只有这条路）。"""
+def restore_pending(
+    path: Path | None = None,
+    enable: Callable[[list[int]], list[int]] | None = None,
+) -> list[int]:
+    """自愈：把上次进程留下的「停用」状态恢复掉（崩溃 / 被 kill 时只有这条路）。
+
+    `enable` 可注入（单测必须传，否则会用真实的私有 API 去动用户显示器）。
+    """
     state = _read_state(path)
     ids = [int(i) for i in (state.get("ids") or [])]
     if not ids:
         return []
     log.warning("发现上次残留的停用显示器 %s，正在恢复", ids)
-    done = enable_displays(ids)
+    done = (enable or enable_displays)(ids)
     _write_state([i for i in ids if i not in done], path)
     return done
 
@@ -392,16 +456,18 @@ class AwayDisplayPower:
 
     # ---- 生命周期 ---------------------------------------------------------
     def start(self) -> None:
+        # 自愈跟「省电开关」无关：上一个进程（哪怕是开着省电的旧版本）可能把屏
+        # 停在停用态。这一轮就算不省电，也得先把它救回来 —— 否则用户开机就少一块屏。
+        restored = restore_pending(self._state_path, self._enable)
+        if restored:
+            log.info("启动自愈：已恢复 %s", restored)
+            self._notify_change()
         if not self._enabled or self._thread is not None:
             return
         ok, why = self._available()
         if not ok:
             log.info("外接屏省电未启用：%s", why)
             return
-        restored = restore_pending(self._state_path)
-        if restored:
-            log.info("启动自愈：已恢复 %s", restored)
-            self._notify_change()
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="display-power", daemon=True)
         self._thread.start()
@@ -465,7 +531,7 @@ class AwayDisplayPower:
         if not ids:
             # 不是这一代进程停的（上一个进程崩了 / CLI 手动 `display off` 过），
             # 内存里当然没有 id —— 这时候唯一的信息源是状态文件。
-            pending = restore_pending(self._state_path)
+            pending = restore_pending(self._state_path, self._enable)
             if pending:
                 log.info("外接屏已恢复输出（%s）", why or "-")
                 self._notify_change()
@@ -475,8 +541,19 @@ class AwayDisplayPower:
         except Exception as exc:  # noqa: BLE001 - 恢复失败不能再抛
             log.warning("恢复外接屏失败（%s）：%s", why, exc)
             return []
-        _write_state([i for i in ids if i not in done], self._state_path)
-        log.info("外接屏已恢复输出（%s）", why or "-")
+        left = [i for i in ids if i not in done]
+        _write_state(left, self._state_path)
+        if done:
+            log.info("外接屏已恢复输出（%s）：%s", why or "-", done)
+        if left:
+            # 这时候这块屏既不在系统里、也发不出 DDC：再点切换也是白点。
+            # 必须给出人能照做的下一步，否则用户只能看着黑屏。
+            log.error(
+                "外接屏恢复失败 #%s（%s）：系统里已经没有这块屏的输出对象。"
+                "请拔插一次 USB-C 线（或把显示器输入切走再切回），再运行 `dualswitch display reset`",
+                left,
+                why or "-",
+            )
         self._notify_change()
         self._wake.set()
         return done
@@ -505,13 +582,26 @@ class AwayDisplayPower:
                 self._arm_fire()
                 continue
             if mode == self.OFF:
-                self._wake.wait(self._probe)
+                self._wake.wait(self._probe_delay())
                 self._wake.clear()
                 if not self._stop.is_set():
                     self._poll()
                 continue
             self._wake.wait(0.5)
             self._wake.clear()
+
+    def _probe_delay(self) -> float:
+        """停用期间的探测间隔：读不到就指数退避，别每 1.5 秒戳一次 I2C/IORegistry。
+
+        停用之后这块屏的 DDC 基本就断了（`m1ddc` 连屏都枚举不到），硬按
+        `probe_interval_ms` 轮询只会刷日志、漏句柄；退避到 30 秒既能及时发现
+        「画面回来了」，又不会把 CPU 和日志吃掉。
+        """
+        misses = self._read_misses
+        if misses <= 0:
+            return self._probe
+        factor = 2 ** min(5, misses // self._MISS_PROBE_EVERY)
+        return min(self._probe * factor, 30.0)
 
     def _arm_fire(self) -> None:
         """到点了：读得到就按读到的校准，读不到就按「自己发出的那条切换」执行。"""

@@ -42,6 +42,7 @@ import logging
 import sys
 import threading
 import time
+from typing import Any
 
 log = logging.getLogger("dualswitch.ddc.avservice")
 
@@ -103,6 +104,36 @@ def parse_get_vcp_reply(reply: bytes, code: int = 0x60) -> int | None:
     return (reply[8] << 8) | reply[9]
 
 
+_cf: Any = None
+
+
+def _release_handle(handle: Any) -> None:
+    """释放一个 `IOAVServiceCreateWithService` 返回的 CF 对象。
+
+    不释放的后果不是「内存涨一点」：每个句柄在 IORegistry 里都会挂一个
+    `DCPAVServiceProxyUserClient`。2026-11-14 排查时 `ioreg` 里已经累积了
+    3xx 个（retain 314），全是「读失败 → 重新枚举」反复建句柄留下的。
+    重新枚举前必须先放掉旧的，否则自愈逻辑本身变成泄漏源。
+    """
+    global _cf
+    if handle is None:
+        return
+    try:
+        if _cf is None:
+            import ctypes
+
+            lib = ctypes.CDLL(
+                "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+            )
+            lib.CFRelease.argtypes = [ctypes.c_void_p]
+            lib.CFRelease.restype = None
+            _cf = (ctypes, lib)
+        ctypes, lib = _cf
+        lib.CFRelease(ctypes.c_void_p(int(handle)))
+    except Exception as exc:  # noqa: BLE001 - 放不掉也不该影响读
+        log.debug("释放 IOAVService 句柄失败（忽略）：%s", exc)
+
+
 class AVServiceI2C:
     """逐个尝试 DCPAVServiceProxy 句柄，用规范校验和做 DDC/CI 读。
 
@@ -131,6 +162,8 @@ class AVServiceI2C:
         （2026-11-06 实测：停用→启用后紧接着那次读就 -118，隔一会儿自己又好了）。
         """
         with self._lock:
+            for handle in self._handles or []:
+                _release_handle(handle)
             self._handles = None
             self._good = None
             self._last_reenumerate = float("-inf")   # 显式失效后下次读立刻重枚举
@@ -300,7 +333,7 @@ class AVServiceI2C:
             return value
         if time.monotonic() - self._last_reenumerate < REENUMERATE_COOLDOWN_S:
             return None            # 链路真不通时别每 400ms 重扫一次 IORegistry
-        log.info("DDC 直读全部句柄失败，重新枚举 DCPAVServiceProxy 后再试一次")
+        log.debug("DDC 直读全部句柄失败，重新枚举 DCPAVServiceProxy 后再试一次")
         self.invalidate()
         # ⚠️ 必须放在 invalidate() **之后**：它会把这个时间戳复位成 -inf
         self._last_reenumerate = time.monotonic()
