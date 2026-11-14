@@ -376,6 +376,37 @@ def restore_pending(
     return done
 
 
+def _default_config_path() -> Path:
+    from .config import config_dir
+
+    return config_dir() / "config.json"
+
+
+def _mtime(path: Path | None) -> float:
+    if path is None:
+        return 0.0
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _read_enabled(path: Path | None) -> bool | None:
+    """从配置文件里读 `display_power.enabled`；读不到返回 None（保持现状）。"""
+    if path is None:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    section = data.get("display_power")
+    if not isinstance(section, dict) or "enabled" not in section:
+        return None
+    return bool(section["enabled"])
+
+
 # --------------------------------------------------------------------------- #
 # 编排：什么时候停、什么时候恢复
 # --------------------------------------------------------------------------- #
@@ -410,6 +441,7 @@ class AwayDisplayPower:
         on_change: Callable[[], None] | None = None,
         list_ids: Callable[[], list[int]] | None = None,
         blind_restore_s: float = 900.0,
+        watch_config: Path | None = None,
     ) -> None:
         self._enabled = bool(enabled)
         self._off_delay = max(0.0, off_delay_ms / 1000.0)
@@ -423,6 +455,10 @@ class AwayDisplayPower:
         self._available = available_check or available
         self._list_ids = list_ids or (lambda: [d.id for d in list_displays()])
         self._blind_restore_s = max(0.0, float(blind_restore_s))
+        # 配置文件：改了 `display_power.enabled` 要**立刻生效**，不能让用户为了
+        # 一个开关去重启程序（2026-11-14 用户明确骂过这件事）
+        self._watch_config = watch_config if watch_config is not None else _default_config_path()
+        self._watch_mtime = _mtime(self._watch_config)
         # 停/启之后通知调用方（用来让 DDC 丢掉失效的接口句柄）
         self._on_change = on_change
 
@@ -462,12 +498,15 @@ class AwayDisplayPower:
         if restored:
             log.info("启动自愈：已恢复 %s", restored)
             self._notify_change()
-        if not self._enabled or self._thread is not None:
+        if self._thread is not None:
             return
         ok, why = self._available()
         if not ok:
-            log.info("外接屏省电未启用：%s", why)
+            log.info("外接屏省电不可用：%s", why)
             return
+        # 开关关着也起线程（0.5 秒空转）：这样配置文件里把 enabled 改成 true
+        # 能立刻生效，不用重启程序。实际动作仍然只看 `_enabled`。
+        log.info("外接屏省电：%s", "已启用" if self._enabled else "关闭（可在配置里改 enabled 即时生效）")
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="display-power", daemon=True)
         self._thread.start()
@@ -568,8 +607,37 @@ class AwayDisplayPower:
             log.exception("外接屏状态变化的回调失败（已忽略）")
 
     # ---- 工作线程 ---------------------------------------------------------
+    def _refresh_enabled(self) -> None:
+        """配置文件里的 `display_power.enabled` 变了就立刻跟着变。
+
+        一个开关不该要靠重启程序才生效（2026-11-14 用户为这个骂过一次）。
+        每轮循环只做一次 `stat`；内容真变了才解析 JSON。
+        """
+        path = self._watch_config
+        if path is None:
+            return
+        mtime = _mtime(path)
+        if mtime == self._watch_mtime:
+            return
+        self._watch_mtime = mtime
+        want = _read_enabled(path)
+        if want is None or want == self._enabled:
+            return
+        self._enabled = want
+        if not want:
+            log.info("省电开关随配置关闭：恢复外接屏并停止停用")
+            self.restore_now("配置关闭省电")
+            return
+        log.info("省电开关随配置打开：按当前画面归属立即判定一次")
+        host = self._safe_read()
+        if host == self._local:
+            self.restore_now("画面在本机")
+        elif host == self._other:
+            self.on_source(host, trusted=True)
+
     def _run(self) -> None:
         while not self._stop.is_set():
+            self._refresh_enabled()
             with self._lock:
                 mode = self._mode
                 deadline = self._deadline

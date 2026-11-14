@@ -57,6 +57,8 @@ def make_guard(tmp_path, fake: FakePlatform, **kwargs) -> AwayDisplayPower:
         available_check=FakePlatform.available,
         list_ids=fake.list_ids,
         blind_restore_s=0,          # 安全阀默认关，单独用例再打开
+        # ⚠️ 必须指到 tmp：默认会去读用户真实的 config.json，用例之间互相串味
+        watch_config=tmp_path / "config.json",
     )
     params.update(kwargs)
     return AwayDisplayPower(**params)
@@ -300,6 +302,7 @@ def test_other_host_follows_local(tmp_path, local, other):
         available_check=FakePlatform.available,
         list_ids=fake.list_ids,
         blind_restore_s=0,
+        watch_config=tmp_path / "config.json",
     )
     guard.start()
     try:
@@ -377,6 +380,7 @@ def test_controller_wires_ownership_to_display_power(tmp_path):
         available_check=FakePlatform.available,
         list_ids=fake.list_ids,
         blind_restore_s=0,
+        watch_config=tmp_path / "config.json",
     )
     guard.start()
     ctl._display_power = guard
@@ -421,6 +425,7 @@ def test_after_screen_switch_arms_with_hard_evidence(tmp_path):
         available_check=FakePlatform.available,
         list_ids=fake.list_ids,
         blind_restore_s=0,
+        watch_config=tmp_path / "config.json",
     )
     guard.start()
     ctl._display_power = guard
@@ -560,5 +565,65 @@ def test_start_heals_leftover_state_even_when_feature_is_off(tmp_path):
     try:
         assert fake.enable_calls == [[3]]
         assert not state.exists()
+    finally:
+        guard.stop()
+
+
+def test_runtime_toggle_follows_config_without_restart(tmp_path):
+    """改 config 里的 `display_power.enabled` 必须立刻生效，不用重启程序。
+
+    2026-11-14 用户被这一点整崩过：配置改成 true 之后，正在跑的实例（启动时读到的
+    还是 false）纹丝不动，看上去就像「代码改错了」。
+    """
+    import os
+
+    fake = FakePlatform("windows")
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text('{"display_power": {"enabled": false}}', encoding="utf-8")
+
+    guard = make_guard(tmp_path, fake, off_delay_ms=10, enabled=False)
+    guard.start()
+    try:
+        time.sleep(0.4)
+        assert fake.disable_calls == 0, "开关关着就不许动屏"
+
+        cfg_path.write_text('{"display_power": {"enabled": true}}', encoding="utf-8")
+        os.utime(cfg_path, (time.time() + 5, time.time() + 5))
+        assert wait_until(lambda: fake.disable_calls == 1, timeout=3.0)
+        assert guard.mode == AwayDisplayPower.OFF
+
+        cfg_path.write_text('{"display_power": {"enabled": false}}', encoding="utf-8")
+        os.utime(cfg_path, (time.time() + 10, time.time() + 10))
+        assert wait_until(lambda: bool(fake.enable_calls), timeout=3.0)
+    finally:
+        guard.stop()
+
+
+def test_runtime_toggle_follows_config_without_restart(tmp_path):
+    """改 config 里的 `display_power.enabled` 必须立刻生效，不用重启程序。
+
+    2026-11-14 用户被这一点整崩过：配置改成 true 之后，正在跑的实例（启动时读到的
+    还是 false）纹丝不动，看上去就像「代码改错了」。
+    """
+    import os
+
+    fake = FakePlatform("windows")
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text('{"display_power": {"enabled": false}}', encoding="utf-8")
+
+    guard = make_guard(tmp_path, fake, off_delay_ms=10, enabled=False)
+    guard.start()
+    try:
+        time.sleep(0.4)
+        assert fake.disable_calls == 0, "开关关着就不许动屏"
+
+        cfg_path.write_text('{"display_power": {"enabled": true}}', encoding="utf-8")
+        os.utime(cfg_path, (time.time() + 5, time.time() + 5))
+        assert wait_until(lambda: fake.disable_calls == 1, timeout=3.0)
+        assert guard.mode == AwayDisplayPower.OFF
+
+        cfg_path.write_text('{"display_power": {"enabled": false}}', encoding="utf-8")
+        os.utime(cfg_path, (time.time() + 10, time.time() + 10))
+        assert wait_until(lambda: bool(fake.enable_calls), timeout=3.0)
     finally:
         guard.stop()
