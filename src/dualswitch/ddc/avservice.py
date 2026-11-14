@@ -56,6 +56,9 @@ SET_OPCODE = 0x84              # 「Set VCP Feature」
 REPLY_LEN = 11                 # 回复定长 11 字节
 REPLY_MIN_GAP_S = 0.05         # 写请求到读回复之间至少等 40ms（规范），留余量
 
+#: 全部句柄读失败后「重新枚举」的最小间隔：链路真不通时，别每次读都重扫 IORegistry
+REENUMERATE_COOLDOWN_S = 5.0
+
 
 
 def build_get_vcp_request(code: int) -> bytes:
@@ -115,6 +118,7 @@ class AVServiceI2C:
         self._lock = threading.RLock()
         self._handles: list[object] | None = None   # None = 还没枚举过
         self._good: object | None = None            # 上次给出有效回复的句柄
+        self._last_reenumerate = float("-inf")      # 上次因「全读失败」重枚举的时刻
         self._lib = None
 
     # ------------------------------------------------------------------ 底层
@@ -129,6 +133,7 @@ class AVServiceI2C:
         with self._lock:
             self._handles = None
             self._good = None
+            self._last_reenumerate = float("-inf")   # 显式失效后下次读立刻重枚举
 
     def _ensure_lib(self) -> bool:
         """惰性加载 CoreDisplay / IOKit 并绑好签名。非 macOS 直接 False。"""
@@ -279,10 +284,30 @@ class AVServiceI2C:
         with self._lock:
             return self._get_vcp_locked(code)
 
-    def _get_vcp_locked(self, code: int) -> int | None:
-        """get_vcp 的本体（调用方已持锁）。"""
+    def _get_vcp_locked(self, code: int, allow_reenumerate: bool = True) -> int | None:
+        """get_vcp 的本体（调用方已持锁）。
+
+        **全部句柄都读失败时会丢掉缓存、重新枚举一次再试**（2026-11-14 破案）：
+        常驻进程跨过休眠 / 显示重配 / 停用-启用之后，缓存里的 `IOAVService`
+        句柄会集体变哑 —— 现象是「进程内每次读都 -118，但同一时刻新起一个
+        进程读得好好的」。以前只会在 `display_power` 停/启之后被动 invalidate，
+        所以一旦漏掉一次，这个进程就再也读不到画面归属。
+        """
         if self._lib is False:
             return None
+        value = self._try_all_candidates_locked(code)
+        if value is not None or not allow_reenumerate or not self._handles:
+            return value
+        if time.monotonic() - self._last_reenumerate < REENUMERATE_COOLDOWN_S:
+            return None            # 链路真不通时别每 400ms 重扫一次 IORegistry
+        log.info("DDC 直读全部句柄失败，重新枚举 DCPAVServiceProxy 后再试一次")
+        self.invalidate()
+        # ⚠️ 必须放在 invalidate() **之后**：它会把这个时间戳复位成 -inf
+        self._last_reenumerate = time.monotonic()
+        return self._get_vcp_locked(code, allow_reenumerate=False)
+
+    def _try_all_candidates_locked(self, code: int) -> int | None:
+        """逐个句柄 × 重试地读一次；全失败返回 None。调用方已持锁。"""
         request = build_get_vcp_request(code)
         for handle in self._candidates():
             last_raw = "-"

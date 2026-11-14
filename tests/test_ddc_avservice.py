@@ -161,3 +161,58 @@ def test_set_vcp_is_reentrant_inside_run_exclusive():
 def test_set_vcp_without_handle_is_false():
     av = _fake_av(object(), ok=False)
     assert av.set_vcp(0x60, 18) is False
+
+
+# --------------------------------------------------- 句柄变哑后自动重枚举
+def test_reenumerates_when_cached_handles_go_deaf(monkeypatch):
+    """常驻进程跨休眠/显示重配后句柄全哑：读失败必须重枚举一次再试。
+
+    2026-11-14 线上：进程内每次读都 -118，同一时刻新起进程读得好好的
+    （14/14 成功）。根因就是缓存句柄哑了而 `_candidates()` 永远复用缓存。
+    """
+    from dualswitch.ddc import avservice as mod
+
+    monkeypatch.setattr(mod, "REPLY_MIN_GAP_S", 0)
+    av = mod.AVServiceI2C(retries=1)
+    av._lib = ("ctypes",)
+    av._handles = ["stale"]
+    av._good = "stale"
+
+    enumerated: list[list[object]] = []
+
+    def _enum():
+        enumerated.append(["fresh"])
+        return ["fresh"]
+
+    av._enumerate_handles = _enum
+    av._i2c_write = lambda lib, handle, payload: 0
+    av._i2c_read = lambda lib, handle, length: (
+        0, FRAME_WINDOWS if handle == "fresh" else b"\x00" * 11
+    )
+
+    assert av.get_vcp(0x60) == 17
+    assert enumerated == [["fresh"]], "旧句柄全失败后必须重枚举一次"
+    assert av._handles == ["fresh"]
+    assert av._good == "fresh"
+
+
+def test_does_not_hammer_ioregistry_when_link_is_really_down(monkeypatch):
+    """链路真不通时每次读都重扫 IORegistry 会把磁盘/CPU 啃光 —— 有冷却时间。"""
+    from dualswitch.ddc import avservice as mod
+
+    monkeypatch.setattr(mod, "REPLY_MIN_GAP_S", 0)
+    av = mod.AVServiceI2C(retries=1)
+    av._lib = ("ctypes",)
+    av._handles = ["dead"]
+    av._i2c_write = lambda lib, handle, payload: -1
+    av._i2c_read = lambda lib, handle, length: (-1, b"\x00" * 11)
+
+    enumerated: list[int] = []
+    av._enumerate_handles = lambda: (enumerated.append(1), ["dead"])[1]
+
+    assert av.get_vcp(0x60) is None
+    assert enumerated == [1], "第一次失败应当重枚举"
+
+    # 冷却期内再读：不再重扫
+    assert av.get_vcp(0x60) is None
+    assert enumerated == [1]
